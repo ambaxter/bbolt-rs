@@ -1,0 +1,8 @@
+# Based on
+# https://github.com/rust-lang/rustfmt/blob/master/Configurations.md
+
+# Stable
+edition = "2021"
+fn_params_layout = "Compressed"
+tab_spaces = 2
+max_width = 100
