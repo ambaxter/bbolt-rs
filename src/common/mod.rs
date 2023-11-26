@@ -1,8 +1,8 @@
-use std::cell;
 pub use bumpalo::collections::Vec as BVec;
 use bumpalo::Bump;
 use bytemuck::{Pod, Zeroable};
 use hashbrown::hash_map::DefaultHashBuilder;
+use std::cell;
 use std::fmt::{Display, Formatter};
 use std::ops::{Add, AddAssign, Sub, SubAssign};
 
@@ -16,6 +16,8 @@ pub mod page;
 pub mod selfowned;
 pub mod tree;
 pub mod utility;
+
+pub(crate) const ZERO_PGID: PgId = PgId { id: 0 };
 
 //TODO: Look up math support
 #[repr(C)]
@@ -129,16 +131,13 @@ pub type HashMap<'tx, K, V> = hashbrown::HashMap<K, V, DefaultHashBuilder, &'tx 
 
 pub type HashSet<'tx, K> = hashbrown::HashSet<K, DefaultHashBuilder, &'tx Bump>;
 
-
-pub(crate) trait CRef<T> {
-
+pub(crate) trait CRef<T>: Copy + Clone {
   fn as_cref(&self) -> cell::Ref<T>;
 
   fn as_cref_mut(&self) -> cell::RefMut<T>;
 }
 
-pub(crate) trait CRefMut<T> {
-
+pub(crate) trait CRefMut<T>: Copy + Clone {
   fn as_mut_cref(&self) -> cell::Ref<T>;
 
   fn as_mut_cref_mut(&self) -> cell::RefMut<T>;

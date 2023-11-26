@@ -24,7 +24,7 @@ pub struct NodeW<'tx> {
 
 pub struct NodeRW<'tx> {
   r: NodeR<'tx>,
-  w: NodeW<'tx>
+  w: NodeW<'tx>,
 }
 
 #[derive(Copy, Clone)]
@@ -66,4 +66,3 @@ impl<'tx> CRefMut<NodeRW<'tx>> for NodeMut<'tx> {
     self.cell.borrow_mut()
   }
 }
-

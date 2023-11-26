@@ -1,15 +1,17 @@
+use crate::common::memory::SCell;
+use crate::common::page::RefPage;
+use crate::common::selfowned::SelfOwned;
+use crate::common::{CRef, CRefMut, PgId};
+use bumpalo::Bump;
 use std::cell;
 use std::cell::{Ref, RefMut};
-use crate::common::memory::SCell;
-use crate::common::selfowned::SelfOwned;
-use bumpalo::Bump;
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
-use crate::common::{CRef, CRefMut};
-
 
 pub trait TTx<'tx>: CRef<TxR<'tx>> + Copy + Clone {
   fn writeable(&self) -> bool;
+
+  fn page(&self, id: PgId) -> RefPage<'tx>;
 }
 
 pub trait TTxMut<'tx>: TTx<'tx> + CRefMut<TxRW<'tx>> {}
@@ -20,12 +22,12 @@ pub struct TxR<'tx> {
 }
 
 pub struct TxW<'tx> {
-  p: PhantomData<&'tx u8>
+  p: PhantomData<&'tx u8>,
 }
 
 pub struct TxRW<'tx> {
   r: TxR<'tx>,
-  w: TxW<'tx>
+  w: TxW<'tx>,
 }
 
 #[derive(Copy, Clone)]
@@ -47,6 +49,10 @@ impl<'tx> TTx<'tx> for Tx<'tx> {
   fn writeable(&self) -> bool {
     false
   }
+
+  fn page(&self, id: PgId) -> RefPage<'tx> {
+    todo!()
+  }
 }
 
 #[derive(Copy, Clone)]
@@ -56,17 +62,21 @@ pub struct TxMut<'tx> {
 
 impl<'tx> CRef<TxR<'tx>> for TxMut<'tx> {
   fn as_cref(&self) -> Ref<TxR<'tx>> {
-    Ref::map(self.cell.borrow(), |tx | &tx.r)
+    Ref::map(self.cell.borrow(), |tx| &tx.r)
   }
 
   fn as_cref_mut(&self) -> RefMut<TxR<'tx>> {
-    RefMut::map(self.cell.borrow_mut(), |tx | &mut tx.r)
+    RefMut::map(self.cell.borrow_mut(), |tx| &mut tx.r)
   }
 }
 
 impl<'tx> TTx<'tx> for TxMut<'tx> {
   fn writeable(&self) -> bool {
     true
+  }
+
+  fn page(&self, id: PgId) -> RefPage<'tx> {
+    todo!()
   }
 }
 

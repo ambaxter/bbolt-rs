@@ -1,10 +1,10 @@
 use crate::common::bucket::InBucket;
 use crate::common::memory::SCell;
 use crate::common::page::RefPage;
-use crate::common::{HashMap, PgId, CRef};
+use crate::common::{CRef, HashMap, PgId, ZERO_PGID};
 use crate::cursor::{Cursor, CursorMut, ElemRef, TCursor};
-use crate::node::{NodeR, Node, NodeMut};
-use crate::tx::{TxR, TTx, Tx, TxMut};
+use crate::node::{Node, NodeMut, NodeR};
+use crate::tx::{TTx, Tx, TxMut, TxR};
 use bumpalo::Bump;
 use either::Either;
 use std::cell::{Ref, RefCell, RefMut};
@@ -19,12 +19,9 @@ pub struct BucketStats {}
 pub(crate) trait TCBucket<'tx> {
   type NodeType: CRef<NodeR<'tx>>;
   type TxType: TTx<'tx>;
-
-  fn page_node(&self, pgid: PgId) -> Either<RefPage<'tx>, Self::NodeType>;
 }
 
-pub trait TBucket<'tx> : TCBucket<'tx>{
-
+pub trait TBucket<'tx>: TCBucket<'tx> {
   fn root(&self) -> PgId;
 
   fn writeable(&self) -> bool;
@@ -83,18 +80,46 @@ impl<'tx, T: TTx<'tx>> BucketR<'tx, T> {
     }
   }
 
+  /// pageNode returns the in-memory node, if it exists.
+  /// Otherwise, returns the underlying page.
+  pub(crate) fn page_node<B: TBucket<'tx>>(
+    &self, id: PgId, w: Option<&BucketP<'tx, B>>,
+  ) -> Either<RefPage<'tx>, B::NodeType> {
+    // Inline buckets have a fake page embedded in their value so treat them
+    // differently. We'll return the rootNode (if available) or the fake page.
+    if self.inline_bucket.root() == ZERO_PGID {
+      if id != ZERO_PGID {
+        panic!("inline bucket non-zero page access(2): {} != 0", id)
+      }
+      if let Some(wb) = w {
+        return if let Some(root_node) = wb.root_node {
+          Either::Right(root_node)
+        } else {
+          Either::Left(self.inline_page.unwrap())
+        }
+      }
+    }
+    // Check the node cache for non-inline buckets.
+    if let Some(wb) = w {
+      if let Some(node) = wb.nodes.get(&id) {
+        return Either::Right(*node);
+      }
+    }
+    // Finally lookup the page from the transaction if no node is materialized.
+    Either::Left(self.tx.page(id))
+  }
 }
 
-pub struct BucketW<'tx> {
-  root_node: Option<NodeMut<'tx>>,
-  buckets: HashMap<'tx, &'tx str, BucketMut<'tx>>,
-  nodes: HashMap<'tx, PgId, NodeMut<'tx>>,
+pub struct BucketP<'tx, B: TBucket<'tx>> {
+  root_node: Option<B::NodeType>,
+  buckets: HashMap<'tx, &'tx str, B>,
+  nodes: HashMap<'tx, PgId, B::NodeType>,
   fill_percent: f64,
 }
 
-impl<'tx> BucketW<'tx> {
-  pub fn new_in(bump: &'tx Bump) -> BucketW<'tx> {
-    BucketW {
+impl<'tx, B: TBucket<'tx>> BucketP<'tx, B> {
+  pub fn new_in(bump: &'tx Bump) -> BucketP<'tx, B> {
+    BucketP {
       root_node: None,
       buckets: HashMap::new_in(bump),
       nodes: HashMap::new_in(bump),
@@ -103,16 +128,20 @@ impl<'tx> BucketW<'tx> {
   }
 }
 
+pub type BucketPR<'tx> = BucketP<'tx, Bucket<'tx>>;
+
+pub type BucketW<'tx> = BucketP<'tx, BucketMut<'tx>>;
+
 pub struct BucketRW<'tx> {
   r: BucketR<'tx, TxMut<'tx>>,
-  w: BucketW<'tx>
+  w: BucketW<'tx>,
 }
 
 impl<'tx> BucketRW<'tx> {
   pub fn new_in(bump: &'tx Bump, tx: TxMut<'tx>, in_bucket: InBucket) -> BucketRW<'tx> {
     BucketRW {
       r: BucketR::new(tx, in_bucket),
-      w: BucketW::new_in(bump)
+      w: BucketW::new_in(bump),
     }
   }
 }
@@ -135,15 +164,9 @@ impl<'tx> CRef<BucketR<'tx, Tx<'tx>>> for Bucket<'tx> {
 impl<'tx> TCBucket<'tx> for Bucket<'tx> {
   type NodeType = Node<'tx>;
   type TxType = Tx<'tx>;
-
-  fn page_node(&self, pgid: PgId) -> Either<RefPage<'tx>, Self::NodeType> {
-    self.root() == 0.into();
-    todo!()
-  }
 }
 
 impl<'tx> TBucket<'tx> for Bucket<'tx> {
-
   fn root(&self) -> PgId {
     todo!()
   }
@@ -188,26 +211,20 @@ pub struct BucketMut<'tx> {
 
 impl<'tx> CRef<BucketR<'tx, TxMut<'tx>>> for BucketMut<'tx> {
   fn as_cref(&self) -> Ref<BucketR<'tx, TxMut<'tx>>> {
-    Ref::map(self.cell.borrow(), | b | &b.r)
+    Ref::map(self.cell.borrow(), |b| &b.r)
   }
 
   fn as_cref_mut(&self) -> RefMut<BucketR<'tx, TxMut<'tx>>> {
-    RefMut::map(self.cell.borrow_mut(), | b | &mut b.r)
+    RefMut::map(self.cell.borrow_mut(), |b| &mut b.r)
   }
 }
 
 impl<'tx> TCBucket<'tx> for BucketMut<'tx> {
   type NodeType = NodeMut<'tx>;
   type TxType = TxMut<'tx>;
-
-  fn page_node(&self, pgid: PgId) -> Either<RefPage<'tx>, Self::NodeType> {
-    todo!()
-  }
 }
 
 impl<'tx> TBucket<'tx> for BucketMut<'tx> {
-
-
   fn root(&self) -> PgId {
     todo!()
   }

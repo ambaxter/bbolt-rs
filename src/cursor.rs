@@ -3,11 +3,11 @@ use crate::common::memory::SCell;
 use crate::common::page::{CoerciblePage, RefPage, BUCKET_LEAF_FLAG};
 use crate::common::tree::{MappedLeafPage, TreePage};
 use crate::common::{BVec, CRef};
-use crate::node::{NodeR};
+use crate::node::NodeR;
+use crate::tx::{TTx, Tx, TxMut};
 use either::Either;
 use std::io;
 use std::marker::PhantomData;
-use crate::tx::{TTx, Tx, TxMut};
 
 pub trait TCursor<'tx>: Copy + Clone {
   type BucketType: TBucket<'tx>;
@@ -66,7 +66,10 @@ impl<'tx, B: TBucket<'tx> + CRef<BucketR<'tx, B::TxType>>> NCursor<'tx, B> {
   fn _first(&mut self) -> Option<(&'tx [u8], &'tx [u8], u32)> {
     self.stack.clear();
 
-    let pn = self.bucket.page_node(self.bucket.root());
+    let pn = self
+      .bucket
+      .as_cref()
+      .page_node::<B>(self.bucket.root(), None);
     self.stack.push(ElemRef { pn, index: 0 });
 
     // If we land on an empty page then move to the next value.
@@ -101,8 +104,6 @@ impl<'tx, B: TBucket<'tx> + CRef<BucketR<'tx, B::TxType>>> NCursor<'tx, B> {
         Some((inode.key(), inode.value(), inode.flags()))
       }
     }
-
-
   }
 
   fn next(&mut self) {
