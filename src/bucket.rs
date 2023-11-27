@@ -1,10 +1,10 @@
 use crate::common::bucket::InBucket;
 use crate::common::memory::SCell;
 use crate::common::page::RefPage;
-use crate::common::{CRef, HashMap, PgId, ZERO_PGID};
-use crate::cursor::{Cursor, CursorMut, ElemRef, TCursor};
+use crate::common::{HashMap, IRef, PgId, ZERO_PGID};
+use crate::cursor::{Cursor, CursorAPI, CursorMut, ElemRef};
 use crate::node::{Node, NodeMut, NodeR};
-use crate::tx::{TTx, Tx, TxMut, TxR};
+use crate::tx::{Tx, TxAPI, TxMut, TxR};
 use bumpalo::Bump;
 use either::Either;
 use std::cell::{Ref, RefCell, RefMut};
@@ -16,12 +16,12 @@ const DEFAULT_FILL_PERCENT: f64 = 0.5;
 
 pub struct BucketStats {}
 
-pub(crate) trait TCBucket<'tx> {
-  type NodeType: CRef<NodeR<'tx>>;
-  type TxType: TTx<'tx>;
+pub(crate) trait BucketIAPI<'tx> {
+  type NodeType: IRef<NodeR<'tx>>;
+  type TxType: TxAPI<'tx>;
 }
 
-pub trait TBucket<'tx>: TCBucket<'tx> {
+pub trait BucketAPI<'tx>: BucketIAPI<'tx> {
   fn root(&self) -> PgId;
 
   fn writeable(&self) -> bool;
@@ -41,7 +41,7 @@ pub trait TBucket<'tx>: TCBucket<'tx> {
   fn status(&self) -> BucketStats;
 }
 
-pub trait TBucketMut<'tx>: TBucket<'tx> + Sized {
+pub trait BucketMutAPI<'tx>: BucketAPI<'tx> + Sized {
   fn create_bucket(&mut self, key: &[u8]) -> io::Result<Self>;
 
   fn create_bucket_if_not_exists(&mut self, key: &[u8]) -> io::Result<Self>;
@@ -63,14 +63,14 @@ pub trait TBucketMut<'tx>: TBucket<'tx> + Sized {
   fn for_each_bucket_mut<F: Fn(&[u8]) -> io::Result<()>>(&mut self, f: F) -> io::Result<()>;
 }
 
-pub struct BucketR<'tx, T: TTx<'tx> + CRef<TxR<'tx>>> {
+pub struct BucketR<'tx, T: TxAPI<'tx> + IRef<TxR<'tx>>> {
   pub(crate) inline_bucket: InBucket,
   pub(crate) tx: T,
   pub(crate) inline_page: Option<RefPage<'tx>>,
   p: PhantomData<&'tx u8>,
 }
 
-impl<'tx, T: TTx<'tx>> BucketR<'tx, T> {
+impl<'tx, T: TxAPI<'tx>> BucketR<'tx, T> {
   pub fn new(tx: T, in_bucket: InBucket) -> BucketR<'tx, T> {
     BucketR {
       inline_bucket: in_bucket,
@@ -82,7 +82,7 @@ impl<'tx, T: TTx<'tx>> BucketR<'tx, T> {
 
   /// pageNode returns the in-memory node, if it exists.
   /// Otherwise, returns the underlying page.
-  pub(crate) fn page_node<B: TBucket<'tx>>(
+  pub(crate) fn page_node<B: BucketAPI<'tx>>(
     &self, id: PgId, w: Option<&BucketP<'tx, B>>,
   ) -> Either<RefPage<'tx>, B::NodeType> {
     // Inline buckets have a fake page embedded in their value so treat them
@@ -96,7 +96,7 @@ impl<'tx, T: TTx<'tx>> BucketR<'tx, T> {
           Either::Right(root_node)
         } else {
           Either::Left(self.inline_page.unwrap())
-        }
+        };
       }
     }
     // Check the node cache for non-inline buckets.
@@ -110,14 +110,14 @@ impl<'tx, T: TTx<'tx>> BucketR<'tx, T> {
   }
 }
 
-pub struct BucketP<'tx, B: TBucket<'tx>> {
+pub struct BucketP<'tx, B: BucketAPI<'tx>> {
   root_node: Option<B::NodeType>,
   buckets: HashMap<'tx, &'tx str, B>,
   nodes: HashMap<'tx, PgId, B::NodeType>,
   fill_percent: f64,
 }
 
-impl<'tx, B: TBucket<'tx>> BucketP<'tx, B> {
+impl<'tx, B: BucketAPI<'tx>> BucketP<'tx, B> {
   pub fn new_in(bump: &'tx Bump) -> BucketP<'tx, B> {
     BucketP {
       root_node: None,
@@ -151,22 +151,22 @@ pub struct Bucket<'tx> {
   cell: SCell<'tx, BucketR<'tx, Tx<'tx>>>,
 }
 
-impl<'tx> CRef<BucketR<'tx, Tx<'tx>>> for Bucket<'tx> {
-  fn as_cref(&self) -> Ref<BucketR<'tx, Tx<'tx>>> {
+impl<'tx> IRef<BucketR<'tx, Tx<'tx>>> for Bucket<'tx> {
+  fn borrow_iref(&self) -> Ref<BucketR<'tx, Tx<'tx>>> {
     self.cell.borrow()
   }
 
-  fn as_cref_mut(&self) -> RefMut<BucketR<'tx, Tx<'tx>>> {
+  fn borrow_mut_iref(&self) -> RefMut<BucketR<'tx, Tx<'tx>>> {
     self.cell.borrow_mut()
   }
 }
 
-impl<'tx> TCBucket<'tx> for Bucket<'tx> {
+impl<'tx> BucketIAPI<'tx> for Bucket<'tx> {
   type NodeType = Node<'tx>;
   type TxType = Tx<'tx>;
 }
 
-impl<'tx> TBucket<'tx> for Bucket<'tx> {
+impl<'tx> BucketAPI<'tx> for Bucket<'tx> {
   fn root(&self) -> PgId {
     todo!()
   }
@@ -209,22 +209,22 @@ pub struct BucketMut<'tx> {
   cell: SCell<'tx, BucketRW<'tx>>,
 }
 
-impl<'tx> CRef<BucketR<'tx, TxMut<'tx>>> for BucketMut<'tx> {
-  fn as_cref(&self) -> Ref<BucketR<'tx, TxMut<'tx>>> {
+impl<'tx> IRef<BucketR<'tx, TxMut<'tx>>> for BucketMut<'tx> {
+  fn borrow_iref(&self) -> Ref<BucketR<'tx, TxMut<'tx>>> {
     Ref::map(self.cell.borrow(), |b| &b.r)
   }
 
-  fn as_cref_mut(&self) -> RefMut<BucketR<'tx, TxMut<'tx>>> {
+  fn borrow_mut_iref(&self) -> RefMut<BucketR<'tx, TxMut<'tx>>> {
     RefMut::map(self.cell.borrow_mut(), |b| &mut b.r)
   }
 }
 
-impl<'tx> TCBucket<'tx> for BucketMut<'tx> {
+impl<'tx> BucketIAPI<'tx> for BucketMut<'tx> {
   type NodeType = NodeMut<'tx>;
   type TxType = TxMut<'tx>;
 }
 
-impl<'tx> TBucket<'tx> for BucketMut<'tx> {
+impl<'tx> BucketAPI<'tx> for BucketMut<'tx> {
   fn root(&self) -> PgId {
     todo!()
   }
@@ -261,7 +261,7 @@ impl<'tx> TBucket<'tx> for BucketMut<'tx> {
     todo!()
   }
 }
-impl<'tx> TBucketMut<'tx> for BucketMut<'tx> {
+impl<'tx> BucketMutAPI<'tx> for BucketMut<'tx> {
   fn create_bucket(&mut self, key: &[u8]) -> io::Result<Self> {
     todo!()
   }

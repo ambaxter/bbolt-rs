@@ -14,9 +14,7 @@ pub const VERSION: u32 = 2;
 // as we are using the Go BBolt project code as a scaffold
 pub const MAGIC: u32 = 0x5caff01d;
 
-pub const PGID_NO_FREE_LIST: PgId = PgId {
-  id: 0xffffffffffffffff,
-};
+pub const PGID_NO_FREE_LIST: PgId = PgId(0xffffffffffffffff);
 
 pub const IGNORE_NO_SYNC: bool = cfg!(openbsd);
 

@@ -1,16 +1,16 @@
-use crate::bucket::{Bucket, BucketMut, BucketR, TBucket};
+use crate::bucket::{Bucket, BucketAPI, BucketMut, BucketR};
 use crate::common::memory::SCell;
 use crate::common::page::{CoerciblePage, RefPage, BUCKET_LEAF_FLAG};
 use crate::common::tree::{MappedLeafPage, TreePage};
-use crate::common::{BVec, CRef};
+use crate::common::{BVec, IRef};
 use crate::node::NodeR;
-use crate::tx::{TTx, Tx, TxMut};
+use crate::tx::{Tx, TxAPI, TxMut};
 use either::Either;
 use std::io;
 use std::marker::PhantomData;
 
-pub trait TCursor<'tx>: Copy + Clone {
-  type BucketType: TBucket<'tx>;
+pub trait CursorAPI<'tx>: Copy + Clone {
+  type BucketType: BucketAPI<'tx>;
 
   fn bucket(&self) -> Self::BucketType;
 
@@ -25,37 +25,37 @@ pub trait TCursor<'tx>: Copy + Clone {
   fn seek(&mut self, seek: &[u8]) -> Option<(&'tx [u8], &'tx [u8])>;
 }
 
-pub trait TCursorMut<'tx>: TCursor<'tx> {
+pub trait CursorMutAPI<'tx>: CursorAPI<'tx> {
   fn delete(&mut self) -> io::Result<()>;
 }
 
-pub struct ElemRef<'tx, N: CRef<NodeR<'tx>>> {
+pub struct ElemRef<'tx, N: IRef<NodeR<'tx>>> {
   pn: Either<RefPage<'tx>, N>,
   index: u32,
 }
 
-impl<'tx, N: CRef<NodeR<'tx>>> ElemRef<'tx, N> {
+impl<'tx, N: IRef<NodeR<'tx>>> ElemRef<'tx, N> {
   fn count(&self) -> u32 {
     match &self.pn {
       Either::Left(r) => r.count as u32,
-      Either::Right(n) => n.as_cref().inodes.len() as u32,
+      Either::Right(n) => n.borrow_iref().inodes.len() as u32,
     }
   }
 
   fn is_leaf(&self) -> bool {
     match &self.pn {
       Either::Left(r) => r.is_leaf(),
-      Either::Right(n) => n.as_cref().is_leaf,
+      Either::Right(n) => n.borrow_iref().is_leaf,
     }
   }
 }
 
-pub struct NCursor<'tx, B: TBucket<'tx> + CRef<BucketR<'tx, B::TxType>>> {
+pub struct NCursor<'tx, B: BucketAPI<'tx> + IRef<BucketR<'tx, B::TxType>>> {
   bucket: B,
   stack: BVec<'tx, ElemRef<'tx, B::NodeType>>,
 }
 
-impl<'tx, B: TBucket<'tx> + CRef<BucketR<'tx, B::TxType>>> NCursor<'tx, B> {
+impl<'tx, B: BucketAPI<'tx> + IRef<BucketR<'tx, B::TxType>>> NCursor<'tx, B> {
   fn first(&mut self) -> Option<(&'tx [u8], &'tx [u8])> {
     let (k, v, flags) = self._first()?;
     if (flags & BUCKET_LEAF_FLAG) != 0 {
@@ -68,7 +68,7 @@ impl<'tx, B: TBucket<'tx> + CRef<BucketR<'tx, B::TxType>>> NCursor<'tx, B> {
 
     let pn = self
       .bucket
-      .as_cref()
+      .borrow_iref()
       .page_node::<B>(self.bucket.root(), None);
     self.stack.push(ElemRef { pn, index: 0 });
 
@@ -99,7 +99,7 @@ impl<'tx, B: TBucket<'tx> + CRef<BucketR<'tx, B::TxType>>> NCursor<'tx, B> {
         Some((inode.key(), inode.value(), inode.flags()))
       }
       Either::Right(n) => {
-        let ref_node = n.as_cref();
+        let ref_node = n.borrow_iref();
         let inode = ref_node.inodes.get(elem_ref.index as usize)?;
         Some((inode.key(), inode.value(), inode.flags()))
       }
@@ -120,7 +120,7 @@ pub struct Cursor<'tx> {
   cell: SCell<'tx, NCursor<'tx, Bucket<'tx>>>,
 }
 
-impl<'tx> TCursor<'tx> for Cursor<'tx> {
+impl<'tx> CursorAPI<'tx> for Cursor<'tx> {
   type BucketType = Bucket<'tx>;
 
   /// Bucket returns the bucket that this cursor was created from.

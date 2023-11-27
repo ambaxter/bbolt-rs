@@ -294,9 +294,8 @@ impl<'tx> Freelist<'tx> {
       }
     };
 
-    let pgid: u64 = p.id.into();
-    for id in pgid..=pgid + p.overflow as u64 {
-      let pgid_i = PgId::new(id);
+    for id in p.id.0..=p.id.0 + p.overflow as u64 {
+      let pgid_i = PgId(id);
       // Verify that page is not already free.
       if self.cache.contains(&pgid_i) {
         panic!("Page {} already freed", pgid_i);
@@ -500,16 +499,16 @@ mod tests {
   use std::hash::Hash;
 
   const fn pg(id: u64) -> PgId {
-    PgId { id }
+    PgId(id)
   }
 
   const fn tx(id: u64) -> TxId {
-    TxId { id }
+    TxId(id)
   }
 
   fn hashset(ids: &[u64]) -> HashSet<PgId> {
     let mut set = HashSet::new();
-    set.extend(ids.iter().map(|i| PgId::new(*i)));
+    set.extend(ids.iter().map(|i| pg(*i)));
     set
   }
 
@@ -588,8 +587,8 @@ mod tests {
     impl TRange {
       const fn new(b: u64, e: u64) -> TRange {
         TRange {
-          b: TxId::new(b),
-          e: TxId::new(e),
+          b: TxId(b),
+          e: TxId(e),
         }
       }
     }
@@ -605,10 +604,10 @@ mod tests {
     impl TPage {
       const fn new(id: u64, n: u64, alloc_txn: u64, free_txn: u64) -> TPage {
         TPage {
-          id: PgId::new(id),
+          id: PgId(id),
           n,
-          alloc_txn: TxId::new(alloc_txn),
-          free_txn: TxId::new(free_txn),
+          alloc_txn: TxId(alloc_txn),
+          free_txn: TxId(free_txn),
         }
       }
     }

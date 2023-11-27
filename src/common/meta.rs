@@ -52,9 +52,7 @@ impl Meta {
         self.free_list, self.pgid
       );
     }
-    mp.page.id = PgId {
-      id: self.txid.id % 2,
-    };
+    mp.page.id = PgId(self.txid.0 % 2);
     mp.page.set_meta();
     self.checksum = self.sum64();
     mp.meta = *self;
@@ -139,6 +137,6 @@ mod test {
     };
     meta.write(meta_page.deref_mut());
     assert!(meta_page.meta.validate().is_ok());
-    assert_eq!(10, meta_page.meta.pgid.id);
+    assert_eq!(10, meta_page.meta.pgid.0);
   }
 }
