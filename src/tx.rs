@@ -17,6 +17,14 @@ pub trait TxIAPI<'tx> {
 
 pub trait TxIRef<'tx>: TxIAPI<'tx> + IRef<TxR<'tx>, TxW<'tx>> {}
 
+pub(crate) struct TxImpl {}
+
+impl TxImpl {
+  pub fn page<'tx, T: TxIRef<'tx>>(cell: T, id: PgId) -> RefPage<'tx> {
+    todo!()
+  }
+}
+
 pub trait TxAPI<'tx>: Copy + Clone {
   fn writeable(&self) -> bool;
 

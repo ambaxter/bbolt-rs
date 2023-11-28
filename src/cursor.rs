@@ -1,4 +1,4 @@
-use crate::bucket::{Bucket, BucketAPI, BucketIAPI, BucketIRef, BucketMut, BucketR};
+use crate::bucket::{Bucket, BucketAPI, BucketIAPI, BucketIRef, BucketImpl, BucketMut, BucketR};
 use crate::common::memory::SCell;
 use crate::common::page::{CoerciblePage, RefPage, BUCKET_LEAF_FLAG};
 use crate::common::tree::{MappedBranchPage, MappedLeafPage, TreePage};
@@ -36,28 +36,26 @@ pub struct ElemRef<'tx, N: NodeIRef<'tx>> {
 
 impl<'tx, N: NodeIRef<'tx>> ElemRef<'tx, N> {
   fn count(&self) -> u32 {
-    todo!()
-    /*    match &self.pn {
+    match &self.pn {
       Either::Left(r) => r.count as u32,
-      Either::Right(n) => n.borrow_iref().inodes.len() as u32,
-    }*/
+      Either::Right(n) => n.borrow_iref().0.inodes.len() as u32,
+    }
   }
 
   fn is_leaf(&self) -> bool {
-    todo!()
-    /*    match &self.pn {
+    match &self.pn {
       Either::Left(r) => r.is_leaf(),
-      Either::Right(n) => n.borrow_iref().is_leaf,
-    }*/
+      Either::Right(n) => n.borrow_iref().0.is_leaf,
+    }
   }
 }
 
 pub struct NCursor<'tx, B: BucketIRef<'tx>> {
   bucket: B,
-  stack: BVec<'tx, ElemRef<'tx, B::NodeType>>,
+  stack: BVec<'tx, ElemRef<'tx, <<B as BucketIAPI<'tx>>::BucketType as BucketIAPI<'tx>>::NodeType>>,
 }
 
-impl<'tx, B: BucketAPI<'tx> + BucketIRef<'tx>> NCursor<'tx, B> {
+impl<'tx, B: BucketIRef<'tx>> NCursor<'tx, B> {
   fn first(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
     let (k, v, flags) = self._first()?;
     if (flags & BUCKET_LEAF_FLAG) != 0 {
@@ -66,13 +64,10 @@ impl<'tx, B: BucketAPI<'tx> + BucketIRef<'tx>> NCursor<'tx, B> {
     Some((k, v))
   }
   fn _first(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>, u32)> {
-    todo!()
-    /*    self.stack.clear();
+    self.stack.clear();
 
-    let pn = self
-      .bucket
-      .borrow_iref()
-      .page_node::<B>(self.bucket.root(), None);
+    let root = BucketImpl::root(self.bucket);
+    let pn = BucketImpl::page_node(self.bucket, root);
     self.stack.push(ElemRef { pn, index: 0 });
 
     self.go_to_first_element_on_the_stack();
@@ -87,7 +82,7 @@ impl<'tx, B: BucketAPI<'tx> + BucketIRef<'tx>> NCursor<'tx, B> {
     if (flags & BUCKET_LEAF_FLAG) != 0 {
       return Some((k, None, flags));
     }
-    Some((k, Some(v), flags))*/
+    Some((k, Some(v), flags))
   }
 
   fn key_value(&self) -> Option<(&'tx [u8], &'tx [u8], u32)> {
