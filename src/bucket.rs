@@ -3,8 +3,8 @@ use crate::common::memory::SCell;
 use crate::common::page::RefPage;
 use crate::common::{HashMap, IRef, PgId, ZERO_PGID};
 use crate::cursor::{Cursor, CursorAPI, CursorMut, ElemRef};
-use crate::node::{Node, NodeMut, NodeR};
-use crate::tx::{Tx, TxAPI, TxMut, TxR};
+use crate::node::{Node, NodeIRef, NodeMut, NodeR, NodeW};
+use crate::tx::{Tx, TxAPI, TxIRef, TxMut, TxR, TxW};
 use bumpalo::Bump;
 use either::Either;
 use std::cell::{Ref, RefCell, RefMut};
@@ -17,8 +17,13 @@ const DEFAULT_FILL_PERCENT: f64 = 0.5;
 pub struct BucketStats {}
 
 pub(crate) trait BucketIAPI<'tx> {
-  type NodeType: IRef<NodeR<'tx>>;
-  type TxType: TxAPI<'tx>;
+  type NodeType: NodeIRef<'tx>;
+  type TxType: TxIRef<'tx>;
+}
+
+pub trait BucketIRef<'tx>:
+  BucketIAPI<'tx> + IRef<BucketR<'tx, Self::TxType>, BucketW<'tx>>
+{
 }
 
 pub trait BucketAPI<'tx>: BucketIAPI<'tx> {
@@ -63,14 +68,14 @@ pub trait BucketMutAPI<'tx>: BucketAPI<'tx> + Sized {
   fn for_each_bucket_mut<F: Fn(&[u8]) -> io::Result<()>>(&mut self, f: F) -> io::Result<()>;
 }
 
-pub struct BucketR<'tx, T: TxAPI<'tx> + IRef<TxR<'tx>>> {
+pub struct BucketR<'tx, T: TxIRef<'tx>> {
   pub(crate) inline_bucket: InBucket,
   pub(crate) tx: T,
   pub(crate) inline_page: Option<RefPage<'tx>>,
   p: PhantomData<&'tx u8>,
 }
 
-impl<'tx, T: TxAPI<'tx>> BucketR<'tx, T> {
+impl<'tx, T: TxIRef<'tx>> BucketR<'tx, T> {
   pub fn new(tx: T, in_bucket: InBucket) -> BucketR<'tx, T> {
     BucketR {
       inline_bucket: in_bucket,
@@ -85,7 +90,8 @@ impl<'tx, T: TxAPI<'tx>> BucketR<'tx, T> {
   pub(crate) fn page_node<B: BucketAPI<'tx>>(
     &self, id: PgId, w: Option<&BucketP<'tx, B>>,
   ) -> Either<RefPage<'tx>, B::NodeType> {
-    // Inline buckets have a fake page embedded in their value so treat them
+    todo!()
+    /*    // Inline buckets have a fake page embedded in their value so treat them
     // differently. We'll return the rootNode (if available) or the fake page.
     if self.inline_bucket.root() == ZERO_PGID {
       if id != ZERO_PGID {
@@ -106,7 +112,7 @@ impl<'tx, T: TxAPI<'tx>> BucketR<'tx, T> {
       }
     }
     // Finally lookup the page from the transaction if no node is materialized.
-    Either::Left(self.tx.page(id))
+    Either::Left(self.tx.page(id))*/
   }
 }
 
@@ -151,13 +157,13 @@ pub struct Bucket<'tx> {
   cell: SCell<'tx, BucketR<'tx, Tx<'tx>>>,
 }
 
-impl<'tx> IRef<BucketR<'tx, Tx<'tx>>> for Bucket<'tx> {
-  fn borrow_iref(&self) -> Ref<BucketR<'tx, Tx<'tx>>> {
-    self.cell.borrow()
+impl<'tx> IRef<BucketR<'tx, Tx<'tx>>, BucketW<'tx>> for Bucket<'tx> {
+  fn borrow_iref(&self) -> (Ref<BucketR<'tx, Tx<'tx>>>, Option<Ref<BucketW<'tx>>>) {
+    (self.cell.borrow(), None)
   }
 
-  fn borrow_mut_iref(&self) -> RefMut<BucketR<'tx, Tx<'tx>>> {
-    self.cell.borrow_mut()
+  fn borrow_mut_iref(&self) -> (RefMut<BucketR<'tx, Tx<'tx>>>, Option<RefMut<BucketW<'tx>>>) {
+    (self.cell.borrow_mut(), None)
   }
 }
 
@@ -165,6 +171,8 @@ impl<'tx> BucketIAPI<'tx> for Bucket<'tx> {
   type NodeType = Node<'tx>;
   type TxType = Tx<'tx>;
 }
+
+impl<'tx> BucketIRef<'tx> for Bucket<'tx> {}
 
 impl<'tx> BucketAPI<'tx> for Bucket<'tx> {
   fn root(&self) -> PgId {
@@ -209,13 +217,20 @@ pub struct BucketMut<'tx> {
   cell: SCell<'tx, BucketRW<'tx>>,
 }
 
-impl<'tx> IRef<BucketR<'tx, TxMut<'tx>>> for BucketMut<'tx> {
-  fn borrow_iref(&self) -> Ref<BucketR<'tx, TxMut<'tx>>> {
-    Ref::map(self.cell.borrow(), |b| &b.r)
+impl<'tx> IRef<BucketR<'tx, TxMut<'tx>>, BucketW<'tx>> for BucketMut<'tx> {
+  fn borrow_iref(&self) -> (Ref<BucketR<'tx, TxMut<'tx>>>, Option<Ref<BucketW<'tx>>>) {
+    let (r, w) = Ref::map_split(self.cell.borrow(), |b| (&b.r, &b.w));
+    (r, Some(w))
   }
 
-  fn borrow_mut_iref(&self) -> RefMut<BucketR<'tx, TxMut<'tx>>> {
-    RefMut::map(self.cell.borrow_mut(), |b| &mut b.r)
+  fn borrow_mut_iref(
+    &self,
+  ) -> (
+    RefMut<BucketR<'tx, TxMut<'tx>>>,
+    Option<RefMut<BucketW<'tx>>>,
+  ) {
+    let (r, w) = RefMut::map_split(self.cell.borrow_mut(), |b| (&mut b.r, &mut b.w));
+    (r, Some(w))
   }
 }
 
@@ -223,6 +238,8 @@ impl<'tx> BucketIAPI<'tx> for BucketMut<'tx> {
   type NodeType = NodeMut<'tx>;
   type TxType = TxMut<'tx>;
 }
+
+impl<'tx> BucketIRef<'tx> for BucketMut<'tx> {}
 
 impl<'tx> BucketAPI<'tx> for BucketMut<'tx> {
   fn root(&self) -> PgId {

@@ -1,9 +1,9 @@
-use crate::bucket::{Bucket, BucketAPI, BucketMut, BucketR};
+use crate::bucket::{Bucket, BucketAPI, BucketIAPI, BucketIRef, BucketMut, BucketR};
 use crate::common::memory::SCell;
 use crate::common::page::{CoerciblePage, RefPage, BUCKET_LEAF_FLAG};
-use crate::common::tree::{MappedLeafPage, TreePage};
+use crate::common::tree::{MappedBranchPage, MappedLeafPage, TreePage};
 use crate::common::{BVec, IRef};
-use crate::node::NodeR;
+use crate::node::{NodeIRef, NodeR};
 use crate::tx::{Tx, TxAPI, TxMut};
 use either::Either;
 use std::io;
@@ -14,63 +14,68 @@ pub trait CursorAPI<'tx>: Copy + Clone {
 
   fn bucket(&self) -> Self::BucketType;
 
-  fn first(&mut self) -> Option<(&'tx [u8], &'tx [u8])>;
+  fn first(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)>;
 
-  fn last(&mut self) -> Option<(&'tx [u8], &'tx [u8])>;
+  fn last(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)>;
 
-  fn next(&mut self) -> Option<(&'tx [u8], &'tx [u8])>;
+  fn next(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)>;
 
-  fn prev(&mut self) -> Option<(&'tx [u8], &'tx [u8])>;
+  fn prev(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)>;
 
-  fn seek(&mut self, seek: &[u8]) -> Option<(&'tx [u8], &'tx [u8])>;
+  fn seek(&mut self, seek: &[u8]) -> Option<(&'tx [u8], Option<&'tx [u8]>)>;
 }
 
 pub trait CursorMutAPI<'tx>: CursorAPI<'tx> {
   fn delete(&mut self) -> io::Result<()>;
 }
 
-pub struct ElemRef<'tx, N: IRef<NodeR<'tx>>> {
+pub struct ElemRef<'tx, N: NodeIRef<'tx>> {
   pn: Either<RefPage<'tx>, N>,
   index: u32,
 }
 
-impl<'tx, N: IRef<NodeR<'tx>>> ElemRef<'tx, N> {
+impl<'tx, N: NodeIRef<'tx>> ElemRef<'tx, N> {
   fn count(&self) -> u32 {
-    match &self.pn {
+    todo!()
+    /*    match &self.pn {
       Either::Left(r) => r.count as u32,
       Either::Right(n) => n.borrow_iref().inodes.len() as u32,
-    }
+    }*/
   }
 
   fn is_leaf(&self) -> bool {
-    match &self.pn {
+    todo!()
+    /*    match &self.pn {
       Either::Left(r) => r.is_leaf(),
       Either::Right(n) => n.borrow_iref().is_leaf,
-    }
+    }*/
   }
 }
 
-pub struct NCursor<'tx, B: BucketAPI<'tx> + IRef<BucketR<'tx, B::TxType>>> {
+pub struct NCursor<'tx, B: BucketIRef<'tx>> {
   bucket: B,
   stack: BVec<'tx, ElemRef<'tx, B::NodeType>>,
 }
 
-impl<'tx, B: BucketAPI<'tx> + IRef<BucketR<'tx, B::TxType>>> NCursor<'tx, B> {
-  fn first(&mut self) -> Option<(&'tx [u8], &'tx [u8])> {
+impl<'tx, B: BucketAPI<'tx> + BucketIRef<'tx>> NCursor<'tx, B> {
+  fn first(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
     let (k, v, flags) = self._first()?;
     if (flags & BUCKET_LEAF_FLAG) != 0 {
-      return Some((k, &[]));
+      return Some((k, None));
     }
     Some((k, v))
   }
-  fn _first(&mut self) -> Option<(&'tx [u8], &'tx [u8], u32)> {
-    self.stack.clear();
+  fn _first(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>, u32)> {
+    todo!()
+    /*    self.stack.clear();
 
     let pn = self
       .bucket
       .borrow_iref()
       .page_node::<B>(self.bucket.root(), None);
     self.stack.push(ElemRef { pn, index: 0 });
+
+    self.go_to_first_element_on_the_stack();
 
     // If we land on an empty page then move to the next value.
     // https://github.com/boltdb/bolt/issues/450
@@ -80,13 +85,14 @@ impl<'tx, B: BucketAPI<'tx> + IRef<BucketR<'tx, B::TxType>>> NCursor<'tx, B> {
 
     let (k, v, flags) = self.key_value()?;
     if (flags & BUCKET_LEAF_FLAG) != 0 {
-      return Some((k, &[], flags));
+      return Some((k, None, flags));
     }
-    None
+    Some((k, Some(v), flags))*/
   }
 
   fn key_value(&self) -> Option<(&'tx [u8], &'tx [u8], u32)> {
-    let elem_ref = self.stack.last()?;
+    todo!()
+    /*    let elem_ref = self.stack.last()?;
     let pn_count = elem_ref.count();
     if pn_count == 0 || elem_ref.index > pn_count {
       return None;
@@ -103,11 +109,34 @@ impl<'tx, B: BucketAPI<'tx> + IRef<BucketR<'tx, B::TxType>>> NCursor<'tx, B> {
         let inode = ref_node.inodes.get(elem_ref.index as usize)?;
         Some((inode.key(), inode.value(), inode.flags()))
       }
-    }
+    }*/
   }
 
-  fn next(&mut self) {
-    todo!("cursor.next")
+  /// first moves the cursor to the first leaf element under the last page in the stack.
+  fn go_to_first_element_on_the_stack(&mut self) {
+    todo!()
+    /*  loop {
+      let pgid = {
+        // Exit when we hit a leaf page.
+        let r = self.stack.last().unwrap();
+        if r.is_leaf() {
+          break;
+        }
+
+        match r.pn {
+          Either::Left(page) => {
+            let branch_page = MappedBranchPage::coerce_ref(&page).unwrap();
+            branch_page.get_elem(r.index as u16).unwrap().pgid()
+          }
+          Either::Right(node) => {
+            let node_borrow = node.borrow_iref();
+            node_borrow.inodes.get(r.index as usize).unwrap().pgid()
+          }
+        }
+      };
+      let pn = self.bucket.page_node(pgid);
+      self.stack.push(ElemRef { pn, index: 0 })
+    }*/
   }
 }
 
@@ -131,23 +160,23 @@ impl<'tx> CursorAPI<'tx> for Cursor<'tx> {
   /// First moves the cursor to the first item in the bucket and returns its key and value.
   /// If the bucket is empty then a nil key and value are returned.
   /// The returned key and value are only valid for the life of the transaction.
-  fn first(&mut self) -> Option<(&'tx [u8], &'tx [u8])> {
+  fn first(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
     self.cell.borrow_mut().first()
   }
 
-  fn last(&mut self) -> Option<(&'tx [u8], &'tx [u8])> {
+  fn last(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
     todo!()
   }
 
-  fn next(&mut self) -> Option<(&'tx [u8], &'tx [u8])> {
+  fn next(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
     todo!()
   }
 
-  fn prev(&mut self) -> Option<(&'tx [u8], &'tx [u8])> {
+  fn prev(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
     todo!()
   }
 
-  fn seek(&mut self, seek: &[u8]) -> Option<(&'tx [u8], &'tx [u8])> {
+  fn seek(&mut self, seek: &[u8]) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
     todo!()
   }
 }

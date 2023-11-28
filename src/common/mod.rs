@@ -114,14 +114,8 @@ pub type HashMap<'tx, K, V> = hashbrown::HashMap<K, V, DefaultHashBuilder, &'tx 
 
 pub type HashSet<'tx, K> = hashbrown::HashSet<K, DefaultHashBuilder, &'tx Bump>;
 
-pub(crate) trait IRef<T>: Copy + Clone {
-  fn borrow_iref(&self) -> cell::Ref<T>;
+pub(crate) trait IRef<R, W>: Copy + Clone {
+  fn borrow_iref(&self) -> (cell::Ref<R>, Option<cell::Ref<W>>);
 
-  fn borrow_mut_iref(&self) -> cell::RefMut<T>;
-}
-
-pub(crate) trait IRefMut<T>: Copy + Clone {
-  fn borrow_iref_mut(&self) -> cell::Ref<T>;
-
-  fn borrow_mut_iref_mut(&self) -> cell::RefMut<T>;
+  fn borrow_mut_iref(&self) -> (cell::RefMut<R>, Option<cell::RefMut<W>>);
 }

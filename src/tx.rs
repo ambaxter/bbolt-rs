@@ -1,20 +1,29 @@
+use crate::bucket::{Bucket, BucketIAPI, BucketIRef, BucketMut};
 use crate::common::memory::SCell;
 use crate::common::page::RefPage;
 use crate::common::selfowned::SelfOwned;
-use crate::common::{IRef, IRefMut, PgId};
+use crate::common::{IRef, PgId};
+use crate::node::{Node, NodeIRef, NodeMut};
 use bumpalo::Bump;
 use std::cell;
 use std::cell::{Ref, RefMut};
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 
-pub trait TxAPI<'tx>: IRef<TxR<'tx>> + Copy + Clone {
+pub trait TxIAPI<'tx> {
+  type BucketType: BucketIRef<'tx>;
+  type NodeType: NodeIRef<'tx>;
+}
+
+pub trait TxIRef<'tx>: TxIAPI<'tx> + IRef<TxR<'tx>, TxW<'tx>> {}
+
+pub trait TxAPI<'tx>: Copy + Clone {
   fn writeable(&self) -> bool;
 
   fn page(&self, id: PgId) -> RefPage<'tx>;
 }
 
-pub trait TxMutAPI<'tx>: TxAPI<'tx> + IRefMut<TxRW<'tx>> {}
+pub trait TxMutAPI<'tx>: TxAPI<'tx> {}
 
 pub struct TxR<'tx> {
   bump: &'tx Bump,
@@ -35,15 +44,22 @@ pub struct Tx<'tx> {
   cell: SCell<'tx, TxR<'tx>>,
 }
 
-impl<'tx> IRef<TxR<'tx>> for Tx<'tx> {
-  fn borrow_iref(&self) -> Ref<TxR<'tx>> {
-    self.cell.borrow()
+impl<'tx> IRef<TxR<'tx>, TxW<'tx>> for Tx<'tx> {
+  fn borrow_iref(&self) -> (Ref<TxR<'tx>>, Option<Ref<TxW<'tx>>>) {
+    (self.cell.borrow(), None)
   }
 
-  fn borrow_mut_iref(&self) -> RefMut<TxR<'tx>> {
-    self.cell.borrow_mut()
+  fn borrow_mut_iref(&self) -> (RefMut<TxR<'tx>>, Option<RefMut<TxW<'tx>>>) {
+    (self.cell.borrow_mut(), None)
   }
 }
+
+impl<'tx> TxIAPI<'tx> for Tx<'tx> {
+  type BucketType = Bucket<'tx>;
+  type NodeType = Node<'tx>;
+}
+
+impl<'tx> TxIRef<'tx> for Tx<'tx> {}
 
 impl<'tx> TxAPI<'tx> for Tx<'tx> {
   fn writeable(&self) -> bool {
@@ -60,15 +76,24 @@ pub struct TxMut<'tx> {
   cell: SCell<'tx, TxRW<'tx>>,
 }
 
-impl<'tx> IRef<TxR<'tx>> for TxMut<'tx> {
-  fn borrow_iref(&self) -> Ref<TxR<'tx>> {
-    Ref::map(self.cell.borrow(), |tx| &tx.r)
+impl<'tx> IRef<TxR<'tx>, TxW<'tx>> for TxMut<'tx> {
+  fn borrow_iref(&self) -> (Ref<TxR<'tx>>, Option<Ref<TxW<'tx>>>) {
+    let (r, w) = Ref::map_split(self.cell.borrow(), |b| (&b.r, &b.w));
+    (r, Some(w))
   }
 
-  fn borrow_mut_iref(&self) -> RefMut<TxR<'tx>> {
-    RefMut::map(self.cell.borrow_mut(), |tx| &mut tx.r)
+  fn borrow_mut_iref(&self) -> (RefMut<TxR<'tx>>, Option<RefMut<TxW<'tx>>>) {
+    let (r, w) = RefMut::map_split(self.cell.borrow_mut(), |b| (&mut b.r, &mut b.w));
+    (r, Some(w))
   }
 }
+
+impl<'tx> TxIAPI<'tx> for TxMut<'tx> {
+  type BucketType = BucketMut<'tx>;
+  type NodeType = NodeMut<'tx>;
+}
+
+impl<'tx> TxIRef<'tx> for TxMut<'tx> {}
 
 impl<'tx> TxAPI<'tx> for TxMut<'tx> {
   fn writeable(&self) -> bool {
@@ -77,16 +102,6 @@ impl<'tx> TxAPI<'tx> for TxMut<'tx> {
 
   fn page(&self, id: PgId) -> RefPage<'tx> {
     todo!()
-  }
-}
-
-impl<'tx> IRefMut<TxRW<'tx>> for TxMut<'tx> {
-  fn borrow_iref_mut(&self) -> Ref<TxRW<'tx>> {
-    self.cell.borrow()
-  }
-
-  fn borrow_mut_iref_mut(&self) -> RefMut<TxRW<'tx>> {
-    self.cell.borrow_mut()
   }
 }
 
