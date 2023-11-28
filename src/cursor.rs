@@ -85,9 +85,10 @@ impl<'tx, B: BucketIRef<'tx>> NCursor<'tx, B> {
     Some((k, Some(v), flags))
   }
 
+  fn next(&mut self) {}
+
   fn key_value(&self) -> Option<(&'tx [u8], &'tx [u8], u32)> {
-    todo!()
-    /*    let elem_ref = self.stack.last()?;
+    let elem_ref = self.stack.last()?;
     let pn_count = elem_ref.count();
     if pn_count == 0 || elem_ref.index > pn_count {
       return None;
@@ -101,16 +102,15 @@ impl<'tx, B: BucketIRef<'tx>> NCursor<'tx, B> {
       }
       Either::Right(n) => {
         let ref_node = n.borrow_iref();
-        let inode = ref_node.inodes.get(elem_ref.index as usize)?;
+        let inode = ref_node.0.inodes.get(elem_ref.index as usize)?;
         Some((inode.key(), inode.value(), inode.flags()))
       }
-    }*/
+    }
   }
 
   /// first moves the cursor to the first leaf element under the last page in the stack.
   fn go_to_first_element_on_the_stack(&mut self) {
-    todo!()
-    /*  loop {
+    loop {
       let pgid = {
         // Exit when we hit a leaf page.
         let r = self.stack.last().unwrap();
@@ -125,13 +125,13 @@ impl<'tx, B: BucketIRef<'tx>> NCursor<'tx, B> {
           }
           Either::Right(node) => {
             let node_borrow = node.borrow_iref();
-            node_borrow.inodes.get(r.index as usize).unwrap().pgid()
+            node_borrow.0.inodes.get(r.index as usize).unwrap().pgid()
           }
         }
       };
-      let pn = self.bucket.page_node(pgid);
+      let pn = BucketImpl::page_node(self.bucket, pgid);
       self.stack.push(ElemRef { pn, index: 0 })
-    }*/
+    }
   }
 }
 

@@ -10,6 +10,7 @@ use std::mem;
 
 pub trait NodeIRef<'tx>: IRef<NodeR<'tx>, NodeW<'tx>> {}
 
+// TODO: Is Node *ever* used in the read transaction?
 pub struct NodeR<'tx> {
   pub(crate) is_leaf: bool,
   pub(crate) key: CodSlice<'tx, u8>,

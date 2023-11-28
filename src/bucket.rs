@@ -123,36 +123,6 @@ impl<'tx, T: TxIRef<'tx>> BucketR<'tx, T> {
       p: Default::default(),
     }
   }
-
-  /// pageNode returns the in-memory node, if it exists.
-  /// Otherwise, returns the underlying page.
-  pub(crate) fn page_node<B: BucketIRef<'tx>>(
-    &self, id: PgId, w: Option<&BucketP<'tx, B>>,
-  ) -> Either<RefPage<'tx>, B::NodeType> {
-    todo!()
-    /*    // Inline buckets have a fake page embedded in their value so treat them
-    // differently. We'll return the rootNode (if available) or the fake page.
-    if self.inline_bucket.root() == ZERO_PGID {
-      if id != ZERO_PGID {
-        panic!("inline bucket non-zero page access(2): {} != 0", id)
-      }
-      if let Some(wb) = w {
-        return if let Some(root_node) = wb.root_node {
-          Either::Right(root_node)
-        } else {
-          Either::Left(self.inline_page.unwrap())
-        };
-      }
-    }
-    // Check the node cache for non-inline buckets.
-    if let Some(wb) = w {
-      if let Some(node) = wb.nodes.get(&id) {
-        return Either::Right(*node);
-      }
-    }
-    // Finally lookup the page from the transaction if no node is materialized.
-    Either::Left(self.tx.page(id))*/
-  }
 }
 
 pub struct BucketP<'tx, B: BucketIRef<'tx>> {
