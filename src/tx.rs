@@ -3,7 +3,7 @@ use crate::common::memory::SCell;
 use crate::common::page::RefPage;
 use crate::common::selfowned::SelfOwned;
 use crate::common::{IRef, PgId};
-use crate::node::{Node, NodeIRef, NodeMut};
+use crate::node::NodeMut;
 use bumpalo::Bump;
 use std::cell;
 use std::cell::{Ref, RefMut};
@@ -12,7 +12,6 @@ use std::ops::{Deref, DerefMut};
 
 pub trait TxIAPI<'tx> {
   type BucketType: BucketIRef<'tx>;
-  type NodeType: NodeIRef<'tx>;
 }
 
 pub trait TxIRef<'tx>: TxIAPI<'tx> + IRef<TxR<'tx>, TxW<'tx>> {}
@@ -64,7 +63,6 @@ impl<'tx> IRef<TxR<'tx>, TxW<'tx>> for Tx<'tx> {
 
 impl<'tx> TxIAPI<'tx> for Tx<'tx> {
   type BucketType = Bucket<'tx>;
-  type NodeType = Node<'tx>;
 }
 
 impl<'tx> TxIRef<'tx> for Tx<'tx> {}
@@ -98,7 +96,6 @@ impl<'tx> IRef<TxR<'tx>, TxW<'tx>> for TxMut<'tx> {
 
 impl<'tx> TxIAPI<'tx> for TxMut<'tx> {
   type BucketType = BucketMut<'tx>;
-  type NodeType = NodeMut<'tx>;
 }
 
 impl<'tx> TxIRef<'tx> for TxMut<'tx> {}

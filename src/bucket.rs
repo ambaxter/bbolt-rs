@@ -3,7 +3,7 @@ use crate::common::memory::SCell;
 use crate::common::page::RefPage;
 use crate::common::{HashMap, IRef, PgId, ZERO_PGID};
 use crate::cursor::{Cursor, CursorAPI, CursorMut, ElemRef};
-use crate::node::{Node, NodeIRef, NodeMut, NodeR, NodeW};
+use crate::node::{NodeMut, NodeW};
 use crate::tx::{Tx, TxAPI, TxIRef, TxImpl, TxMut, TxR, TxW};
 use bumpalo::Bump;
 use either::Either;
@@ -17,7 +17,6 @@ const DEFAULT_FILL_PERCENT: f64 = 0.5;
 pub struct BucketStats {}
 
 pub(crate) trait BucketIAPI<'tx> {
-  type NodeType: NodeIRef<'tx>;
   type TxType: TxIRef<'tx>;
   type BucketType: BucketIRef<'tx>;
 }
@@ -36,7 +35,7 @@ impl BucketImpl {
 
   pub fn page_node<'tx, B: BucketIRef<'tx>>(
     cell: B, id: PgId,
-  ) -> Either<RefPage<'tx>, <<B as BucketIAPI<'tx>>::BucketType as BucketIAPI<'tx>>::NodeType> {
+  ) -> Either<RefPage<'tx>, NodeMut<'tx>> {
     let tx = {
       let (r, w) = cell.borrow_iref();
       // Inline buckets have a fake page embedded in their value so treat them
@@ -45,16 +44,14 @@ impl BucketImpl {
         if id != ZERO_PGID {
           panic!("inline bucket non-zero page access(2): {} != 0", id)
         }
-        if let Some(wb) = w {
-          return if let Some(root_node) = wb.root_node {
-            Either::Right(root_node)
-          } else {
-            Either::Left(r.inline_page.unwrap())
-          };
+        if let Some(root_node) = &w.map(|wb| wb.root_node).flatten() {
+          return Either::Right(*root_node);
+        } else {
+          return Either::Left(r.inline_page.unwrap());
         }
       }
       // Check the node cache for non-inline buckets.
-      if let Some(wb) = w {
+      if let Some(wb) = &w {
         if let Some(node) = wb.nodes.get(&id) {
           return Either::Right(*node);
         }
@@ -126,9 +123,9 @@ impl<'tx, T: TxIRef<'tx>> BucketR<'tx, T> {
 }
 
 pub struct BucketP<'tx, B: BucketIRef<'tx>> {
-  root_node: Option<B::NodeType>,
+  root_node: Option<NodeMut<'tx>>,
   buckets: HashMap<'tx, &'tx str, B>,
-  nodes: HashMap<'tx, PgId, B::NodeType>,
+  nodes: HashMap<'tx, PgId, NodeMut<'tx>>,
   fill_percent: f64,
 }
 
@@ -165,7 +162,6 @@ pub struct Bucket<'tx> {
 }
 
 impl<'tx> BucketIAPI<'tx> for Bucket<'tx> {
-  type NodeType = Node<'tx>;
   type TxType = Tx<'tx>;
   type BucketType = Bucket<'tx>;
 }
@@ -253,7 +249,6 @@ impl<'tx> IRef<BucketR<'tx, TxMut<'tx>>, BucketW<'tx>> for BucketMut<'tx> {
 }
 
 impl<'tx> BucketIAPI<'tx> for BucketMut<'tx> {
-  type NodeType = NodeMut<'tx>;
   type TxType = TxMut<'tx>;
   type BucketType = BucketMut<'tx>;
 }

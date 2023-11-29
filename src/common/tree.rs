@@ -80,6 +80,21 @@ impl LeafPageElement {
       value_size,
     }
   }
+
+  pub fn as_ref(&self) -> LeafElementRef {
+    unsafe {
+      let elem_ptr = self as *const LeafPageElement as *const u8;
+      let key_ptr = elem_ptr.add(self.pos as usize);
+      let key_ref = from_raw_parts(key_ptr, self.key_size as usize);
+      let value_ptr = key_ptr.add(self.key_size as usize);
+      let value_ref = from_raw_parts(value_ptr, self.value_size as usize);
+      LeafElementRef {
+        elem_ref: self,
+        key_ref,
+        value_ref,
+      }
+    }
+  }
 }
 
 #[derive(Debug)]
@@ -157,6 +172,20 @@ pub struct BranchPageElement {
   key_size: u32,
 }
 
+impl BranchPageElement {
+  pub(crate) fn as_ref(&self) -> BranchElementRef {
+    unsafe {
+      let elem_ptr = self as *const BranchPageElement as *const u8;
+      let key_ptr = elem_ptr.add(self.pos as usize);
+      let key_ref = from_raw_parts(key_ptr, self.key_size as usize);
+      BranchElementRef {
+        elem_ref: self,
+        key_ref,
+      }
+    }
+  }
+}
+
 #[derive(Debug)]
 pub struct BranchElementRef<'tx> {
   elem_ref: &'tx BranchPageElement,
@@ -178,7 +207,7 @@ impl<'tx> Deref for BranchElementRef<'tx> {
 }
 
 pub trait TreePage<'tx>: Deref<Target = Page> + DerefMut {
-  type Elem;
+  type Elem: 'tx;
   type ElemRef: 'tx;
   unsafe fn page_ptr(&self) -> *mut u8;
   fn page_element_size(&self) -> usize;
@@ -277,16 +306,8 @@ impl<'tx> TreePage<'tx> for MappedLeafPage {
           .bytes
           .add(PAGE_HEADER_SIZE)
           .add(self.page_element_size() * i as usize);
-        let elem_ref = &*(elem_ptr as *const LeafPageElement);
-        let key_ptr = elem_ptr.add(elem_ref.pos as usize);
-        let key_ref = from_raw_parts(key_ptr, elem_ref.key_size as usize);
-        let value_ptr = key_ptr.add(elem_ref.key_size as usize);
-        let value_ref = from_raw_parts(value_ptr, elem_ref.value_size as usize);
-        Some(LeafElementRef {
-          elem_ref,
-          key_ref,
-          value_ref,
-        })
+        let elem = &*(elem_ptr as *const LeafPageElement);
+        Some(elem.as_ref())
       }
     }
   }
@@ -322,10 +343,8 @@ impl<'tx> TreePage<'tx> for MappedBranchPage {
           .bytes
           .add(PAGE_HEADER_SIZE)
           .add(self.page_element_size() * i as usize);
-        let elem_ref = &*(elem_ptr as *const BranchPageElement);
-        let key_ptr = elem_ptr.add(elem_ref.pos as usize);
-        let key_ref = from_raw_parts(key_ptr, elem_ref.key_size as usize);
-        Some(BranchElementRef { elem_ref, key_ref })
+        let elem = &*(elem_ptr as *const BranchPageElement);
+        Some(elem.as_ref())
       }
     }
   }
