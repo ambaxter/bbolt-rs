@@ -7,3 +7,5 @@ fn new_error<S: AsRef<str>>(s: S) -> io::Error {
 pub const INVALID: fn() -> io::Error = || new_error("invalid database");
 pub const VERSION_MISMATCH: fn() -> io::Error = || new_error("version mismatch");
 pub const CHECKSUM: fn() -> io::Error = || new_error("version mismatch");
+
+pub const ERR_INCOMPATIBLE_VALUE: fn() -> io::Error = || new_error("incompatible value");

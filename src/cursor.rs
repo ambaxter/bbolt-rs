@@ -1,32 +1,87 @@
 use crate::bucket::{Bucket, BucketAPI, BucketIAPI, BucketIRef, BucketImpl, BucketMut, BucketR};
+use crate::common::errors::ERR_INCOMPATIBLE_VALUE;
 use crate::common::memory::SCell;
 use crate::common::page::{CoerciblePage, RefPage, BUCKET_LEAF_FLAG};
 use crate::common::tree::{MappedBranchPage, MappedLeafPage, TreePage};
 use crate::common::{BVec, IRef, PgId};
-use crate::node::NodeMut;
+use crate::node::{NodeImpl, NodeMut};
 use crate::tx::{Tx, TxAPI, TxMut};
 use either::Either;
 use std::io;
 use std::marker::PhantomData;
 
-pub trait CursorAPI<'tx>: Clone {
-  type BucketType: BucketAPI<'tx>;
+pub(crate) trait CursorIAPI<'tx>: Clone {
+  fn api_first(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)>;
+  fn i_first(&mut self) -> Option<(&'tx [u8], &'tx [u8], u32)>;
+
+  fn api_next(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)>;
+
+  fn i_next(&mut self) -> Option<(&'tx [u8], &'tx [u8], u32)>;
+
+  fn api_prev(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)>;
+
+  fn i_prev(&mut self) -> Option<(&'tx [u8], &'tx [u8], u32)>;
+
+  fn api_last(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)>;
+
+  fn i_last(&mut self);
+
+  fn key_value(&self) -> Option<(&'tx [u8], &'tx [u8], u32)>;
+
+  fn api_seek(&mut self, seek: &[u8]) -> Option<(&'tx [u8], Option<&'tx [u8]>)>;
+
+  fn i_seek(&mut self, seek: &[u8]) -> Option<(&'tx [u8], &'tx [u8], u32)>;
+
+  fn go_to_first_element_on_the_stack(&mut self);
+
+  fn search(&mut self, key: &[u8], pgid: PgId);
+
+  fn search_inodes(&mut self, key: &[u8]);
+
+  fn search_node(&mut self, key: &[u8], node: NodeMut<'tx>);
+
+  fn search_page(&mut self, key: &[u8], page: &RefPage);
+}
+
+pub(crate) trait CursorMutIAPI<'tx>: CursorIAPI<'tx> {
+  fn node(&mut self) -> NodeMut<'tx>;
+
+  fn api_delete(&mut self, key: &[u8]) -> io::Result<()>;
+}
+
+pub trait CursorAPI<'tx>: CursorIAPI<'tx> {
+  type BucketType: BucketIRef<'tx>;
 
   fn bucket(&self) -> Self::BucketType;
 
-  fn first(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)>;
+  /// First moves the cursor to the first item in the bucket and returns its key and value.
+  /// If the bucket is empty then a nil key and value are returned.
+  /// The returned key and value are only valid for the life of the transaction.
+  fn first(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
+    self.api_first()
+  }
 
-  fn last(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)>;
+  fn last(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
+    self.api_last()
+  }
 
-  fn next(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)>;
+  fn next(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
+    self.api_next()
+  }
 
-  fn prev(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)>;
+  fn prev(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
+    self.api_prev()
+  }
 
-  fn seek(&mut self, seek: &[u8]) -> Option<(&'tx [u8], Option<&'tx [u8]>)>;
+  fn seek(&mut self, seek: &[u8]) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
+    self.api_seek(seek)
+  }
 }
 
-pub trait CursorMutAPI<'tx>: CursorAPI<'tx> {
-  fn delete(&mut self) -> io::Result<()>;
+pub trait CursorMutAPI<'tx>: CursorAPI<'tx> + CursorMutIAPI<'tx> {
+  fn delete(&mut self, key: &[u8]) -> io::Result<()> {
+    self.api_delete(key)
+  }
 }
 
 #[derive(Clone)]
@@ -57,18 +112,19 @@ pub struct ICursor<'tx, B: BucketIRef<'tx>> {
   stack: BVec<'tx, ElemRef<'tx>>,
 }
 
-impl<'tx, B: BucketIRef<'tx>> ICursor<'tx, B> {
+impl<'tx, B: BucketIRef<'tx>> CursorIAPI<'tx> for ICursor<'tx, B> {
   fn api_first(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
-    let (k, v, flags) = self.first()?;
+    let (k, v, flags) = self.i_first()?;
     if (flags & BUCKET_LEAF_FLAG) != 0 {
       return Some((k, None));
     }
     Some((k, Some(v)))
   }
 
-  fn first(&mut self) -> Option<(&'tx [u8], &'tx [u8], u32)> {
+  fn i_first(&mut self) -> Option<(&'tx [u8], &'tx [u8], u32)> {
     self.stack.clear();
 
+    // TODO: Optimize this a bit for the internal API. BucketImpl::root_page_node
     let root = BucketImpl::root(self.bucket);
     let pn = BucketImpl::page_node(self.bucket, root);
     self.stack.push(ElemRef { pn, index: 0 });
@@ -78,7 +134,7 @@ impl<'tx, B: BucketIRef<'tx>> ICursor<'tx, B> {
     // If we land on an empty page then move to the next value.
     // https://github.com/boltdb/bolt/issues/450
     if self.stack.last().unwrap().count() == 0 {
-      self.next();
+      self.i_next();
     }
 
     let (k, v, flags) = self.key_value()?;
@@ -89,7 +145,7 @@ impl<'tx, B: BucketIRef<'tx>> ICursor<'tx, B> {
   }
 
   fn api_next(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
-    let (k, v, flags) = self.next()?;
+    let (k, v, flags) = self.i_next()?;
     if flags & BUCKET_LEAF_FLAG != 0 {
       Some((k, None))
     } else {
@@ -99,7 +155,7 @@ impl<'tx, B: BucketIRef<'tx>> ICursor<'tx, B> {
 
   /// next moves to the next leaf element and returns the key and value.
   /// If the cursor is at the last leaf element then it stays there and returns nil.
-  fn next(&mut self) -> Option<(&'tx [u8], &'tx [u8], u32)> {
+  fn i_next(&mut self) -> Option<(&'tx [u8], &'tx [u8], u32)> {
     loop {
       // Attempt to move over one element until we're successful.
       // Move up the stack as we hit the end of each page in our stack.
@@ -138,7 +194,7 @@ impl<'tx, B: BucketIRef<'tx>> ICursor<'tx, B> {
   }
 
   fn api_prev(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
-    let (k, v, flags) = self.prev()?;
+    let (k, v, flags) = self.i_prev()?;
     if flags & BUCKET_LEAF_FLAG != 0 {
       Some((k, None))
     } else {
@@ -148,7 +204,7 @@ impl<'tx, B: BucketIRef<'tx>> ICursor<'tx, B> {
 
   /// prev moves the cursor to the previous item in the bucket and returns its key and value.
   /// If the cursor is at the beginning of the bucket then a nil key and value are returned.
-  fn prev(&mut self) -> Option<(&'tx [u8], &'tx [u8], u32)> {
+  fn i_prev(&mut self) -> Option<(&'tx [u8], &'tx [u8], u32)> {
     // Attempt to move back one element until we're successful.
     // Move up the stack as we hit the beginning of each page in our stack.
     let mut new_stack_depth = 0;
@@ -175,13 +231,12 @@ impl<'tx, B: BucketIRef<'tx>> ICursor<'tx, B> {
     self.stack.truncate(0);
     let root = BucketImpl::root(self.bucket);
     let pn = BucketImpl::page_node(self.bucket, root);
-    let mut elem_ref = ElemRef{ pn, index: 0};
+    let mut elem_ref = ElemRef { pn, index: 0 };
     elem_ref.index = elem_ref.count() - 1;
     self.stack.push(elem_ref);
     self.last();
 
-
-    if let Some( _ ) = self.stack.last() {
+    if let Some(_) = self.stack.last() {
       self.prev();
     }
 
@@ -200,7 +255,7 @@ impl<'tx, B: BucketIRef<'tx>> ICursor<'tx, B> {
 
   /// last moves the cursor to the last leaf element under the last page in the stack.
 
-  fn last(&mut self) {
+  fn i_last(&mut self) {
     loop {
       // Exit when we hit a leaf page.
       if let Some(elem) = self.stack.last() {
@@ -247,12 +302,11 @@ impl<'tx, B: BucketIRef<'tx>> ICursor<'tx, B> {
   }
 
   fn api_seek(&mut self, seek: &[u8]) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
+    let mut vals = self.i_seek(seek);
 
-    let mut vals = self.seek(seek);
-
-    if let Some( elem_ref ) = self.stack.last() {
+    if let Some(elem_ref) = self.stack.last() {
       if elem_ref.index >= elem_ref.count() {
-        vals = self.next();
+        vals = self.i_next();
       }
     }
 
@@ -264,7 +318,7 @@ impl<'tx, B: BucketIRef<'tx>> ICursor<'tx, B> {
     }
   }
 
-  fn seek(&mut self, seek: &[u8]) -> Option<(&'tx [u8], &'tx [u8], u32)> {
+  fn i_seek(&mut self, seek: &[u8]) -> Option<(&'tx [u8], &'tx [u8], u32)> {
     self.stack.truncate(0);
     let root = BucketImpl::root(self.bucket);
     self.search(seek, root);
@@ -395,49 +449,57 @@ impl<'tx, B: BucketIRef<'tx>> ICursor<'tx, B> {
   }
 }
 
+impl<'tx, B: BucketIRef<'tx>> CursorAPI<'tx> for ICursor<'tx, B> {
+  type BucketType = B;
 
-
-#[derive(Clone)]
-pub struct Cursor<'tx> {
-  c: ICursor<'tx, Bucket<'tx>>,
-}
-
-impl<'tx> Cursor<'tx> {
-}
-
-#[derive(Clone)]
-pub struct CursorMut<'tx> {
-  c: ICursor<'tx, BucketMut<'tx>>,
-}
-
-impl<'tx> CursorAPI<'tx> for Cursor<'tx> {
-  type BucketType = Bucket<'tx>;
-
-  /// Bucket returns the bucket that this cursor was created from.
   fn bucket(&self) -> Self::BucketType {
-    self.c.bucket
-  }
-
-  /// First moves the cursor to the first item in the bucket and returns its key and value.
-  /// If the bucket is empty then a nil key and value are returned.
-  /// The returned key and value are only valid for the life of the transaction.
-  fn first(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
-    self.c.api_first()
-  }
-
-  fn last(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
-    self.c.api_last()
-  }
-
-  fn next(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
-    self.c.api_next()
-  }
-
-  fn prev(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
-    self.c.api_prev()
-  }
-
-  fn seek(&mut self, seek: &[u8]) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
-    self.c.api_seek(seek)
+    self.bucket
   }
 }
+
+impl<'tx> CursorMutIAPI<'tx> for CursorMut<'tx> {
+  fn node(&mut self) -> NodeMut<'tx> {
+    assert!(
+      !self.stack.is_empty(),
+      "accessing a node with a zero-length cursor stack"
+    );
+
+    if let Some(elem_ref) = self.stack.last() {
+      if let Either::Right(node) = elem_ref.pn {
+        if node.cell.borrow().is_leaf {
+          return node;
+        }
+      }
+    }
+
+    let mut n = {
+      let first = self.stack.first().unwrap();
+      match &self.stack.first().unwrap().pn {
+        Either::Left(page) => BucketImpl::node(self.bucket, page.id, None),
+        Either::Right(node) => *node,
+      }
+    };
+    for elem in self.stack.split_last().unwrap().1 {
+      assert!(!n.cell.borrow().is_leaf, "expected branch node");
+      n = NodeImpl::child_at(n.cell, elem.index);
+    }
+    assert!(n.cell.borrow().is_leaf, "expected leaf node");
+    n
+  }
+
+  fn api_delete(&mut self, key: &[u8]) -> io::Result<()> {
+    let (k, _, flags) = self.key_value().unwrap();
+    if flags & BUCKET_LEAF_FLAG != 0 {
+      return Err(ERR_INCOMPATIBLE_VALUE());
+    }
+    NodeImpl::del(self.node());
+
+    Ok(())
+  }
+}
+
+impl<'tx> CursorMutAPI<'tx> for CursorMut<'tx> {}
+
+pub type Cursor<'tx> = ICursor<'tx, Bucket<'tx>>;
+
+pub type CursorMut<'tx> = ICursor<'tx, BucketMut<'tx>>;

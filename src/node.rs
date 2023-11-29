@@ -8,6 +8,18 @@ use std::cell::{Ref, RefCell, RefMut};
 use std::marker::PhantomData;
 use std::mem;
 
+pub(crate) struct NodeImpl {}
+
+impl NodeImpl {
+  pub(crate) fn del(n: NodeMut) {
+    todo!()
+  }
+
+  pub(crate) fn child_at<'tx>(cell: SCell<NodeW<'tx>>, index: u32) -> NodeMut<'tx> {
+    todo!()
+  }
+}
+
 pub struct NodeW<'tx> {
   pub(crate) is_leaf: bool,
   pub(crate) key: CodSlice<'tx, u8>,

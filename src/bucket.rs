@@ -29,6 +29,14 @@ pub trait BucketIRef<'tx>:
 pub(crate) struct BucketImpl {}
 
 impl BucketImpl {
+  pub(crate) fn node<'tx>(
+    cell: BucketMut<'tx>, pgid: PgId, parent: Option<NodeMut<'tx>>,
+  ) -> NodeMut<'tx> {
+    todo!()
+  }
+}
+
+impl BucketImpl {
   pub fn root<'tx, B: BucketIRef<'tx>>(cell: B) -> PgId {
     cell.borrow_iref().0.inline_bucket.root()
   }

@@ -8,7 +8,7 @@ use std::ops::{Add, AddAssign, Sub, SubAssign};
 
 pub mod bucket;
 pub mod defaults;
-mod errors;
+pub mod errors;
 pub mod inode;
 pub mod memory;
 pub mod meta;
