@@ -10,7 +10,7 @@ use std::cell::{Ref, RefMut};
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 
-pub trait TxIAPI<'tx> {
+pub(crate) trait TxIAPI<'tx> {
   type BucketType: BucketIRef<'tx>;
 }
 
@@ -20,6 +20,10 @@ pub(crate) struct TxImpl {}
 
 impl TxImpl {
   pub fn page<'tx, T: TxIRef<'tx>>(cell: T, id: PgId) -> RefPage<'tx> {
+    todo!()
+  }
+
+  pub(crate) fn bump<'tx, T: TxIRef<'tx>>(cell: T) -> &'tx Bump {
     todo!()
   }
 }

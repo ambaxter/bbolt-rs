@@ -1,11 +1,12 @@
 use crate::bucket::{Bucket, BucketAPI, BucketIAPI, BucketIRef, BucketImpl, BucketMut, BucketR};
-use crate::common::errors::ERR_INCOMPATIBLE_VALUE;
+use crate::common::errors::INCOMPATIBLE_VALUE;
 use crate::common::memory::SCell;
 use crate::common::page::{CoerciblePage, RefPage, BUCKET_LEAF_FLAG};
 use crate::common::tree::{MappedBranchPage, MappedLeafPage, TreePage};
 use crate::common::{BVec, IRef, PgId};
 use crate::node::{NodeImpl, NodeMut};
 use crate::tx::{Tx, TxAPI, TxMut};
+use bumpalo::Bump;
 use either::Either;
 use std::io;
 use std::marker::PhantomData;
@@ -110,6 +111,15 @@ impl<'tx> ElemRef<'tx> {
 pub struct ICursor<'tx, B: BucketIRef<'tx>> {
   bucket: B,
   stack: BVec<'tx, ElemRef<'tx>>,
+}
+
+impl<'tx, B: BucketIRef<'tx>> ICursor<'tx, B> {
+  pub(crate) fn new(cell: B, bump: &'tx Bump) -> Self {
+    ICursor {
+      bucket: cell,
+      stack: BVec::new_in(bump),
+    }
+  }
 }
 
 impl<'tx, B: BucketIRef<'tx>> CursorIAPI<'tx> for ICursor<'tx, B> {
@@ -490,9 +500,9 @@ impl<'tx> CursorMutIAPI<'tx> for CursorMut<'tx> {
   fn api_delete(&mut self, key: &[u8]) -> io::Result<()> {
     let (k, _, flags) = self.key_value().unwrap();
     if flags & BUCKET_LEAF_FLAG != 0 {
-      return Err(ERR_INCOMPATIBLE_VALUE());
+      return Err(INCOMPATIBLE_VALUE());
     }
-    NodeImpl::del(self.node());
+    NodeImpl::del(self.node(), key);
 
     Ok(())
   }

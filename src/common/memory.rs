@@ -3,11 +3,11 @@ use bytemuck::Pod;
 use std::borrow::Borrow;
 use std::cell::RefCell;
 use std::cmp::Ordering;
-use std::fmt;
 use std::fmt::Formatter;
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::slice::{from_raw_parts, from_raw_parts_mut};
+use std::{fmt, mem};
 
 pub struct SCell<'a, T: ?Sized>(&'a RefCell<T>);
 
@@ -166,5 +166,23 @@ impl<'tx, T: Pod> Deref for RWSlice<'tx, T> {
 impl<'tx, T: Pod> DerefMut for RWSlice<'tx, T> {
   fn deref_mut(&mut self) -> &'tx mut Self::Target {
     unsafe { from_raw_parts_mut(self.ptr, self.size as usize) }
+  }
+}
+
+pub(crate) trait IsAligned: Copy {
+  fn is_aligned_to<U>(self) -> bool;
+}
+
+impl IsAligned for *const u8 {
+  #[inline(always)]
+  fn is_aligned_to<U>(self) -> bool {
+    (self as usize & (mem::align_of::<U>() - 1)) == 0
+  }
+}
+
+impl IsAligned for *mut u8 {
+  #[inline(always)]
+  fn is_aligned_to<U>(self) -> bool {
+    (self as usize & (mem::align_of::<U>() - 1)) == 0
   }
 }

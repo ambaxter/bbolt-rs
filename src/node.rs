@@ -10,8 +10,17 @@ use std::mem;
 
 pub(crate) struct NodeImpl {}
 
+impl NodeImpl {}
+
 impl NodeImpl {
-  pub(crate) fn del(n: NodeMut) {
+  pub(crate) fn del(n: NodeMut, key: &[u8]) {
+    todo!()
+  }
+
+  pub(crate) fn put<'tx>(
+    cell: NodeMut, old_key: &'tx [u8], new_key: &'tx [u8], value: &'tx mut [u8], pg_id: PgId,
+    flags: u32,
+  ) {
     todo!()
   }
 

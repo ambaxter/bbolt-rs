@@ -1,6 +1,9 @@
 use crate::common::PgId;
 use bytemuck::{Pod, Zeroable};
 use getset::{CopyGetters, Setters};
+use std::mem;
+
+pub(crate) const IN_BUCKET_SIZE: usize = mem::size_of::<InBucket>();
 
 #[repr(C)]
 #[derive(Debug, Default, Copy, Clone, CopyGetters, Setters, Zeroable, Pod)]
