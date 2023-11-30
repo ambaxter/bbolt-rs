@@ -21,7 +21,8 @@ use std::ptr::slice_from_raw_parts_mut;
 use std::{io, mem};
 
 const DEFAULT_FILL_PERCENT: f64 = 0.5;
-
+const MAX_KEY_SIZE: u32 = 32768;
+const MAX_VALUE_SIZE: u32 = (1 << 31) - 2;
 const INLINE_PAGE_ALIGNMENT: usize = mem::align_of::<InlinePage>();
 const INLINE_PAGE_SIZE: usize = mem::size_of::<InlinePage>();
 
@@ -226,10 +227,130 @@ impl BucketImpl {
     Ok(())
   }
 
-  fn for_each_bucket<'tx, B: BucketIRef<'tx>, F: Fn(&[u8]) -> io::Result<()>>(
-    cell: B, func: F,
+  fn api_get<'tx, B: BucketIRef<'tx>>(cell: B, key: &[u8]) -> Option<&'tx [u8]> {
+    let tx = cell.borrow_iref().0.tx;
+    let bump = TxImpl::bump(tx);
+    let (k, v, flags) = BucketImpl::i_cursor(cell, bump).i_seek(key).unwrap();
+    if (flags & BUCKET_LEAF_FLAG) != 0 {
+      return None;
+    }
+    if key != k {
+      return None;
+    }
+    Some(v)
+  }
+
+  fn api_put<'tx>(cell: BucketMut<'tx>, key: &[u8], value: &[u8]) -> io::Result<()> {
+    if key.is_empty() {
+      todo!()
+    } else if key.len() > MAX_KEY_SIZE as usize {
+      todo!()
+    } else if value.len() > MAX_VALUE_SIZE as usize {
+      todo!()
+    }
+    let tx = cell.borrow_iref().0.tx;
+    let bump = TxImpl::bump(tx);
+    let mut c = BucketImpl::i_cursor(cell, bump);
+    let (k, _, flags) = c.i_seek(key).unwrap();
+
+    if (flags & BUCKET_LEAF_FLAG) != 0 || key != k {
+      return Err(INCOMPATIBLE_VALUE());
+    }
+
+    let key = &*bump.alloc_slice_clone(key);
+    NodeImpl::put(c.node(), key, key, value, ZERO_PGID, 0);
+    Ok(())
+  }
+
+  fn api_delete<'tx>(cell: BucketMut<'tx>, key: &[u8]) -> io::Result<()> {
+    let tx = cell.borrow_iref().0.tx;
+    let bump = TxImpl::bump(tx);
+    let mut c = BucketImpl::i_cursor(cell, bump);
+    let (k, _, flags) = c.i_seek(key).unwrap();
+
+    if key != k {
+      return Ok(());
+    }
+
+    if flags & BUCKET_LEAF_FLAG != 0 {
+      return Err(INCOMPATIBLE_VALUE());
+    }
+
+    NodeImpl::del(c.node(), key);
+
+    Ok(())
+  }
+
+  fn api_sequence<'tx, B: BucketIRef<'tx>>(cell: B) -> u64 {
+    cell.borrow_iref().0.bucket_header.sequence()
+  }
+
+  fn api_set_sequence<'tx>(cell: BucketMut<'tx>, v: u64) -> io::Result<()> {
+    let materialize_root = if let (r, Some(w)) = cell.borrow_iref() {
+      if w.root_node.is_none() {
+        Some(r.bucket_header.root())
+      } else {
+        None
+      }
+    } else {
+      None
+    };
+    // TODO: Since this is repeated a bunch, let materialize root in a single function
+    if let Some(root) = materialize_root {
+      BucketImpl::node(cell, root, None);
+    }
+
+    cell.borrow_mut_iref().0.bucket_header.set_sequence(v);
+    Ok(())
+  }
+
+  fn api_next_sequence<'tx>(cell: BucketMut<'tx>) -> io::Result<u64> {
+    let materialize_root = if let (r, Some(w)) = cell.borrow_iref() {
+      if w.root_node.is_none() {
+        Some(r.bucket_header.root())
+      } else {
+        None
+      }
+    } else {
+      None
+    };
+    // TODO: Since this is repeated a bunch, let materialize root in a single function
+    if let Some(root) = materialize_root {
+      BucketImpl::node(cell, root, None);
+    }
+    let mut r = cell.borrow_mut_iref().0;
+    r.bucket_header.inc_sequence();
+    Ok(r.bucket_header.sequence())
+  }
+
+  fn for_each<'tx, B: BucketIRef<'tx>, F: Fn(&[u8]) -> io::Result<()>>(
+    cell: B, f: F,
   ) -> io::Result<()> {
-    todo!()
+    let tx = cell.borrow_iref().0.tx;
+    let bump = TxImpl::bump(tx);
+    let mut c = BucketImpl::i_cursor(cell, bump);
+    let mut inode = c.i_first();
+    while let Some((k, _, flags)) = inode {
+      f(k)?;
+      inode = c.i_next();
+    }
+    Ok(())
+  }
+
+  fn for_each_bucket<'tx, B: BucketIRef<'tx>, F: Fn(&[u8]) -> io::Result<()>>(
+    cell: B, f: F,
+  ) -> io::Result<()> {
+    let tx = cell.borrow_iref().0.tx;
+    let bump = TxImpl::bump(tx);
+    let mut c = BucketImpl::i_cursor(cell, bump);
+    let mut inode = c.i_first();
+    while let Some((k, _, flags)) = inode {
+      if flags & BUCKET_LEAF_FLAG != 0 {
+        f(k)?;
+      }
+      inode = c.i_next();
+    }
+    Ok(())
   }
 
   pub(crate) fn node<'tx>(

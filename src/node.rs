@@ -18,7 +18,7 @@ impl NodeImpl {
   }
 
   pub(crate) fn put<'tx>(
-    cell: NodeMut, old_key: &'tx [u8], new_key: &'tx [u8], value: &'tx mut [u8], pg_id: PgId,
+    cell: NodeMut, old_key: &'tx [u8], new_key: &'tx [u8], value: &'tx [u8], pg_id: PgId,
     flags: u32,
   ) {
     todo!()
