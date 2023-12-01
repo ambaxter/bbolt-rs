@@ -13,7 +13,7 @@ use std::cell::{Ref, RefMut};
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 
-pub(crate) trait TxIAPI<'tx>: 'tx {
+pub(crate) trait TxIAPI<'tx>: Copy + Clone + 'tx {
   type BucketType: BucketIRef<'tx>;
 
   fn bump(&self) -> &'tx Bump;
@@ -49,7 +49,7 @@ impl TxImpl {
   }
 }
 
-pub trait TxAPI<'tx>: Copy + Clone {
+pub trait TxAPI<'tx>: Copy + Clone + 'tx {
   fn writeable(&self) -> bool;
 }
 

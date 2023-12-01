@@ -5,14 +5,17 @@
 )]
 
 mod arch;
-pub mod bucket;
-pub mod common;
-pub mod cursor;
-pub mod db;
+mod bucket;
+mod common;
+mod cursor;
+mod db;
 mod freelist;
-pub mod node;
+mod node;
 #[cfg(test)]
 mod test_support;
-pub mod tx;
+mod tx;
 
 pub use common::errors::{Error, Result};
+pub use tx::{TxAPI, TxMutAPI};
+pub use bucket::{BucketAPI, BucketMutAPI};
+pub use cursor::{CursorAPI, CursorMutAPI};

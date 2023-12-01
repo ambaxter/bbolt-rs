@@ -37,7 +37,7 @@ struct InlinePage {
 
 pub struct BucketStats {}
 
-pub(crate) trait BucketIAPI<'tx>: 'tx {
+pub(crate) trait BucketIAPI<'tx>: Copy + Clone + 'tx {
   type TxType: TxIRef<'tx>;
   type BucketType: BucketIRef<'tx>;
 
@@ -539,7 +539,7 @@ impl BucketImpl {
   }
 }
 
-pub trait BucketAPI<'tx>: BucketIAPI<'tx> {
+pub trait BucketAPI<'tx>: Copy + Clone + 'tx  {
   fn root(&self) -> PgId;
 
   fn writeable(&self) -> bool;
