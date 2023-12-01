@@ -1,8 +1,11 @@
 use crate::bucket::{Bucket, BucketIAPI, BucketIRef, BucketMut};
+use crate::common::defaults::DEFAULT_PAGE_SIZE;
 use crate::common::memory::SCell;
+use crate::common::meta::Meta;
 use crate::common::page::RefPage;
 use crate::common::selfowned::SelfOwned;
 use crate::common::{IRef, PgId};
+use crate::freelist::Freelist;
 use crate::node::NodeMut;
 use bumpalo::Bump;
 use std::cell;
@@ -10,22 +13,32 @@ use std::cell::{Ref, RefMut};
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 
-pub(crate) trait TxIAPI<'tx> {
+pub(crate) trait TxIAPI<'tx>: 'tx {
   type BucketType: BucketIRef<'tx>;
 
   fn bump(&self) -> &'tx Bump;
+
+  fn page_size(&self) -> usize;
+
+  fn meta(&self) -> &Meta;
+
+  fn page(&self, id: PgId) -> RefPage<'tx> {
+    todo!()
+  }
 }
 
 pub trait TxIRef<'tx>: TxIAPI<'tx> + IRef<TxR<'tx>, TxW<'tx>> {}
+
+pub trait TxMutIAPI<'tx> {
+  fn freelist(&self) -> RefMut<Freelist<'tx>>;
+}
+
+pub trait TxMutIRef<'tx>: TxIRef<'tx> + TxMutIAPI<'tx> {}
 
 pub(crate) struct TxImpl {}
 
 impl TxImpl {
   pub fn page<'tx, T: TxIRef<'tx>>(cell: &T, id: PgId) -> RefPage<'tx> {
-    todo!()
-  }
-
-  pub(crate) fn bump<'tx, T: TxIRef<'tx>>(cell: T) -> &'tx Bump {
     todo!()
   }
 
@@ -38,8 +51,6 @@ impl TxImpl {
 
 pub trait TxAPI<'tx>: Copy + Clone {
   fn writeable(&self) -> bool;
-
-  fn page(&self, id: PgId) -> RefPage<'tx>;
 }
 
 pub trait TxMutAPI<'tx>: TxAPI<'tx> {}
@@ -76,7 +87,17 @@ impl<'tx> IRef<TxR<'tx>, TxW<'tx>> for Tx<'tx> {
 impl<'tx> TxIAPI<'tx> for Tx<'tx> {
   type BucketType = Bucket<'tx>;
 
+  #[inline(always)]
   fn bump(&self) -> &'tx Bump {
+    todo!()
+  }
+
+  #[inline(always)]
+  fn page_size(&self) -> usize {
+    DEFAULT_PAGE_SIZE.bytes() as usize
+  }
+
+  fn meta(&self) -> &Meta {
     todo!()
   }
 }
@@ -86,10 +107,6 @@ impl<'tx> TxIRef<'tx> for Tx<'tx> {}
 impl<'tx> TxAPI<'tx> for Tx<'tx> {
   fn writeable(&self) -> bool {
     false
-  }
-
-  fn page(&self, id: PgId) -> RefPage<'tx> {
-    todo!()
   }
 }
 
@@ -113,7 +130,17 @@ impl<'tx> IRef<TxR<'tx>, TxW<'tx>> for TxMut<'tx> {
 impl<'tx> TxIAPI<'tx> for TxMut<'tx> {
   type BucketType = BucketMut<'tx>;
 
+  #[inline(always)]
   fn bump(&self) -> &'tx Bump {
+    todo!()
+  }
+
+  #[inline(always)]
+  fn page_size(&self) -> usize {
+    DEFAULT_PAGE_SIZE.bytes() as usize
+  }
+
+  fn meta(&self) -> &Meta {
     todo!()
   }
 }
@@ -124,10 +151,14 @@ impl<'tx> TxAPI<'tx> for TxMut<'tx> {
   fn writeable(&self) -> bool {
     true
   }
+}
 
-  fn page(&self, id: PgId) -> RefPage<'tx> {
+impl<'tx> TxMutIAPI<'tx> for TxMut<'tx> {
+  fn freelist(&self) -> RefMut<Freelist<'tx>> {
     todo!()
   }
 }
+
+impl<'tx> TxMutIRef<'tx> for TxMut<'tx> {}
 
 impl<'tx> TxMutAPI<'tx> for TxMut<'tx> {}

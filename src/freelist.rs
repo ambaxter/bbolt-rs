@@ -59,7 +59,7 @@ impl CoerciblePage for MappedFreeListPage {
 }
 
 impl MappedFreeListPage {
-  fn page_count(&self) -> (u32, u32) {
+  pub(crate) fn page_count(&self) -> (u32, u32) {
     let mut idx = 0;
     let count = {
       if self.count == u16::MAX {
@@ -81,7 +81,7 @@ impl MappedFreeListPage {
     (idx, count)
   }
 
-  pub fn page_ids(&self) -> &[PgId] {
+  pub(crate) fn page_ids(&self) -> &[PgId] {
     let (idx, count) = self.page_count();
     let page_ptr = self.bytes;
     unsafe {
@@ -93,7 +93,7 @@ impl MappedFreeListPage {
     }
   }
 
-  pub fn page_ids_mut(&mut self, count: u64) -> &mut [PgId] {
+  pub(crate) fn page_ids_mut(&mut self, count: u64) -> &mut [PgId] {
     let page_ptr = self.bytes;
     let data_ptr = unsafe { page_ptr.add(PAGE_HEADER_SIZE) };
     assert_eq!(
@@ -136,7 +136,7 @@ pub struct TxPending<'tx> {
 }
 
 impl<'tx> TxPending<'tx> {
-  fn new_in(bump: &'tx Bump) -> TxPending<'tx> {
+  pub(crate) fn new_in(bump: &'tx Bump) -> TxPending<'tx> {
     TxPending {
       ids: BVec::new_in(bump),
       alloc_tx: BVec::new_in(bump),
@@ -145,14 +145,14 @@ impl<'tx> TxPending<'tx> {
   }
 }
 
-fn merge_pids(dst: &mut [PgId], a: &[PgId], b: &[PgId]) {
+pub(crate) fn merge_pids(dst: &mut [PgId], a: &[PgId], b: &[PgId]) {
   for (i, &id) in [a, b].into_iter().kmerge().enumerate() {
     dst[i] = id;
   }
 }
 
 impl<'tx> Freelist<'tx> {
-  pub fn new_in(bump: &'tx Bump) -> Self {
+  pub(crate) fn new_in(bump: &'tx Bump) -> Self {
     Freelist {
       ids: BVec::new_in(bump),
       allocs: HashMap::new_in(bump),
@@ -165,22 +165,22 @@ impl<'tx> Freelist<'tx> {
   }
 
   /// returns count of free pages
-  fn free_count(&self) -> u64 {
+  pub(crate) fn free_count(&self) -> u64 {
     self.forward_map.values().sum()
   }
 
   /// pending_count returns count of pending pages
-  fn pending_count(&self) -> u64 {
+  pub(crate) fn pending_count(&self) -> u64 {
     self.pending.values().map(|txp| txp.ids.len() as u64).sum()
   }
 
   /// count returns count of pages on the freelist
-  fn count(&self) -> u64 {
+  pub(crate) fn count(&self) -> u64 {
     self.free_count() + self.pending_count()
   }
 
   /// returns the sorted free page ids
-  fn free_page_ids(&self) -> Vec<PgId> {
+  pub(crate) fn free_page_ids(&self) -> Vec<PgId> {
     let count = self.free_count();
     let mut m = Vec::with_capacity(count as usize);
     if count > 0 {
@@ -195,7 +195,7 @@ impl<'tx> Freelist<'tx> {
   }
 
   /// copy_all copies a list of all free ids and all pending ids in one sorted list.
-  fn copy_all(&self, dst: &mut [PgId]) {
+  pub(crate) fn copy_all(&self, dst: &mut [PgId]) {
     let mut pending_ids = Vec::with_capacity(self.pending_count() as usize);
     self
       .pending
@@ -207,7 +207,7 @@ impl<'tx> Freelist<'tx> {
     merge_pids(dst, &free_page_ids, &pending_ids);
   }
 
-  fn del_span(&mut self, start: PgId, size: u64) {
+  pub(crate) fn del_span(&mut self, start: PgId, size: u64) {
     self.forward_map.remove(&start);
     self.backward_map.remove(&(start + (size - 1)));
     let rm_free_entry = {
@@ -223,7 +223,7 @@ impl<'tx> Freelist<'tx> {
     }
   }
 
-  fn add_span(&mut self, start: PgId, size: u64) {
+  pub(crate) fn add_span(&mut self, start: PgId, size: u64) {
     self.backward_map.insert(start - 1 + size, size);
     self.forward_map.insert(start, size);
     self
@@ -233,7 +233,7 @@ impl<'tx> Freelist<'tx> {
       .insert(start);
   }
 
-  fn allocate(&mut self, txid: TxId, n: u64) -> Option<PgId> {
+  pub(crate) fn allocate(&mut self, txid: TxId, n: u64) -> Option<PgId> {
     if n == 0 {
       return None;
     }
@@ -275,7 +275,7 @@ impl<'tx> Freelist<'tx> {
 
   /// free releases a page and its overflow for a given transaction id.
   /// If the page is already free then a panic will occur.
-  fn free(&mut self, txid: TxId, p: &Page) {
+  pub(crate) fn free(&mut self, txid: TxId, p: &Page) {
     assert!(u64::from(p.id) > 1, "Cannot free page 0 or 1: {}", p.id);
 
     // Free page and all its overflow pages.
@@ -308,7 +308,7 @@ impl<'tx> Freelist<'tx> {
   }
 
   /// merges pid to the existing free spans, try to merge it backward and forward
-  fn merge_with_existing_span(&mut self, pid: PgId) {
+  pub(crate) fn merge_with_existing_span(&mut self, pid: PgId) {
     let prev = pid - 1;
     let next = pid + 1;
 
@@ -331,14 +331,14 @@ impl<'tx> Freelist<'tx> {
   }
 
   /// try to merge list of pages(represented by pgids) with existing spans
-  fn merge_spans(&mut self, pgids: Vec<PgId>) {
+  pub(crate) fn merge_spans(&mut self, pgids: Vec<PgId>) {
     for pgid in pgids {
       self.merge_with_existing_span(pgid);
     }
   }
 
   /// release moves all page ids for a transaction id (or older) to the freelist.
-  pub fn release(&mut self, txid: TxId) {
+  pub(crate) fn release(&mut self, txid: TxId) {
     let mut m = Vec::with_capacity(0);
     self.pending.retain(|&tid, txp| {
       if tid <= txid {
@@ -352,7 +352,7 @@ impl<'tx> Freelist<'tx> {
   }
 
   /// releaseRange moves pending pages allocated within an extent [begin,end] to the free list.
-  fn release_range(&mut self, begin: TxId, end: TxId) {
+  pub(crate) fn release_range(&mut self, begin: TxId, end: TxId) {
     if begin > end {
       return;
     }
@@ -384,7 +384,7 @@ impl<'tx> Freelist<'tx> {
   }
 
   /// rollback removes the pages from a given pending tx.
-  fn rollback(&mut self, txid: TxId) {
+  pub(crate) fn rollback(&mut self, txid: TxId) {
     // Remove page ids from cache.
     if let Some(txp) = self.pending.remove(&txid) {
       let mut m = Vec::new();
@@ -406,11 +406,11 @@ impl<'tx> Freelist<'tx> {
   }
 
   /// freed returns whether a given page is in the free list.
-  fn freed(&self, pgid: PgId) -> bool {
+  pub(crate) fn freed(&self, pgid: PgId) -> bool {
     self.cache.contains(&pgid)
   }
 
-  fn reindex(&mut self) {
+  pub(crate) fn reindex(&mut self) {
     let ids = self.free_page_ids();
     let pending_count: usize = self
       .pending
@@ -430,7 +430,7 @@ impl<'tx> Freelist<'tx> {
   }
 
   /// read initializes the freelist from a freelist page.
-  fn read(&mut self, page: &MappedFreeListPage) {
+  pub(crate) fn read(&mut self, page: &MappedFreeListPage) {
     // Copy the list of page ids from the freelist.
     self.ids.clear();
     let data = page.page_ids();
@@ -440,7 +440,7 @@ impl<'tx> Freelist<'tx> {
   /// write writes the page ids onto a freelist page. All free and pending ids are
   /// saved to disk since in the event of a program crash, all pending ids will
   /// become free.
-  fn write(&self, page: &mut MappedFreeListPage) {
+  pub(crate) fn write(&self, page: &mut MappedFreeListPage) {
     // Combine the old free pgids and pgids waiting on an open transaction.
     let data = page.page_ids_mut(self.count());
     if data.len() > 0 {
@@ -448,12 +448,12 @@ impl<'tx> Freelist<'tx> {
     }
   }
 
-  pub fn read_ids(&mut self, ids: &[PgId]) {
+  pub(crate) fn read_ids(&mut self, ids: &[PgId]) {
     self.init(ids);
     self.reindex();
   }
 
-  fn init(&mut self, ids: &[PgId]) {
+  pub(crate) fn init(&mut self, ids: &[PgId]) {
     if ids.is_empty() {
       return;
     }
@@ -482,7 +482,9 @@ impl<'tx> Freelist<'tx> {
   }
 
   //TODO: reload
-  fn reload(&mut self, header: &Page) {}
+  pub(crate) fn reload(&mut self, header: &Page) {
+    todo!()
+  }
 }
 
 #[cfg(test)]

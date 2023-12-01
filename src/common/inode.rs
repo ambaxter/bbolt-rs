@@ -47,14 +47,15 @@ impl<'tx> INode<'tx> {
   }
 
   pub fn from_leaf_in(elem: LeafElementRef<'tx>) -> INode<'tx> {
+    assert!(!elem.key().is_empty(), "read: zero-length inode key");
     let inode = INode::new_mapped_in(elem.flags(), 0.into(), elem.key(), elem.value());
-    assert!(!inode.key.is_empty(), "read: zero-length inode key");
+
     inode
   }
 
   pub fn from_branch_in(elem: BranchElementRef<'tx>) -> INode<'tx> {
+    assert!(!elem.key().is_empty(), "read: zero-length inode key");
     let inode = INode::new_mapped_in(0, elem.pgid(), elem.key(), &[]);
-    assert!(!inode.key.is_empty(), "read: zero-length inode key");
     inode
   }
 

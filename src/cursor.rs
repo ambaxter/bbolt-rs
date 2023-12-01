@@ -11,7 +11,7 @@ use either::Either;
 use std::io;
 use std::marker::PhantomData;
 
-pub(crate) trait CursorIAPI<'tx>: Clone {
+pub(crate) trait CursorIAPI<'tx>: Clone + 'tx {
   fn api_first(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)>;
   fn i_first(&mut self) -> Option<(&'tx [u8], &'tx [u8], u32)>;
 

@@ -1,12 +1,12 @@
 use crate::common::bucket::{InBucket, IN_BUCKET_SIZE};
 use crate::common::memory::{IsAligned, SCell};
 use crate::common::meta::MetaPage;
-use crate::common::page::{CoerciblePage, Page, RefPage, BUCKET_LEAF_FLAG};
-use crate::common::tree::{MappedBranchPage, TreePage};
+use crate::common::page::{CoerciblePage, Page, RefPage, BUCKET_LEAF_FLAG, PAGE_HEADER_SIZE};
+use crate::common::tree::{MappedBranchPage, TreePage, LEAF_PAGE_ELEMENT_SIZE};
 use crate::common::{BVec, HashMap, IRef, PgId, ZERO_PGID};
 use crate::cursor::{Cursor, CursorAPI, CursorIAPI, CursorMut, CursorMutIAPI, ElemRef, ICursor};
 use crate::node::{NodeImpl, NodeMut, NodeW};
-use crate::tx::{Tx, TxAPI, TxIAPI, TxIRef, TxImpl, TxMut, TxR, TxW};
+use crate::tx::{Tx, TxAPI, TxIAPI, TxIRef, TxImpl, TxMut, TxMutIAPI, TxR, TxW};
 use crate::Error;
 use crate::Error::{
   BucketExists, BucketNameRequired, BucketNotFound, IncompatibleValue, KeyRequired, KeyTooLarge,
@@ -37,7 +37,7 @@ struct InlinePage {
 
 pub struct BucketStats {}
 
-pub(crate) trait BucketIAPI<'tx> {
+pub(crate) trait BucketIAPI<'tx>: 'tx {
   type TxType: TxIRef<'tx>;
   type BucketType: BucketIRef<'tx>;
 
@@ -48,22 +48,18 @@ pub(crate) trait BucketIAPI<'tx> {
   fn is_writeable(&self) -> bool;
 
   fn tx(&self) -> &'tx Self::TxType;
+
+  fn max_inline_bucket_size(&self) -> usize {
+    self.tx().page_size() / 4
+  }
 }
 
 pub trait BucketIRef<'tx>:
-  BucketIAPI<'tx> + IRef<BucketR<'tx>, BucketP<'tx, Self::BucketType>> + 'tx
+  BucketIAPI<'tx> + IRef<BucketR<'tx>, BucketP<'tx, Self::BucketType>>
 {
 }
 
 pub(crate) struct BucketImpl {}
-
-impl BucketImpl {}
-
-impl BucketImpl {
-  fn free(cell: BucketMut) {
-    todo!()
-  }
-}
 
 impl BucketImpl {
   pub(crate) fn api_tx<'tx, B: BucketIRef<'tx>>(cell: B) -> &'tx B::TxType {
@@ -448,13 +444,98 @@ impl BucketImpl {
       v
     };
 
+    for (name, child) in v.into_iter() {}
+
     Ok(())
+  }
+
+  /// inlineable returns true if a bucket is small enough to be written inline
+  /// and if it contains no subbuckets. Otherwise returns false.
+  pub(crate) fn inlineable<'tx>(cell: BucketMut<'tx>) -> bool {
+    let b = cell.borrow_iref();
+    let w = b.1.unwrap();
+
+    // Bucket must only contain a single leaf node.
+    let n = match w.root_node {
+      None => return false,
+      Some(n) => n,
+    };
+    let node_ref = n.cell.borrow();
+    if node_ref.is_leaf {
+      return false;
+    }
+
+    // Bucket is not inlineable if it contains subbuckets or if it goes beyond
+    // our threshold for inline bucket size.
+    let mut size = PAGE_HEADER_SIZE;
+    for inode in &node_ref.inodes {
+      size += LEAF_PAGE_ELEMENT_SIZE + inode.key().len() + inode.value().len();
+
+      if inode.flags() & BUCKET_LEAF_FLAG != 0 {
+        return false;
+      } else if size > cell.max_inline_bucket_size() {
+        return false;
+      }
+    }
+
+    true
+  }
+
+  pub(crate) fn free<'tx>(cell: BucketMut<'tx>) {
+    if cell.borrow_iref().0.bucket_header.root() == ZERO_PGID {
+      return;
+    }
+
+    let txid = cell.tx.meta().txid();
+
+    BucketImpl::for_each_page_node(cell, |pn, depth| match pn {
+      Either::Left(page) => cell.tx().freelist().free(txid, page),
+      Either::Right(node) => NodeImpl::free(*node),
+    });
+  }
+
+  pub(crate) fn own_in<'tx>(cell: BucketMut<'tx>) {
+    let bump = cell.tx().bump();
+    let (root, children) = {
+      let (r, w) = cell.borrow_iref();
+      let wb = w.unwrap();
+      let mut children: BVec<BucketMut<'tx>> = BVec::with_capacity_in(wb.buckets.len(), bump);
+      children.extend(wb.buckets.values());
+      (wb.root_node, children)
+    };
+
+    if let Some(node) = root {
+      NodeImpl::own_in(NodeImpl::root(node), bump)
+    }
+
+    for child in children.into_iter() {
+      BucketImpl::own_in(child)
+    }
   }
 
   pub(crate) fn node<'tx>(
     cell: BucketMut<'tx>, pgid: PgId, parent: Option<NodeMut<'tx>>,
   ) -> NodeMut<'tx> {
-    todo!()
+    let inline_page = {
+      let (r, w) = cell.borrow_mut_iref();
+      let wb = w.unwrap();
+
+      if let Some(n) = wb.nodes.get(&pgid) {
+        return *n;
+      }
+      r.inline_page
+    };
+
+    let page = match inline_page {
+      None => cell.tx().page(pgid),
+      Some(page) => page,
+    };
+
+    let n = NodeMut::read_in(cell, parent, &page);
+    let (r, w) = cell.borrow_mut_iref();
+    let mut wb = w.unwrap();
+    wb.nodes.insert(pgid, n);
+    n
   }
 }
 
