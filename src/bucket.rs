@@ -559,10 +559,13 @@ pub trait BucketAPI<'tx>: Copy + Clone + 'tx  {
   fn status(&self) -> BucketStats;
 }
 
-pub trait BucketMutAPI<'tx>: BucketAPI<'tx> + Sized {
-  fn create_bucket(&mut self, key: &[u8]) -> crate::Result<Self>;
+pub trait BucketMutAPI<'tx>: BucketAPI<'tx> {
 
-  fn create_bucket_if_not_exists(&mut self, key: &[u8]) -> crate::Result<Self>;
+  type BucketType: BucketMutAPI<'tx>;
+
+  fn create_bucket(&mut self, key: &[u8]) -> crate::Result<Self::BucketType>;
+
+  fn create_bucket_if_not_exists(&mut self, key: &[u8]) -> crate::Result<Self::BucketType>;
 
   fn cursor_mut(&self) -> CursorMut<'tx>;
 
@@ -811,6 +814,8 @@ impl<'tx> BucketAPI<'tx> for BucketMut<'tx> {
   }
 }
 impl<'tx> BucketMutAPI<'tx> for BucketMut<'tx> {
+  type BucketType = Self;
+
   fn create_bucket(&mut self, key: &[u8]) -> crate::Result<Self> {
     todo!()
   }
