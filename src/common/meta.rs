@@ -2,6 +2,7 @@ use crate::common::bucket::InBucket;
 use crate::common::defaults::{MAGIC, PGID_NO_FREE_LIST, VERSION};
 use crate::common::page::{CoerciblePage, Page, META_PAGE_FLAG};
 use crate::common::{errors, PgId, TxId};
+use crate::Error::{ChecksumMismatch, InvalidDatabase, VersionMismatch};
 use bytemuck::{Pod, Zeroable};
 use fnv_rs::{Fnv64, FnvHasher};
 use getset::{CopyGetters, Setters};
@@ -28,13 +29,13 @@ pub struct Meta {
 }
 
 impl Meta {
-  pub fn validate(&self) -> Result<(), io::Error> {
+  pub fn validate(&self) -> Result<(), crate::Error> {
     if self.magic != MAGIC {
-      return Err(errors::INVALID());
+      return Err(InvalidDatabase);
     } else if self.version != VERSION {
-      return Err(errors::VERSION_MISMATCH());
+      return Err(VersionMismatch);
     } else if self.checksum != self.sum64() {
-      return Err(errors::CHECKSUM());
+      return Err(ChecksumMismatch);
     }
     Ok(())
   }

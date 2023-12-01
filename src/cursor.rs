@@ -1,11 +1,11 @@
 use crate::bucket::{Bucket, BucketAPI, BucketIAPI, BucketIRef, BucketImpl, BucketMut, BucketR};
-use crate::common::errors::INCOMPATIBLE_VALUE;
 use crate::common::memory::SCell;
 use crate::common::page::{CoerciblePage, RefPage, BUCKET_LEAF_FLAG};
 use crate::common::tree::{MappedBranchPage, MappedLeafPage, TreePage};
 use crate::common::{BVec, IRef, PgId};
 use crate::node::{NodeImpl, NodeMut};
 use crate::tx::{Tx, TxAPI, TxMut};
+use crate::Error::IncompatibleValue;
 use bumpalo::Bump;
 use either::Either;
 use std::io;
@@ -47,7 +47,7 @@ pub(crate) trait CursorIAPI<'tx>: Clone {
 pub(crate) trait CursorMutIAPI<'tx>: CursorIAPI<'tx> {
   fn node(&mut self) -> NodeMut<'tx>;
 
-  fn api_delete(&mut self, key: &[u8]) -> io::Result<()>;
+  fn api_delete(&mut self, key: &[u8]) -> crate::Result<()>;
 }
 
 pub trait CursorAPI<'tx>: CursorIAPI<'tx> {
@@ -80,7 +80,7 @@ pub trait CursorAPI<'tx>: CursorIAPI<'tx> {
 }
 
 pub trait CursorMutAPI<'tx>: CursorAPI<'tx> + CursorMutIAPI<'tx> {
-  fn delete(&mut self, key: &[u8]) -> io::Result<()> {
+  fn delete(&mut self, key: &[u8]) -> crate::Result<()> {
     self.api_delete(key)
   }
 }
@@ -497,10 +497,10 @@ impl<'tx> CursorMutIAPI<'tx> for CursorMut<'tx> {
     n
   }
 
-  fn api_delete(&mut self, key: &[u8]) -> io::Result<()> {
+  fn api_delete(&mut self, key: &[u8]) -> crate::Result<()> {
     let (k, _, flags) = self.key_value().unwrap();
     if flags & BUCKET_LEAF_FLAG != 0 {
-      return Err(INCOMPATIBLE_VALUE());
+      return Err(IncompatibleValue);
     }
     NodeImpl::del(self.node(), key);
 

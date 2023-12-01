@@ -14,3 +14,5 @@ pub mod node;
 #[cfg(test)]
 mod test_support;
 pub mod tx;
+
+pub use common::errors::{Error, Result};

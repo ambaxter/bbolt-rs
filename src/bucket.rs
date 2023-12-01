@@ -1,24 +1,26 @@
 use crate::common::bucket::{InBucket, IN_BUCKET_SIZE};
-use crate::common::errors::{
-  BUCKET_EXISTS, BUCKET_NAME_REQUIRED, BUCKET_NOT_FOUND, INCOMPATIBLE_VALUE,
-};
 use crate::common::memory::{IsAligned, SCell};
 use crate::common::meta::MetaPage;
-use crate::common::page::{Page, RefPage, BUCKET_LEAF_FLAG};
+use crate::common::page::{CoerciblePage, Page, RefPage, BUCKET_LEAF_FLAG};
+use crate::common::tree::{MappedBranchPage, TreePage};
 use crate::common::{BVec, HashMap, IRef, PgId, ZERO_PGID};
 use crate::cursor::{Cursor, CursorAPI, CursorIAPI, CursorMut, CursorMutIAPI, ElemRef, ICursor};
 use crate::node::{NodeImpl, NodeMut, NodeW};
-use crate::tx::{Tx, TxAPI, TxIRef, TxImpl, TxMut, TxR, TxW};
+use crate::tx::{Tx, TxAPI, TxIAPI, TxIRef, TxImpl, TxMut, TxR, TxW};
+use crate::Error;
+use crate::Error::{
+  BucketExists, BucketNameRequired, BucketNotFound, IncompatibleValue, KeyRequired, KeyTooLarge,
+  ValueTooLarge,
+};
 use bumpalo::Bump;
 use bytemuck::{Pod, Zeroable};
 use either::Either;
 use std::alloc::Layout;
 use std::cell::{Ref, RefCell, RefMut};
-use std::error::Error;
 use std::marker::PhantomData;
+use std::mem;
 use std::ops::{Deref, DerefMut};
 use std::ptr::slice_from_raw_parts_mut;
-use std::{io, mem};
 
 const DEFAULT_FILL_PERCENT: f64 = 0.5;
 const MAX_KEY_SIZE: u32 = 32768;
@@ -40,16 +42,22 @@ pub(crate) trait BucketIAPI<'tx> {
   type BucketType: BucketIRef<'tx>;
 
   fn new(
-    bump: &'tx Bump, bucket_header: InBucket, tx: Self::TxType, inline_page: Option<RefPage<'tx>>,
+    bucket_header: InBucket, tx: &'tx Self::TxType, inline_page: Option<RefPage<'tx>>,
   ) -> Self::BucketType;
+
+  fn is_writeable(&self) -> bool;
+
+  fn tx(&self) -> &'tx Self::TxType;
 }
 
 pub trait BucketIRef<'tx>:
-  BucketIAPI<'tx> + IRef<BucketR<'tx, Self::TxType>, BucketP<'tx, Self::BucketType>>
+  BucketIAPI<'tx> + IRef<BucketR<'tx>, BucketP<'tx, Self::BucketType>> + 'tx
 {
 }
 
 pub(crate) struct BucketImpl {}
+
+impl BucketImpl {}
 
 impl BucketImpl {
   fn free(cell: BucketMut) {
@@ -58,40 +66,36 @@ impl BucketImpl {
 }
 
 impl BucketImpl {
-  pub(crate) fn api_tx<'tx, B: BucketIRef<'tx>>(cell: B) -> B::TxType {
-    cell.borrow_iref().0.tx
+  pub(crate) fn api_tx<'tx, B: BucketIRef<'tx>>(cell: B) -> &'tx B::TxType {
+    cell.tx()
   }
 
   pub(crate) fn root<'tx, B: BucketIRef<'tx>>(cell: B) -> PgId {
     cell.borrow_iref().0.bucket_header.root()
   }
 
-  pub(crate) fn i_cursor<'tx, B: BucketIRef<'tx>>(cell: B, bump: &'tx Bump) -> ICursor<'tx, B> {
-    ICursor::new(cell, bump)
+  pub(crate) fn i_cursor<'tx, B: BucketIRef<'tx>>(cell: B) -> ICursor<'tx, B> {
+    ICursor::new(cell, cell.tx().bump())
   }
 
   pub(crate) fn api_bucket<'tx, B: BucketIRef<'tx>>(cell: B, name: &[u8]) -> Option<B::BucketType> {
-    let bump = {
-      let tx = {
-        let b = cell.borrow_iref();
-        if let Some(w) = b.1 {
-          if let Some(child) = w.buckets.get(name) {
-            return Some(*child);
-          }
+    if cell.is_writeable() {
+      let b = cell.borrow_iref();
+      if let Some(w) = b.1 {
+        if let Some(child) = w.buckets.get(name) {
+          return Some(*child);
         }
-        b.0.tx
-      };
-      TxImpl::bump(tx)
-    };
-
-    let mut c = BucketImpl::i_cursor(cell, bump);
+      }
+    }
+    let mut c = BucketImpl::i_cursor(cell);
     let (k, v, flags) = c.i_seek(name)?;
     if !(name == k) || (flags & BUCKET_LEAF_FLAG) == 0 {
       return None;
     }
 
-    let child = BucketImpl::open_bucket(cell, bump, v);
+    let child = BucketImpl::open_bucket(cell, v);
     if let Some(mut w) = cell.borrow_mut_iref().1 {
+      let bump = cell.tx().bump();
       let name = bump.alloc_slice_copy(name);
       w.buckets.insert(name, child);
     }
@@ -100,7 +104,7 @@ impl BucketImpl {
   }
 
   fn open_bucket<'tx, B: BucketIRef<'tx>>(
-    cell: B, bump: &'tx Bump, mut value: &'tx [u8],
+    cell: B, mut value: &'tx [u8],
   ) -> <B as BucketIAPI<'tx>>::BucketType {
     // 3 goals
 
@@ -109,6 +113,7 @@ impl BucketImpl {
     if !IsAligned::is_aligned_to::<InlinePage>(value.as_ptr()) {
       // TODO: Shove this into a centralized function somewhere
       let layout = Layout::from_size_align(value.len(), INLINE_PAGE_ALIGNMENT).unwrap();
+      let bump = cell.tx().bump();
       let new_value = unsafe {
         let mut new_value = bump.alloc_layout(layout);
         let new_value_ptr = new_value.as_mut() as *mut u8;
@@ -132,33 +137,30 @@ impl BucketImpl {
     } else {
       None
     };
-    let tx = cell.borrow_iref().0.tx;
-    B::new(bump, bucket_header, tx, ref_page)
+    B::new(bucket_header, cell.tx(), ref_page)
   }
 
   pub(crate) fn api_create_bucket<'tx>(
     cell: BucketMut<'tx>, key: &[u8],
-  ) -> io::Result<BucketMut<'tx>> {
+  ) -> crate::Result<BucketMut<'tx>> {
     if key.is_empty() {
-      return Err(BUCKET_NAME_REQUIRED());
+      return Err(BucketNameRequired);
     }
-
-    let tx = cell.borrow_iref().0.tx;
-    let bump = TxImpl::bump(tx);
-    let mut c = BucketImpl::i_cursor(cell, bump);
+    let mut c = BucketImpl::i_cursor(cell);
 
     if let Some((k, _, flags)) = c.i_seek(key) {
       if k == key {
         if flags & BUCKET_LEAF_FLAG != 0 {
-          return Err(BUCKET_EXISTS());
+          return Err(BucketExists);
         }
-        return Err(INCOMPATIBLE_VALUE());
+        return Err(IncompatibleValue);
       }
     }
 
     let mut inline_page = InlinePage::default();
     inline_page.page.set_leaf();
     let layout = Layout::from_size_align(INLINE_PAGE_SIZE, INLINE_PAGE_ALIGNMENT).unwrap();
+    let bump = cell.tx.bump();
     let value = unsafe {
       let mut data = bump.alloc_layout(layout);
       &mut *slice_from_raw_parts_mut(data.as_mut() as *mut u8, INLINE_PAGE_SIZE)
@@ -175,15 +177,11 @@ impl BucketImpl {
 
   pub(crate) fn api_create_bucket_if_not_exists<'tx>(
     cell: BucketMut<'tx>, key: &[u8],
-  ) -> io::Result<BucketMut<'tx>> {
+  ) -> crate::Result<BucketMut<'tx>> {
     match BucketImpl::api_create_bucket(cell, key) {
       Ok(child) => Ok(child),
       Err(error) => {
-        let e = error.get_ref().unwrap();
-        // TODO: Rework this logic so we don't have to rely on errors
-        // TODO: Also rework the errors API so we can check this easier
-        // Yes, I know it's deprecated. Sue me
-        if e.description() == "bucket already exists" {
+        if error == BucketExists {
           return Ok(BucketImpl::api_bucket(cell, key).unwrap());
         } else {
           return Err(error);
@@ -192,24 +190,22 @@ impl BucketImpl {
     }
   }
 
-  pub(crate) fn api_delete_bucket<'tx>(cell: BucketMut<'tx>, key: &[u8]) -> io::Result<()> {
-    let tx = cell.borrow_iref().0.tx;
-    let bump = TxImpl::bump(tx);
-    let mut c = BucketImpl::i_cursor(cell, bump);
+  pub(crate) fn api_delete_bucket<'tx>(cell: BucketMut<'tx>, key: &[u8]) -> crate::Result<()> {
+    let mut c = BucketImpl::i_cursor(cell);
 
     let (k, _, flags) = c.i_seek(key).unwrap();
     if key != k {
-      return Err(BUCKET_NOT_FOUND());
+      return Err(BucketNotFound);
     } else if flags & BUCKET_LEAF_FLAG != 0 {
-      return Err(INCOMPATIBLE_VALUE());
+      return Err(IncompatibleValue);
     }
 
     let child = BucketImpl::api_bucket(cell, key).unwrap();
-    BucketImpl::for_each_bucket(child, |k| {
+    BucketImpl::api_for_each_bucket(child, |k| {
       match BucketImpl::api_delete_bucket(cell, k) {
         Ok(_) => Ok(()),
-        // TODO: Ideally we want to chain errors here
-        Err(e) => Err(io::Error::other(format!("delete bucket: {}", e))),
+        // TODO: Ideally we want to properly chain errors here
+        Err(e) => Err(Error::Other(e.into())),
       }
     })?;
 
@@ -228,9 +224,7 @@ impl BucketImpl {
   }
 
   fn api_get<'tx, B: BucketIRef<'tx>>(cell: B, key: &[u8]) -> Option<&'tx [u8]> {
-    let tx = cell.borrow_iref().0.tx;
-    let bump = TxImpl::bump(tx);
-    let (k, v, flags) = BucketImpl::i_cursor(cell, bump).i_seek(key).unwrap();
+    let (k, v, flags) = BucketImpl::i_cursor(cell).i_seek(key).unwrap();
     if (flags & BUCKET_LEAF_FLAG) != 0 {
       return None;
     }
@@ -240,32 +234,28 @@ impl BucketImpl {
     Some(v)
   }
 
-  fn api_put<'tx>(cell: BucketMut<'tx>, key: &[u8], value: &[u8]) -> io::Result<()> {
+  fn api_put<'tx>(cell: BucketMut<'tx>, key: &[u8], value: &[u8]) -> crate::Result<()> {
     if key.is_empty() {
-      todo!()
+      return Err(KeyRequired);
     } else if key.len() > MAX_KEY_SIZE as usize {
-      todo!()
+      return Err(KeyTooLarge);
     } else if value.len() > MAX_VALUE_SIZE as usize {
-      todo!()
+      return Err(ValueTooLarge);
     }
-    let tx = cell.borrow_iref().0.tx;
-    let bump = TxImpl::bump(tx);
-    let mut c = BucketImpl::i_cursor(cell, bump);
+    let mut c = BucketImpl::i_cursor(cell);
     let (k, _, flags) = c.i_seek(key).unwrap();
 
     if (flags & BUCKET_LEAF_FLAG) != 0 || key != k {
-      return Err(INCOMPATIBLE_VALUE());
+      return Err(IncompatibleValue);
     }
-
+    let bump = cell.tx().bump();
     let key = &*bump.alloc_slice_clone(key);
     NodeImpl::put(c.node(), key, key, value, ZERO_PGID, 0);
     Ok(())
   }
 
-  fn api_delete<'tx>(cell: BucketMut<'tx>, key: &[u8]) -> io::Result<()> {
-    let tx = cell.borrow_iref().0.tx;
-    let bump = TxImpl::bump(tx);
-    let mut c = BucketImpl::i_cursor(cell, bump);
+  fn api_delete<'tx>(cell: BucketMut<'tx>, key: &[u8]) -> crate::Result<()> {
+    let mut c = BucketImpl::i_cursor(cell);
     let (k, _, flags) = c.i_seek(key).unwrap();
 
     if key != k {
@@ -273,7 +263,7 @@ impl BucketImpl {
     }
 
     if flags & BUCKET_LEAF_FLAG != 0 {
-      return Err(INCOMPATIBLE_VALUE());
+      return Err(IncompatibleValue);
     }
 
     NodeImpl::del(c.node(), key);
@@ -285,50 +275,42 @@ impl BucketImpl {
     cell.borrow_iref().0.bucket_header.sequence()
   }
 
-  fn api_set_sequence<'tx>(cell: BucketMut<'tx>, v: u64) -> io::Result<()> {
-    let materialize_root = if let (r, Some(w)) = cell.borrow_iref() {
-      if w.root_node.is_none() {
-        Some(r.bucket_header.root())
-      } else {
-        None
-      }
-    } else {
-      None
-    };
+  fn api_set_sequence<'tx>(cell: BucketMut<'tx>, v: u64) -> crate::Result<()> {
     // TODO: Since this is repeated a bunch, let materialize root in a single function
-    if let Some(root) = materialize_root {
-      BucketImpl::node(cell, root, None);
+    let mut materialize_root = None;
+    if let (r, Some(w)) = cell.borrow_iref() {
+      materialize_root = match w.root_node {
+        None => Some(r.bucket_header.root()),
+        Some(_) => None,
+      }
     }
+
+    materialize_root.and_then(|root| Some(BucketImpl::node(cell, root, None)));
 
     cell.borrow_mut_iref().0.bucket_header.set_sequence(v);
     Ok(())
   }
 
-  fn api_next_sequence<'tx>(cell: BucketMut<'tx>) -> io::Result<u64> {
-    let materialize_root = if let (r, Some(w)) = cell.borrow_iref() {
-      if w.root_node.is_none() {
-        Some(r.bucket_header.root())
-      } else {
-        None
-      }
-    } else {
-      None
-    };
+  fn api_next_sequence<'tx>(cell: BucketMut<'tx>) -> crate::Result<u64> {
     // TODO: Since this is repeated a bunch, let materialize root in a single function
-    if let Some(root) = materialize_root {
-      BucketImpl::node(cell, root, None);
+    let mut materialize_root = None;
+    if let (r, Some(w)) = cell.borrow_iref() {
+      materialize_root = match w.root_node {
+        None => Some(r.bucket_header.root()),
+        Some(_) => None,
+      }
     }
+    materialize_root.and_then(|root| Some(BucketImpl::node(cell, root, None)));
+
     let mut r = cell.borrow_mut_iref().0;
     r.bucket_header.inc_sequence();
     Ok(r.bucket_header.sequence())
   }
 
-  fn for_each<'tx, B: BucketIRef<'tx>, F: Fn(&[u8]) -> io::Result<()>>(
+  fn api_for_each<'tx, B: BucketIRef<'tx>, F: Fn(&[u8]) -> crate::Result<()>>(
     cell: B, f: F,
-  ) -> io::Result<()> {
-    let tx = cell.borrow_iref().0.tx;
-    let bump = TxImpl::bump(tx);
-    let mut c = BucketImpl::i_cursor(cell, bump);
+  ) -> crate::Result<()> {
+    let mut c = BucketImpl::i_cursor(cell);
     let mut inode = c.i_first();
     while let Some((k, _, flags)) = inode {
       f(k)?;
@@ -337,12 +319,10 @@ impl BucketImpl {
     Ok(())
   }
 
-  fn for_each_bucket<'tx, B: BucketIRef<'tx>, F: Fn(&[u8]) -> io::Result<()>>(
-    cell: B, f: F,
-  ) -> io::Result<()> {
-    let tx = cell.borrow_iref().0.tx;
-    let bump = TxImpl::bump(tx);
-    let mut c = BucketImpl::i_cursor(cell, bump);
+  fn api_for_each_bucket<'tx, B: BucketIRef<'tx>, F: FnMut(&[u8]) -> crate::Result<()>>(
+    cell: B, mut f: F,
+  ) -> crate::Result<()> {
+    let mut c = BucketImpl::i_cursor(cell);
     let mut inode = c.i_first();
     while let Some((k, _, flags)) = inode {
       if flags & BUCKET_LEAF_FLAG != 0 {
@@ -353,38 +333,128 @@ impl BucketImpl {
     Ok(())
   }
 
-  pub(crate) fn node<'tx>(
-    cell: BucketMut<'tx>, pgid: PgId, parent: Option<NodeMut<'tx>>,
-  ) -> NodeMut<'tx> {
-    todo!()
+  pub(crate) fn for_each_page<
+    'tx,
+    B: BucketIRef<'tx>,
+    F: FnMut(&RefPage, usize, &[PgId]) + Copy,
+  >(
+    cell: B, mut f: F,
+  ) {
+    let root = {
+      let (r, _) = cell.borrow_iref();
+      let root = r.bucket_header.root();
+      if let Some(page) = &r.inline_page {
+        f(page, 0, &[root]);
+        return;
+      }
+      root
+    };
+
+    TxImpl::for_each_page(cell.tx(), root, f);
+  }
+
+  pub fn for_each_page_node<
+    'tx,
+    B: BucketIRef<'tx>,
+    F: FnMut(&Either<RefPage, NodeMut<'tx>>, usize) + Copy,
+  >(
+    cell: B, mut f: F,
+  ) {
+    let root = {
+      let (r, _) = cell.borrow_iref();
+      if let Some(page) = &r.inline_page {
+        f(&Either::Left(*page), 0);
+        return;
+      }
+      r.bucket_header.root()
+    };
+    BucketImpl::_for_each_page_node(cell, root, 0, f);
+  }
+
+  fn _for_each_page_node<
+    'tx,
+    B: BucketIRef<'tx>,
+    F: FnMut(&Either<RefPage, NodeMut<'tx>>, usize) + Copy,
+  >(
+    cell: B, root: PgId, depth: usize, mut f: F,
+  ) {
+    let pn = BucketImpl::page_node(cell, root);
+    f(&pn, depth);
+    match &pn {
+      Either::Left(page) => {
+        if let Some(branch_page) = MappedBranchPage::coerce_ref(page) {
+          branch_page.elements().iter().for_each(|elem| {
+            BucketImpl::_for_each_page_node(cell, elem.pgid(), depth + 1, f);
+          });
+        }
+      }
+      Either::Right(node) => {
+        let bump = cell.tx().bump();
+        // To keep with our rules we much copy the inode pgids to temporary storage first
+        // This should be unnecessary, but working first *then* optimize
+        let v = {
+          let node_borrow = node.cell.borrow();
+          let mut v = BVec::with_capacity_in(node_borrow.inodes.len(), bump);
+          let ids = node_borrow.inodes.iter().map(|inode| inode.pgid());
+          v.extend(ids);
+          v
+        };
+        v.into_iter()
+          .for_each(|pgid| BucketImpl::_for_each_page_node(cell, pgid, depth + 1, f));
+      }
+    }
   }
 
   pub fn page_node<'tx, B: BucketIRef<'tx>>(
     cell: B, id: PgId,
   ) -> Either<RefPage<'tx>, NodeMut<'tx>> {
-    let tx = {
-      let (r, w) = cell.borrow_iref();
-      // Inline buckets have a fake page embedded in their value so treat them
-      // differently. We'll return the rootNode (if available) or the fake page.
-      if r.bucket_header.root() == ZERO_PGID {
-        if id != ZERO_PGID {
-          panic!("inline bucket non-zero page access(2): {} != 0", id)
-        }
-        if let Some(root_node) = &w.map(|wb| wb.root_node).flatten() {
-          return Either::Right(*root_node);
-        } else {
-          return Either::Left(r.inline_page.unwrap());
-        }
+    let (r, w) = cell.borrow_iref();
+    // Inline buckets have a fake page embedded in their value so treat them
+    // differently. We'll return the rootNode (if available) or the fake page.
+    if r.bucket_header.root() == ZERO_PGID {
+      if id != ZERO_PGID {
+        panic!("inline bucket non-zero page access(2): {} != 0", id)
       }
+      if let Some(root_node) = &w.map(|wb| wb.root_node).flatten() {
+        return Either::Right(*root_node);
+      } else {
+        return Either::Left(r.inline_page.unwrap());
+      }
+    }
+
+    if cell.is_writeable() {
       // Check the node cache for non-inline buckets.
       if let Some(wb) = &w {
         if let Some(node) = wb.nodes.get(&id) {
           return Either::Right(*node);
         }
       }
-      r.tx
+    }
+    Either::Left(TxImpl::page(cell.tx(), id))
+  }
+
+  pub(crate) fn spill<'tx>(cell: BucketMut<'tx>, bump: &'tx Bump) -> crate::Result<()> {
+    // To keep with our rules we much copy the bucket entries to temporary storage first
+    // This should be unnecessary, but working first *then* optimize
+    let v = {
+      let bucket_mut = cell.borrow_iref();
+      let w = bucket_mut.1.unwrap();
+      let mut v = BVec::with_capacity_in(w.buckets.len(), bump);
+      // v.extend() would be more idiomatic, but I'm too tired atm to figure out why
+      // it's not working
+      w.buckets.iter().for_each(|(k, b)| {
+        v.push((*k, *b));
+      });
+      v
     };
-    Either::Left(TxImpl::page(tx, id))
+
+    Ok(())
+  }
+
+  pub(crate) fn node<'tx>(
+    cell: BucketMut<'tx>, pgid: PgId, parent: Option<NodeMut<'tx>>,
+  ) -> NodeMut<'tx> {
+    todo!()
   }
 }
 
@@ -401,47 +471,45 @@ pub trait BucketAPI<'tx>: BucketIAPI<'tx> {
 
   fn sequence(&self) -> u64;
 
-  fn for_each<F: Fn(&[u8]) -> io::Result<()>>(&self, f: F) -> io::Result<()>;
+  fn for_each<F: Fn(&[u8]) -> crate::Result<()>>(&self, f: F) -> crate::Result<()>;
 
-  fn for_each_bucket<F: Fn(&[u8]) -> io::Result<()>>(&self, f: F) -> io::Result<()>;
+  fn for_each_bucket<F: Fn(&[u8]) -> crate::Result<()>>(&self, f: F) -> crate::Result<()>;
 
   fn status(&self) -> BucketStats;
 }
 
 pub trait BucketMutAPI<'tx>: BucketAPI<'tx> + Sized {
-  fn create_bucket(&mut self, key: &[u8]) -> io::Result<Self>;
+  fn create_bucket(&mut self, key: &[u8]) -> crate::Result<Self>;
 
-  fn create_bucket_if_not_exists(&mut self, key: &[u8]) -> io::Result<Self>;
+  fn create_bucket_if_not_exists(&mut self, key: &[u8]) -> crate::Result<Self>;
 
   fn cursor_mut(&self) -> CursorMut<'tx>;
 
-  fn delete_bucket(&mut self, key: &[u8]) -> io::Result<()>;
+  fn delete_bucket(&mut self, key: &[u8]) -> crate::Result<()>;
 
-  fn put(&mut self, key: &[u8], data: &[u8]) -> io::Result<()>;
+  fn put(&mut self, key: &[u8], data: &[u8]) -> crate::Result<()>;
 
-  fn delete(&mut self, key: &[u8]) -> io::Result<()>;
+  fn delete(&mut self, key: &[u8]) -> crate::Result<()>;
 
-  fn set_sequence(&mut self, v: u64) -> io::Result<()>;
+  fn set_sequence(&mut self, v: u64) -> crate::Result<()>;
 
-  fn next_sequence(&mut self) -> io::Result<u64>;
+  fn next_sequence(&mut self) -> crate::Result<u64>;
 
-  fn for_each_mut<F: Fn(&[u8]) -> io::Result<()>>(&mut self, f: F) -> io::Result<()>;
+  fn for_each_mut<F: Fn(&[u8]) -> crate::Result<()>>(&mut self, f: F) -> crate::Result<()>;
 
-  fn for_each_bucket_mut<F: Fn(&[u8]) -> io::Result<()>>(&mut self, f: F) -> io::Result<()>;
+  fn for_each_bucket_mut<F: Fn(&[u8]) -> crate::Result<()>>(&mut self, f: F) -> crate::Result<()>;
 }
 
-pub struct BucketR<'tx, T: TxIRef<'tx>> {
+pub struct BucketR<'tx> {
   pub(crate) bucket_header: InBucket,
-  pub(crate) tx: T,
   pub(crate) inline_page: Option<RefPage<'tx>>,
   p: PhantomData<&'tx u8>,
 }
 
-impl<'tx, T: TxIRef<'tx>> BucketR<'tx, T> {
-  pub fn new(tx: T, in_bucket: InBucket) -> BucketR<'tx, T> {
+impl<'tx> BucketR<'tx> {
+  pub fn new(in_bucket: InBucket) -> BucketR<'tx> {
     BucketR {
       bucket_header: in_bucket,
-      tx,
       inline_page: None,
       p: Default::default(),
     }
@@ -469,14 +537,14 @@ impl<'tx, B: BucketIRef<'tx>> BucketP<'tx, B> {
 pub type BucketW<'tx> = BucketP<'tx, BucketMut<'tx>>;
 
 pub struct BucketRW<'tx> {
-  r: BucketR<'tx, TxMut<'tx>>,
+  r: BucketR<'tx>,
   w: BucketW<'tx>,
 }
 
 impl<'tx> BucketRW<'tx> {
-  pub fn new_in(bump: &'tx Bump, tx: TxMut<'tx>, in_bucket: InBucket) -> BucketRW<'tx> {
+  pub fn new_in(bump: &'tx Bump, in_bucket: InBucket) -> BucketRW<'tx> {
     BucketRW {
-      r: BucketR::new(tx, in_bucket),
+      r: BucketR::new(in_bucket),
       w: BucketW::new_in(bump),
     }
   }
@@ -484,7 +552,8 @@ impl<'tx> BucketRW<'tx> {
 
 #[derive(Copy, Clone)]
 pub struct Bucket<'tx> {
-  cell: SCell<'tx, BucketR<'tx, Tx<'tx>>>,
+  tx: &'tx Tx<'tx>,
+  cell: SCell<'tx, BucketR<'tx>>,
 }
 
 impl<'tx> BucketIAPI<'tx> for Bucket<'tx> {
@@ -492,35 +561,39 @@ impl<'tx> BucketIAPI<'tx> for Bucket<'tx> {
   type BucketType = Bucket<'tx>;
 
   fn new(
-    bump: &'tx Bump, bucket_header: InBucket, tx: Self::TxType, inline_page: Option<RefPage<'tx>>,
+    bucket_header: InBucket, tx: &'tx Self::TxType, inline_page: Option<RefPage<'tx>>,
   ) -> Self::BucketType {
     let r = BucketR {
       bucket_header,
-      tx,
       inline_page,
       p: Default::default(),
     };
 
     Bucket {
-      cell: SCell::new_in(r, bump),
+      tx,
+      cell: SCell::new_in(r, tx.bump()),
     }
+  }
+
+  #[inline(always)]
+  fn is_writeable(&self) -> bool {
+    false
+  }
+
+  fn tx(&self) -> &'tx Self::TxType {
+    &self.tx
   }
 }
 
-impl<'tx> IRef<BucketR<'tx, Tx<'tx>>, BucketP<'tx, Bucket<'tx>>> for Bucket<'tx> {
-  fn borrow_iref(
-    &self,
-  ) -> (
-    Ref<BucketR<'tx, Tx<'tx>>>,
-    Option<Ref<BucketP<'tx, Bucket<'tx>>>>,
-  ) {
+impl<'tx> IRef<BucketR<'tx>, BucketP<'tx, Bucket<'tx>>> for Bucket<'tx> {
+  fn borrow_iref(&self) -> (Ref<BucketR<'tx>>, Option<Ref<BucketP<'tx, Bucket<'tx>>>>) {
     (self.cell.borrow(), None)
   }
 
   fn borrow_mut_iref(
     &self,
   ) -> (
-    RefMut<BucketR<'tx, Tx<'tx>>>,
+    RefMut<BucketR<'tx>>,
     Option<RefMut<BucketP<'tx, Bucket<'tx>>>>,
   ) {
     (self.cell.borrow_mut(), None)
@@ -554,11 +627,11 @@ impl<'tx> BucketAPI<'tx> for Bucket<'tx> {
     todo!()
   }
 
-  fn for_each<F: Fn(&[u8]) -> io::Result<()>>(&self, f: F) -> io::Result<()> {
+  fn for_each<F: Fn(&[u8]) -> crate::Result<()>>(&self, f: F) -> crate::Result<()> {
     todo!()
   }
 
-  fn for_each_bucket<F: Fn(&[u8]) -> io::Result<()>>(&self, f: F) -> io::Result<()> {
+  fn for_each_bucket<F: Fn(&[u8]) -> crate::Result<()>>(&self, f: F) -> crate::Result<()> {
     todo!()
   }
 
@@ -569,21 +642,17 @@ impl<'tx> BucketAPI<'tx> for Bucket<'tx> {
 
 #[derive(Copy, Clone)]
 pub struct BucketMut<'tx> {
+  tx: &'tx TxMut<'tx>,
   cell: SCell<'tx, BucketRW<'tx>>,
 }
 
-impl<'tx> IRef<BucketR<'tx, TxMut<'tx>>, BucketW<'tx>> for BucketMut<'tx> {
-  fn borrow_iref(&self) -> (Ref<BucketR<'tx, TxMut<'tx>>>, Option<Ref<BucketW<'tx>>>) {
+impl<'tx> IRef<BucketR<'tx>, BucketW<'tx>> for BucketMut<'tx> {
+  fn borrow_iref(&self) -> (Ref<BucketR<'tx>>, Option<Ref<BucketW<'tx>>>) {
     let (r, w) = Ref::map_split(self.cell.borrow(), |b| (&b.r, &b.w));
     (r, Some(w))
   }
 
-  fn borrow_mut_iref(
-    &self,
-  ) -> (
-    RefMut<BucketR<'tx, TxMut<'tx>>>,
-    Option<RefMut<BucketW<'tx>>>,
-  ) {
+  fn borrow_mut_iref(&self) -> (RefMut<BucketR<'tx>>, Option<RefMut<BucketW<'tx>>>) {
     let (r, w) = RefMut::map_split(self.cell.borrow_mut(), |b| (&mut b.r, &mut b.w));
     (r, Some(w))
   }
@@ -594,20 +663,30 @@ impl<'tx> BucketIAPI<'tx> for BucketMut<'tx> {
   type BucketType = BucketMut<'tx>;
 
   fn new(
-    bump: &'tx Bump, bucket_header: InBucket, tx: Self::TxType, inline_page: Option<RefPage<'tx>>,
+    bucket_header: InBucket, tx: &'tx Self::TxType, inline_page: Option<RefPage<'tx>>,
   ) -> Self::BucketType {
     let r = BucketR {
       bucket_header,
-      tx,
       inline_page,
       p: Default::default(),
     };
 
+    let bump = tx.bump();
     let w = BucketW::new_in(bump);
 
     BucketMut {
+      tx,
       cell: SCell::new_in(BucketRW { r, w }, bump),
     }
+  }
+
+  #[inline(always)]
+  fn is_writeable(&self) -> bool {
+    true
+  }
+
+  fn tx(&self) -> &'tx Self::TxType {
+    &self.tx
   }
 }
 
@@ -638,11 +717,11 @@ impl<'tx> BucketAPI<'tx> for BucketMut<'tx> {
     todo!()
   }
 
-  fn for_each<F: Fn(&[u8]) -> io::Result<()>>(&self, f: F) -> io::Result<()> {
+  fn for_each<F: Fn(&[u8]) -> crate::Result<()>>(&self, f: F) -> crate::Result<()> {
     todo!()
   }
 
-  fn for_each_bucket<F: Fn(&[u8]) -> io::Result<()>>(&self, f: F) -> io::Result<()> {
+  fn for_each_bucket<F: Fn(&[u8]) -> crate::Result<()>>(&self, f: F) -> crate::Result<()> {
     todo!()
   }
 
@@ -651,11 +730,11 @@ impl<'tx> BucketAPI<'tx> for BucketMut<'tx> {
   }
 }
 impl<'tx> BucketMutAPI<'tx> for BucketMut<'tx> {
-  fn create_bucket(&mut self, key: &[u8]) -> io::Result<Self> {
+  fn create_bucket(&mut self, key: &[u8]) -> crate::Result<Self> {
     todo!()
   }
 
-  fn create_bucket_if_not_exists(&mut self, key: &[u8]) -> io::Result<Self> {
+  fn create_bucket_if_not_exists(&mut self, key: &[u8]) -> crate::Result<Self> {
     todo!()
   }
 
@@ -663,31 +742,31 @@ impl<'tx> BucketMutAPI<'tx> for BucketMut<'tx> {
     todo!()
   }
 
-  fn delete_bucket(&mut self, key: &[u8]) -> io::Result<()> {
+  fn delete_bucket(&mut self, key: &[u8]) -> crate::Result<()> {
     todo!()
   }
 
-  fn put(&mut self, key: &[u8], data: &[u8]) -> io::Result<()> {
+  fn put(&mut self, key: &[u8], data: &[u8]) -> crate::Result<()> {
     todo!()
   }
 
-  fn delete(&mut self, key: &[u8]) -> io::Result<()> {
+  fn delete(&mut self, key: &[u8]) -> crate::Result<()> {
     todo!()
   }
 
-  fn set_sequence(&mut self, v: u64) -> io::Result<()> {
+  fn set_sequence(&mut self, v: u64) -> crate::Result<()> {
     todo!()
   }
 
-  fn next_sequence(&mut self) -> io::Result<u64> {
+  fn next_sequence(&mut self) -> crate::Result<u64> {
     todo!()
   }
 
-  fn for_each_mut<F: Fn(&[u8]) -> io::Result<()>>(&mut self, f: F) -> io::Result<()> {
+  fn for_each_mut<F: Fn(&[u8]) -> crate::Result<()>>(&mut self, f: F) -> crate::Result<()> {
     todo!()
   }
 
-  fn for_each_bucket_mut<F: Fn(&[u8]) -> io::Result<()>>(&mut self, f: F) -> io::Result<()> {
+  fn for_each_bucket_mut<F: Fn(&[u8]) -> crate::Result<()>>(&mut self, f: F) -> crate::Result<()> {
     todo!()
   }
 }

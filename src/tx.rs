@@ -12,6 +12,8 @@ use std::ops::{Deref, DerefMut};
 
 pub(crate) trait TxIAPI<'tx> {
   type BucketType: BucketIRef<'tx>;
+
+  fn bump(&self) -> &'tx Bump;
 }
 
 pub trait TxIRef<'tx>: TxIAPI<'tx> + IRef<TxR<'tx>, TxW<'tx>> {}
@@ -19,11 +21,17 @@ pub trait TxIRef<'tx>: TxIAPI<'tx> + IRef<TxR<'tx>, TxW<'tx>> {}
 pub(crate) struct TxImpl {}
 
 impl TxImpl {
-  pub fn page<'tx, T: TxIRef<'tx>>(cell: T, id: PgId) -> RefPage<'tx> {
+  pub fn page<'tx, T: TxIRef<'tx>>(cell: &T, id: PgId) -> RefPage<'tx> {
     todo!()
   }
 
   pub(crate) fn bump<'tx, T: TxIRef<'tx>>(cell: T) -> &'tx Bump {
+    todo!()
+  }
+
+  pub(crate) fn for_each_page<'tx, T: TxIRef<'tx>, F: FnMut(&RefPage, usize, &[PgId])>(
+    cell: &T, root: PgId, f: F,
+  ) {
     todo!()
   }
 }
@@ -67,6 +75,10 @@ impl<'tx> IRef<TxR<'tx>, TxW<'tx>> for Tx<'tx> {
 
 impl<'tx> TxIAPI<'tx> for Tx<'tx> {
   type BucketType = Bucket<'tx>;
+
+  fn bump(&self) -> &'tx Bump {
+    todo!()
+  }
 }
 
 impl<'tx> TxIRef<'tx> for Tx<'tx> {}
@@ -100,6 +112,10 @@ impl<'tx> IRef<TxR<'tx>, TxW<'tx>> for TxMut<'tx> {
 
 impl<'tx> TxIAPI<'tx> for TxMut<'tx> {
   type BucketType = BucketMut<'tx>;
+
+  fn bump(&self) -> &'tx Bump {
+    todo!()
+  }
 }
 
 impl<'tx> TxIRef<'tx> for TxMut<'tx> {}
