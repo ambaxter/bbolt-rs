@@ -15,7 +15,7 @@ mod node;
 mod test_support;
 mod tx;
 
-pub use common::errors::{Error, Result};
-pub use tx::{TxAPI, TxMutAPI};
 pub use bucket::{BucketAPI, BucketMutAPI};
+pub use common::errors::{Error, Result};
 pub use cursor::{CursorAPI, CursorMutAPI};
+pub use tx::{TxAPI, TxMutAPI};

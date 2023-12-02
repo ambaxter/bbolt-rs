@@ -3,7 +3,7 @@ use crate::common::memory::SCell;
 use crate::common::page::{CoerciblePage, RefPage, BUCKET_LEAF_FLAG};
 use crate::common::tree::{MappedBranchPage, MappedLeafPage, TreePage};
 use crate::common::{BVec, IRef, PgId};
-use crate::node::{NodeImpl, NodeMut};
+use crate::node::NodeMut;
 use crate::tx::{Tx, TxAPI, TxMut};
 use crate::Error::IncompatibleValue;
 use bumpalo::Bump;
@@ -491,7 +491,7 @@ impl<'tx> CursorMutIAPI<'tx> for CursorMut<'tx> {
     };
     for elem in self.stack.split_last().unwrap().1 {
       assert!(!n.cell.borrow().is_leaf, "expected branch node");
-      n = NodeImpl::child_at(n.cell, elem.index);
+      n = n.child_at(elem.index);
     }
     assert!(n.cell.borrow().is_leaf, "expected leaf node");
     n
@@ -502,8 +502,7 @@ impl<'tx> CursorMutIAPI<'tx> for CursorMut<'tx> {
     if flags & BUCKET_LEAF_FLAG != 0 {
       return Err(IncompatibleValue);
     }
-    NodeImpl::del(self.node(), key);
-
+    self.node().del(key);
     Ok(())
   }
 }

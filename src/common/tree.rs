@@ -64,7 +64,7 @@ pub struct LeafPageElement {
   pos: u32,
   key_size: u32,
   value_size: u32,
-  unsend: PhantomUnsend
+  unsend: PhantomUnsend,
 }
 
 impl LeafPageElement {
@@ -79,7 +79,7 @@ impl LeafPageElement {
       pos,
       key_size,
       value_size,
-      unsend: PhantomData
+      unsend: PhantomData,
     }
   }
 
@@ -94,7 +94,7 @@ impl LeafPageElement {
         elem_ref: self,
         key_ref,
         value_ref,
-        unsend: PhantomData
+        unsend: PhantomData,
       }
     }
   }
@@ -105,7 +105,7 @@ pub struct LeafElementRef<'tx> {
   elem_ref: &'tx LeafPageElement,
   key_ref: &'tx [u8],
   value_ref: &'tx [u8],
-  unsend: PhantomUnsend
+  unsend: PhantomUnsend,
 }
 
 impl<'tx> LeafElementRef<'tx> {
@@ -174,7 +174,7 @@ pub struct BranchPageElement {
   pgid: PgId,
   pos: u32,
   key_size: u32,
-  unsend: PhantomUnsend
+  unsend: PhantomUnsend,
 }
 
 impl BranchPageElement {
@@ -186,7 +186,7 @@ impl BranchPageElement {
       BranchElementRef {
         elem_ref: self,
         key_ref,
-        unsend: PhantomData
+        unsend: PhantomData,
       }
     }
   }
@@ -196,7 +196,7 @@ impl BranchPageElement {
 pub struct BranchElementRef<'tx> {
   elem_ref: &'tx BranchPageElement,
   key_ref: &'tx [u8],
-  unsend: PhantomUnsend
+  unsend: PhantomUnsend,
 }
 
 impl<'tx> BranchElementRef<'tx> {
@@ -269,6 +269,7 @@ pub struct TreeIterator<'a, 'tx, T: TreePage<'tx>> {
   page: &'a T,
   i: u16,
   p: PhantomData<&'tx [u8]>,
+  unsend: PhantomUnsend,
 }
 
 impl<'a, 'tx, T: TreePage<'tx>> TreeIterator<'a, 'tx, T> {
@@ -277,6 +278,7 @@ impl<'a, 'tx, T: TreePage<'tx>> TreeIterator<'a, 'tx, T> {
       page: t,
       i: 0,
       p: PhantomData,
+      unsend: PhantomData,
     }
   }
 }

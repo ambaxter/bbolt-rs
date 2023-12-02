@@ -1,4 +1,3 @@
-use std::marker::PhantomData;
 use crate::common::memory::{CodSlice, PhantomUnsend};
 use crate::common::page::{CoerciblePage, MutPage, RefPage};
 use crate::common::tree::{
@@ -7,6 +6,7 @@ use crate::common::tree::{
 use crate::common::PgId;
 use bumpalo::collections::Vec as BVec;
 use bumpalo::Bump;
+use std::marker::PhantomData;
 use std::ops::Deref;
 
 #[derive(Debug)]
@@ -15,7 +15,7 @@ pub struct INode<'tx> {
   pgid: PgId,
   key: CodSlice<'tx, u8>,
   value: CodSlice<'tx, u8>,
-  unsend: PhantomUnsend
+  unsend: PhantomUnsend,
 }
 
 impl<'tx> INode<'tx> {
@@ -25,7 +25,7 @@ impl<'tx> INode<'tx> {
       pgid: 0.into(),
       key: CodSlice::default_in(bump),
       value: CodSlice::default_in(bump),
-      unsend: PhantomData
+      unsend: PhantomData,
     }
   }
 
@@ -35,7 +35,7 @@ impl<'tx> INode<'tx> {
       pgid,
       key: CodSlice::Mapped(key),
       value: CodSlice::Mapped(value),
-      unsend: PhantomData
+      unsend: PhantomData,
     }
   }
 
@@ -47,7 +47,7 @@ impl<'tx> INode<'tx> {
       pgid,
       key: CodSlice::Owned(bump.alloc_slice_copy(key.as_ref())),
       value: CodSlice::Owned(bump.alloc_slice_copy(value.as_ref())),
-      unsend: PhantomData
+      unsend: PhantomData,
     }
   }
 

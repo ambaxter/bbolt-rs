@@ -5,7 +5,7 @@ use crate::common::page::{CoerciblePage, Page, RefPage, BUCKET_LEAF_FLAG, PAGE_H
 use crate::common::tree::{MappedBranchPage, TreePage, LEAF_PAGE_ELEMENT_SIZE};
 use crate::common::{BVec, HashMap, IRef, PgId, ZERO_PGID};
 use crate::cursor::{Cursor, CursorAPI, CursorIAPI, CursorMut, CursorMutIAPI, ElemRef, ICursor};
-use crate::node::{NodeImpl, NodeMut, NodeW};
+use crate::node::{NodeMut, NodeW};
 use crate::tx::{Tx, TxAPI, TxIAPI, TxIRef, TxImpl, TxMut, TxMutIAPI, TxR, TxW};
 use crate::Error;
 use crate::Error::{
@@ -164,7 +164,7 @@ impl BucketImpl {
     value.copy_from_slice(bytemuck::bytes_of(&inline_page));
     let key = bump.alloc_slice_clone(key) as &[u8];
 
-    NodeImpl::put(c.node(), key, key, value, ZERO_PGID, BUCKET_LEAF_FLAG);
+    c.node().put(key, key, value, ZERO_PGID, BUCKET_LEAF_FLAG);
 
     cell.borrow_mut_iref().0.inline_page = None;
 
@@ -215,7 +215,7 @@ impl BucketImpl {
     }
     BucketImpl::free(child);
 
-    NodeImpl::del(c.node(), key);
+    c.node().del(key);
     Ok(())
   }
 
@@ -246,7 +246,8 @@ impl BucketImpl {
     }
     let bump = cell.tx().bump();
     let key = &*bump.alloc_slice_clone(key);
-    NodeImpl::put(c.node(), key, key, value, ZERO_PGID, 0);
+    let value = &*bump.alloc_slice_clone(value);
+    c.node().put(key, key, value, ZERO_PGID, 0);
     Ok(())
   }
 
@@ -262,7 +263,7 @@ impl BucketImpl {
       return Err(IncompatibleValue);
     }
 
-    NodeImpl::del(c.node(), key);
+    c.node().del(key);
 
     Ok(())
   }
@@ -490,7 +491,7 @@ impl BucketImpl {
 
     BucketImpl::for_each_page_node(cell, |pn, depth| match pn {
       Either::Left(page) => cell.tx().freelist().free(txid, page),
-      Either::Right(node) => NodeImpl::free(*node),
+      Either::Right(node) => node.free(),
     });
   }
 
@@ -505,7 +506,7 @@ impl BucketImpl {
     };
 
     if let Some(node) = root {
-      NodeImpl::own_in(NodeImpl::root(node), bump)
+      node.root().own_in(bump);
     }
 
     for child in children.into_iter() {
@@ -539,7 +540,7 @@ impl BucketImpl {
   }
 }
 
-pub trait BucketAPI<'tx>: Copy + Clone + 'tx  {
+pub trait BucketAPI<'tx>: Copy + Clone + 'tx {
   fn root(&self) -> PgId;
 
   fn writeable(&self) -> bool;
@@ -560,7 +561,6 @@ pub trait BucketAPI<'tx>: Copy + Clone + 'tx  {
 }
 
 pub trait BucketMutAPI<'tx>: BucketAPI<'tx> {
-
   type BucketType: BucketMutAPI<'tx>;
 
   fn create_bucket(&mut self, key: &[u8]) -> crate::Result<Self::BucketType>;

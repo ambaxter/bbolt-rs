@@ -1,7 +1,7 @@
 use crate::bucket::{Bucket, BucketAPI, BucketIAPI, BucketMut, BucketMutAPI};
 use crate::common::inode::INode;
 use crate::common::memory::{CodSlice, SCell};
-use crate::common::page::{CoerciblePage, RefPage};
+use crate::common::page::{CoerciblePage, MutPage, RefPage};
 use crate::common::tree::{MappedBranchPage, MappedLeafPage, TreePage};
 use crate::common::{BVec, IRef, PgId};
 use crate::tx::{Tx, TxAPI, TxIAPI, TxMut};
@@ -10,35 +10,6 @@ use std::cell;
 use std::cell::{Ref, RefCell, RefMut};
 use std::marker::PhantomData;
 use std::mem;
-
-pub(crate) struct NodeImpl {}
-
-impl NodeImpl {
-  pub(crate) fn del(cell: NodeMut, key: &[u8]) {
-    todo!()
-  }
-
-  pub(crate) fn put<'tx>(
-    cell: NodeMut, old_key: &'tx [u8], new_key: &'tx [u8], value: &'tx [u8], pg_id: PgId,
-    flags: u32,
-  ) {
-    todo!()
-  }
-
-  pub(crate) fn child_at<'tx>(cell: SCell<NodeW<'tx>>, index: u32) -> NodeMut<'tx> {
-    todo!()
-  }
-  pub(crate) fn free(cell: NodeMut) {
-    todo!()
-  }
-  pub(crate) fn own_in<'tx>(cell: NodeMut<'tx>, bump: &'tx Bump) {
-    todo!()
-  }
-
-  pub(crate) fn root(cell: NodeMut) -> NodeMut {
-    todo!()
-  }
-}
 
 pub struct NodeW<'tx> {
   pub(crate) is_leaf: bool,
@@ -91,5 +62,92 @@ impl<'tx> NodeMut<'tx> {
     NodeMut {
       cell: SCell::new_in(NodeW::read_in(bucket, parent, page), bucket.tx().bump()),
     }
+  }
+
+  pub(crate) fn root(self: NodeMut<'tx>) -> NodeMut<'tx> {
+    todo!()
+  }
+
+  pub(crate) fn min_keys(self: NodeMut<'tx>) -> u32 {
+    todo!()
+  }
+
+  pub(crate) fn size(self: NodeMut<'tx>) -> usize {
+    todo!()
+  }
+
+  pub(crate) fn size_less_than(v: usize) -> bool {
+    todo!()
+  }
+
+  pub(crate) fn page_element_size(self: NodeMut<'tx>) -> usize {
+    todo!()
+  }
+
+  pub(crate) fn child_at(self: NodeMut<'tx>, index: u32) -> NodeMut<'tx> {
+    todo!()
+  }
+
+  pub(crate) fn child_index(self: NodeMut<'tx>) -> usize {
+    todo!()
+  }
+
+  pub(crate) fn num_children(self: NodeMut<'tx>) -> usize {
+    todo!()
+  }
+
+  pub(crate) fn next_sibling(self: NodeMut<'tx>) -> NodeMut<'tx> {
+    todo!()
+  }
+
+  pub(crate) fn prev_sibling(self: NodeMut<'tx>) -> NodeMut<'tx> {
+    todo!()
+  }
+
+  pub(crate) fn put(
+    self: NodeMut<'tx>, old_key: &'tx [u8], new_key: &'tx [u8], value: &'tx [u8], pg_id: PgId,
+    flags: u32,
+  ) {
+    todo!()
+  }
+
+  pub(crate) fn del(self: NodeMut<'tx>, key: &[u8]) {
+    todo!()
+  }
+
+  pub(crate) fn write(self: NodeMut<'tx>, page: MutPage<'tx>) {
+    todo!()
+  }
+
+  pub(crate) fn split(self: NodeMut<'tx>, page_size: usize) -> BVec<'tx, NodeMut<'tx>> {
+    todo!()
+  }
+
+  pub(crate) fn split_two(self: NodeMut<'tx>, page_size: usize) -> (NodeMut<'tx>, NodeMut<'tx>) {
+    todo!()
+  }
+
+  pub(crate) fn split_index(self: NodeMut<'tx>, threshold: usize) -> (usize, usize) {
+    todo!()
+  }
+
+  pub(crate) fn spill(self: NodeMut<'tx>) -> crate::Result<()> {
+    todo!()
+  }
+
+  pub(crate) fn rebalance(self: NodeMut<'tx>) {
+    todo!()
+  }
+
+  pub(crate) fn remove_child(self: NodeMut<'tx>, target: NodeMut<'tx>) {
+    todo!()
+  }
+
+  pub(crate) fn own_in(self: NodeMut<'tx>, bump: &'tx Bump) {
+    todo!()
+  }
+
+  pub(crate) fn free(self: NodeMut<'tx>) {
+    todo!()
   }
 }
