@@ -1,4 +1,4 @@
-use crate::bucket::{Bucket, BucketIAPI, BucketIRef, BucketMut};
+use crate::bucket::{Bucket, BucketIAPI, BucketMut};
 use crate::common::defaults::DEFAULT_PAGE_SIZE;
 use crate::common::memory::SCell;
 use crate::common::meta::Meta;
@@ -13,8 +13,7 @@ use std::cell::{Ref, RefMut};
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 
-pub(crate) trait TxIAPI<'tx>: Copy + Clone + 'tx {
-  type BucketType: BucketIRef<'tx>;
+pub(crate) trait TxIAPI<'tx>: IRef<TxR<'tx>, TxW<'tx>> + 'tx {
 
   fn bump(&self) -> &'tx Bump;
 
@@ -27,22 +26,19 @@ pub(crate) trait TxIAPI<'tx>: Copy + Clone + 'tx {
   }
 }
 
-pub trait TxIRef<'tx>: TxIAPI<'tx> + IRef<TxR<'tx>, TxW<'tx>> {}
-
 pub trait TxMutIAPI<'tx> {
   fn freelist(&self) -> RefMut<Freelist<'tx>>;
 }
 
-pub trait TxMutIRef<'tx>: TxIRef<'tx> + TxMutIAPI<'tx> {}
 
 pub(crate) struct TxImpl {}
 
 impl TxImpl {
-  pub fn page<'tx, T: TxIRef<'tx>>(cell: &T, id: PgId) -> RefPage<'tx> {
+  pub fn page<'tx, T: TxIAPI<'tx>>(cell: &T, id: PgId) -> RefPage<'tx> {
     todo!()
   }
 
-  pub(crate) fn for_each_page<'tx, T: TxIRef<'tx>, F: FnMut(&RefPage, usize, &[PgId])>(
+  pub(crate) fn for_each_page<'tx, T: TxIAPI<'tx>, F: FnMut(&RefPage, usize, &[PgId])>(
     cell: &T, root: PgId, f: F,
   ) {
     todo!()
@@ -85,7 +81,6 @@ impl<'tx> IRef<TxR<'tx>, TxW<'tx>> for Tx<'tx> {
 }
 
 impl<'tx> TxIAPI<'tx> for Tx<'tx> {
-  type BucketType = Bucket<'tx>;
 
   #[inline(always)]
   fn bump(&self) -> &'tx Bump {
@@ -101,8 +96,6 @@ impl<'tx> TxIAPI<'tx> for Tx<'tx> {
     todo!()
   }
 }
-
-impl<'tx> TxIRef<'tx> for Tx<'tx> {}
 
 impl<'tx> TxAPI<'tx> for Tx<'tx> {
   fn writeable(&self) -> bool {
@@ -128,7 +121,6 @@ impl<'tx> IRef<TxR<'tx>, TxW<'tx>> for TxMut<'tx> {
 }
 
 impl<'tx> TxIAPI<'tx> for TxMut<'tx> {
-  type BucketType = BucketMut<'tx>;
 
   #[inline(always)]
   fn bump(&self) -> &'tx Bump {
@@ -145,7 +137,6 @@ impl<'tx> TxIAPI<'tx> for TxMut<'tx> {
   }
 }
 
-impl<'tx> TxIRef<'tx> for TxMut<'tx> {}
 
 impl<'tx> TxAPI<'tx> for TxMut<'tx> {
   fn writeable(&self) -> bool {
@@ -159,6 +150,5 @@ impl<'tx> TxMutIAPI<'tx> for TxMut<'tx> {
   }
 }
 
-impl<'tx> TxMutIRef<'tx> for TxMut<'tx> {}
 
 impl<'tx> TxMutAPI<'tx> for TxMut<'tx> {}

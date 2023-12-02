@@ -1,10 +1,10 @@
-use crate::bucket::{Bucket, BucketAPI, BucketIAPI, BucketIRef, BucketMut, BucketMutIRef, BucketR};
+use crate::bucket::{Bucket, BucketAPI, BucketIAPI, BucketMut, BucketMutIAPI, BucketR};
 use crate::common::memory::SCell;
 use crate::common::page::{CoerciblePage, RefPage, BUCKET_LEAF_FLAG};
 use crate::common::tree::{MappedBranchPage, MappedLeafPage, TreePage};
 use crate::common::{BVec, IRef, PgId};
 use crate::node::NodeMut;
-use crate::tx::{Tx, TxAPI, TxMut};
+use crate::tx::{Tx, TxAPI, TxIAPI, TxMut};
 use crate::Error::IncompatibleValue;
 use bumpalo::Bump;
 use either::Either;
@@ -50,10 +50,9 @@ pub(crate) trait CursorMutIAPI<'tx>: CursorIAPI<'tx> {
   fn api_delete(&mut self, key: &[u8]) -> crate::Result<()>;
 }
 
-pub trait CursorAPI<'tx>: CursorIAPI<'tx> {
-  type BucketType: BucketIRef<'tx>;
+pub trait CursorAPI<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>>: CursorIAPI<'tx> {
 
-  fn bucket(&self) -> Self::BucketType;
+  fn bucket(&self) -> B;
 
   /// First moves the cursor to the first item in the bucket and returns its key and value.
   /// If the bucket is empty then a nil key and value are returned.
@@ -79,7 +78,7 @@ pub trait CursorAPI<'tx>: CursorIAPI<'tx> {
   }
 }
 
-pub trait CursorMutAPI<'tx>: CursorAPI<'tx> + CursorMutIAPI<'tx> {
+pub trait CursorMutAPI<'tx>: CursorAPI<'tx, TxMut<'tx>, BucketMut<'tx>> + CursorMutIAPI<'tx> {
   fn delete(&mut self, key: &[u8]) -> crate::Result<()> {
     self.api_delete(key)
   }
@@ -108,21 +107,23 @@ impl<'tx> ElemRef<'tx> {
 }
 
 #[derive(Clone)]
-pub struct ICursor<'tx, B: BucketIRef<'tx>> {
+pub struct ICursor<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> {
   bucket: B,
   stack: BVec<'tx, ElemRef<'tx>>,
+  phantom_t: PhantomData<T>
 }
 
-impl<'tx, B: BucketIRef<'tx>> ICursor<'tx, B> {
+impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> ICursor<'tx, T, B> {
   pub(crate) fn new(cell: B, bump: &'tx Bump) -> Self {
     ICursor {
       bucket: cell,
       stack: BVec::new_in(bump),
+      phantom_t: PhantomData
     }
   }
 }
 
-impl<'tx, B: BucketIRef<'tx>> CursorIAPI<'tx> for ICursor<'tx, B> {
+impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for ICursor<'tx, T, B> {
   fn api_first(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
     let (k, v, flags) = self.i_first()?;
     if (flags & BUCKET_LEAF_FLAG) != 0 {
@@ -459,15 +460,14 @@ impl<'tx, B: BucketIRef<'tx>> CursorIAPI<'tx> for ICursor<'tx, B> {
   }
 }
 
-impl<'tx, B: BucketIRef<'tx>> CursorAPI<'tx> for ICursor<'tx, B> {
-  type BucketType = B;
+impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorAPI<'tx, T, B> for ICursor<'tx, T, B> {
 
-  fn bucket(&self) -> Self::BucketType {
+  fn bucket(&self) -> B {
     self.bucket
   }
 }
 
-impl<'tx, B: BucketMutIRef<'tx>> CursorMutIAPI<'tx> for ICursor<'tx, B> {
+impl<'tx, B: BucketMutIAPI<'tx>> CursorMutIAPI<'tx> for ICursor<'tx, TxMut<'tx>, B> {
   fn node(&mut self) -> NodeMut<'tx> {
     assert!(
       !self.stack.is_empty(),
@@ -485,7 +485,7 @@ impl<'tx, B: BucketMutIRef<'tx>> CursorMutIAPI<'tx> for ICursor<'tx, B> {
     let mut n = {
       let first = self.stack.first().unwrap();
       match &self.stack.first().unwrap().pn {
-        Either::Left(page) => BucketMutIRef::node(self.bucket, page.id, None),
+        Either::Left(page) => BucketMutIAPI::node(self.bucket, page.id, None),
         Either::Right(node) => *node,
       }
     };
@@ -507,8 +507,9 @@ impl<'tx, B: BucketMutIRef<'tx>> CursorMutIAPI<'tx> for ICursor<'tx, B> {
   }
 }
 
+
 impl<'tx> CursorMutAPI<'tx> for CursorMut<'tx> {}
 
-pub type Cursor<'tx> = ICursor<'tx, Bucket<'tx>>;
+pub type Cursor<'tx, T: TxIAPI<'tx>> = ICursor<'tx, T, Bucket<'tx>>;
 
-pub type CursorMut<'tx> = ICursor<'tx, BucketMut<'tx>>;
+pub type CursorMut<'tx> = ICursor<'tx, TxMut<'tx>, BucketMut<'tx>>;

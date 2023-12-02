@@ -6,8 +6,8 @@ use crate::common::tree::{MappedBranchPage, TreePage, LEAF_PAGE_ELEMENT_SIZE};
 use crate::common::{BVec, HashMap, IRef, PgId, ZERO_PGID};
 use crate::cursor::{Cursor, CursorAPI, CursorIAPI, CursorMut, CursorMutIAPI, ElemRef, ICursor};
 use crate::node::{NodeMut, NodeW};
-use crate::tx::{Tx, TxAPI, TxIAPI, TxIRef, TxImpl, TxMut, TxMutIAPI, TxR, TxW};
-use crate::Error;
+use crate::tx::{Tx, TxAPI, TxIAPI, TxImpl, TxMut, TxMutIAPI, TxR, TxW};
+use crate::{CursorMutAPI, Error};
 use crate::Error::{
   BucketExists, BucketNameRequired, BucketNotFound, IncompatibleValue, KeyRequired, KeyTooLarge,
   ValueTooLarge,
@@ -37,32 +37,26 @@ struct InlinePage {
 
 pub struct BucketStats {}
 
-pub(crate) trait BucketIAPI<'tx>: Copy + Clone + 'tx {
-  type TxType: TxIRef<'tx>;
-  type BucketType: BucketIRef<'tx>;
+pub(crate) trait BucketIAPI<'tx, T: TxIAPI<'tx>>: IRef<BucketR<'tx>, BucketP<'tx, T, Self>> + 'tx {
 
   fn new(
-    bucket_header: InBucket, tx: &'tx Self::TxType, inline_page: Option<RefPage<'tx>>,
-  ) -> Self::BucketType;
+    bucket_header: InBucket, tx: &'tx T, inline_page: Option<RefPage<'tx>>,
+  ) -> Self;
 
   fn is_writeable(&self) -> bool;
 
-  fn api_tx(self) -> &'tx Self::TxType;
-}
-
-pub(crate) trait BucketIRef<'tx>:
-  BucketIAPI<'tx> + IRef<BucketR<'tx>, BucketP<'tx, Self::BucketType>>
-{
+  fn api_tx(self) -> &'tx T;
 
   fn root(self) -> PgId {
     self.borrow_iref().0.bucket_header.root()
   }
 
-  fn i_cursor(self) -> ICursor<'tx, Self> {
+  fn i_cursor(self) -> ICursor<'tx, T, Self> {
     ICursor::new(self, self.api_tx().bump())
   }
 
-  fn api_bucket(self, name: &[u8]) -> Option<<Self as BucketIAPI<'tx>>::BucketType> {
+
+  fn api_bucket(self, name: &[u8]) -> Option<Self> {
     if self.is_writeable() {
       let b = self.borrow_iref();
       if let Some(w) = b.1 {
@@ -87,7 +81,7 @@ pub(crate) trait BucketIRef<'tx>:
     Some(child)
   }
 
-  fn open_bucket(self, mut value: &[u8]) -> <Self as BucketIAPI<'tx>>::BucketType {
+  fn open_bucket(self, mut value: &[u8]) -> Self {
     // Unaligned access requires a copy to be made.
     //TODO: use std is_aligned_to when it comes out
     if !IsAligned::is_aligned_to::<InlinePage>(value.as_ptr()) {
@@ -246,9 +240,9 @@ pub(crate) trait BucketIRef<'tx>:
   }
 }
 
-pub(crate) trait BucketMutIRef<'tx>: BucketIRef<'tx> {
-  fn api_create_bucket(self, key: &[u8]) -> crate::Result<Self::BucketType>;
-  fn api_create_bucket_if_not_exists(self, key: &[u8]) -> crate::Result<Self::BucketType>;
+pub(crate) trait BucketMutIAPI<'tx>: BucketIAPI<'tx, TxMut<'tx>> {
+  fn api_create_bucket(self, key: &[u8]) -> crate::Result<Self>;
+  fn api_create_bucket_if_not_exists(self, key: &[u8]) -> crate::Result<Self>;
   fn api_delete_bucket(self, key: &[u8]) -> crate::Result<()>;
 
   fn api_put(self, key: &[u8], value: &[u8]) -> crate::Result<()>;
@@ -270,12 +264,12 @@ pub(crate) trait BucketMutIRef<'tx>: BucketIRef<'tx> {
   fn node(self, pgid: PgId, parent: Option<NodeMut<'tx>>) -> NodeMut<'tx>;
 }
 
-pub trait BucketAPI<'tx>: Copy + Clone + 'tx {
+pub trait BucketAPI<'tx, T: TxIAPI<'tx>>: BucketIAPI<'tx, T> {
   fn root(&self) -> PgId;
 
   fn writeable(&self) -> bool;
 
-  fn cursor(&self) -> Cursor<'tx>;
+  fn cursor(&self) -> ICursor<'tx, T, Self>;
 
   fn bucket(&self, name: &[u8]) -> Self;
 
@@ -290,12 +284,11 @@ pub trait BucketAPI<'tx>: Copy + Clone + 'tx {
   fn status(&self) -> BucketStats;
 }
 
-pub trait BucketMutAPI<'tx>: BucketAPI<'tx> {
-  type BucketType: BucketMutAPI<'tx>;
+pub trait BucketMutAPI<'tx>: BucketAPI<'tx, TxMut<'tx>> {
 
-  fn create_bucket(&mut self, key: &[u8]) -> crate::Result<Self::BucketType>;
+  fn create_bucket(&mut self, key: &[u8]) -> crate::Result<Self>;
 
-  fn create_bucket_if_not_exists(&mut self, key: &[u8]) -> crate::Result<Self::BucketType>;
+  fn create_bucket_if_not_exists(&mut self, key: &[u8]) -> crate::Result<Self>;
 
   fn cursor_mut(&self) -> CursorMut<'tx>;
 
@@ -327,25 +320,27 @@ impl<'tx> BucketR<'tx> {
   }
 }
 
-pub struct BucketP<'tx, B: BucketIRef<'tx>> {
+pub struct BucketP<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> {
   root_node: Option<NodeMut<'tx>>,
   buckets: HashMap<'tx, &'tx [u8], B>,
   nodes: HashMap<'tx, PgId, NodeMut<'tx>>,
   fill_percent: f64,
+  phantom_t: PhantomData<T>
 }
 
-impl<'tx, B: BucketIRef<'tx>> BucketP<'tx, B> {
-  pub fn new_in(bump: &'tx Bump) -> BucketP<'tx, B> {
+impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> BucketP<'tx, T, B> {
+  pub fn new_in(bump: &'tx Bump) -> BucketP<'tx, T, B> {
     BucketP {
       root_node: None,
       buckets: HashMap::new_in(bump),
       nodes: HashMap::new_in(bump),
       fill_percent: DEFAULT_FILL_PERCENT,
+      phantom_t: PhantomData
     }
   }
 }
 
-pub type BucketW<'tx> = BucketP<'tx, BucketMut<'tx>>;
+pub type BucketW<'tx> = BucketP<'tx, TxMut<'tx>, BucketMut<'tx>>;
 
 pub struct BucketRW<'tx> {
   r: BucketR<'tx>,
@@ -367,13 +362,11 @@ pub struct Bucket<'tx> {
   cell: SCell<'tx, BucketR<'tx>>,
 }
 
-impl<'tx> BucketIAPI<'tx> for Bucket<'tx> {
-  type TxType = Tx<'tx>;
-  type BucketType = Bucket<'tx>;
+impl<'tx> BucketIAPI<'tx, Tx<'tx>> for Bucket<'tx> {
 
   fn new(
-    bucket_header: InBucket, tx: &'tx Self::TxType, inline_page: Option<RefPage<'tx>>,
-  ) -> Self::BucketType {
+    bucket_header: InBucket, tx: &'tx Tx<'tx>, inline_page: Option<RefPage<'tx>>,
+  ) -> Self {
     let r = BucketR {
       bucket_header,
       inline_page,
@@ -392,13 +385,13 @@ impl<'tx> BucketIAPI<'tx> for Bucket<'tx> {
   }
 
   #[inline(always)]
-  fn api_tx(self) -> &'tx Self::TxType {
+  fn api_tx(self) -> &'tx Tx<'tx> {
     &self.tx
   }
 }
 
-impl<'tx> IRef<BucketR<'tx>, BucketP<'tx, Bucket<'tx>>> for Bucket<'tx> {
-  fn borrow_iref(&self) -> (Ref<BucketR<'tx>>, Option<Ref<BucketP<'tx, Bucket<'tx>>>>) {
+impl<'tx> IRef<BucketR<'tx>, BucketP<'tx, Tx<'tx>, Bucket<'tx>>> for Bucket<'tx> {
+  fn borrow_iref(&self) -> (Ref<BucketR<'tx>>, Option<Ref<BucketP<'tx, Tx<'tx>, Bucket<'tx>>>>) {
     (self.cell.borrow(), None)
   }
 
@@ -406,15 +399,13 @@ impl<'tx> IRef<BucketR<'tx>, BucketP<'tx, Bucket<'tx>>> for Bucket<'tx> {
     &self,
   ) -> (
     RefMut<BucketR<'tx>>,
-    Option<RefMut<BucketP<'tx, Bucket<'tx>>>>,
+    Option<RefMut<BucketP<'tx, Tx<'tx>, Bucket<'tx>>>>,
   ) {
     (self.cell.borrow_mut(), None)
   }
 }
 
-impl<'tx> BucketIRef<'tx> for Bucket<'tx> {}
-
-impl<'tx> BucketAPI<'tx> for Bucket<'tx> {
+impl<'tx> BucketAPI<'tx, Tx<'tx>> for Bucket<'tx> {
   fn root(&self) -> PgId {
     todo!()
   }
@@ -423,7 +414,7 @@ impl<'tx> BucketAPI<'tx> for Bucket<'tx> {
     todo!()
   }
 
-  fn cursor(&self) -> Cursor<'tx> {
+  fn cursor(&self) -> Cursor<'tx, Tx<'tx>> {
     todo!()
   }
 
@@ -470,13 +461,11 @@ impl<'tx> IRef<BucketR<'tx>, BucketW<'tx>> for BucketMut<'tx> {
   }
 }
 
-impl<'tx> BucketIAPI<'tx> for BucketMut<'tx> {
-  type TxType = TxMut<'tx>;
-  type BucketType = BucketMut<'tx>;
+impl<'tx> BucketIAPI<'tx, TxMut<'tx>> for BucketMut<'tx> {
 
   fn new(
-    bucket_header: InBucket, tx: &'tx Self::TxType, inline_page: Option<RefPage<'tx>>,
-  ) -> Self::BucketType {
+    bucket_header: InBucket, tx: &'tx TxMut<'tx>, inline_page: Option<RefPage<'tx>>,
+  ) -> Self {
     let r = BucketR {
       bucket_header,
       inline_page,
@@ -497,16 +486,13 @@ impl<'tx> BucketIAPI<'tx> for BucketMut<'tx> {
     true
   }
 
-  fn api_tx(self) -> &'tx Self::TxType {
+  fn api_tx(self) -> &'tx TxMut<'tx> {
     &self.tx
   }
 }
 
-impl<'tx> BucketIRef<'tx> for BucketMut<'tx> {
-}
-
-impl<'tx> BucketMutIRef<'tx> for BucketMut<'tx> {
-  fn api_create_bucket(self, key: &[u8]) -> crate::Result<Self::BucketType> {
+impl<'tx> BucketMutIAPI<'tx> for BucketMut<'tx> {
+  fn api_create_bucket(self, key: &[u8]) -> crate::Result<Self> {
     if key.is_empty() {
       return Err(BucketNameRequired);
     }
@@ -539,7 +525,7 @@ impl<'tx> BucketMutIRef<'tx> for BucketMut<'tx> {
     return Ok(self.api_bucket(key).unwrap());
   }
 
-  fn api_create_bucket_if_not_exists(self, key: &[u8]) -> crate::Result<Self::BucketType> {
+  fn api_create_bucket_if_not_exists(self, key: &[u8]) -> crate::Result<Self> {
     match self.api_create_bucket(key) {
       Ok(child) => Ok(child),
       Err(error) => {
@@ -763,7 +749,7 @@ impl<'tx> BucketMutIRef<'tx> for BucketMut<'tx> {
   }
 }
 
-impl<'tx> BucketAPI<'tx> for BucketMut<'tx> {
+impl<'tx> BucketAPI<'tx, TxMut<'tx>> for BucketMut<'tx> {
   fn root(&self) -> PgId {
     todo!()
   }
@@ -772,7 +758,7 @@ impl<'tx> BucketAPI<'tx> for BucketMut<'tx> {
     todo!()
   }
 
-  fn cursor(&self) -> Cursor<'tx> {
+  fn cursor(&self) -> ICursor<'tx, TxMut<'tx>, Self> {
     todo!()
   }
 
@@ -799,40 +785,4 @@ impl<'tx> BucketAPI<'tx> for BucketMut<'tx> {
   fn status(&self) -> BucketStats {
     todo!()
   }
-}
-impl<'tx> BucketMutAPI<'tx> for BucketMut<'tx> {
-  type BucketType = Self;
-
-  fn create_bucket(&mut self, key: &[u8]) -> crate::Result<Self> {
-    todo!()
-  }
-
-  fn create_bucket_if_not_exists(&mut self, key: &[u8]) -> crate::Result<Self> {
-    todo!()
-  }
-
-  fn cursor_mut(&self) -> CursorMut<'tx> {
-    todo!()
-  }
-
-  fn delete_bucket(&mut self, key: &[u8]) -> crate::Result<()> {
-    todo!()
-  }
-
-  fn put(&mut self, key: &[u8], data: &[u8]) -> crate::Result<()> {
-    todo!()
-  }
-
-  fn delete(&mut self, key: &[u8]) -> crate::Result<()> {
-    todo!()
-  }
-
-  fn set_sequence(&mut self, v: u64) -> crate::Result<()> {
-    todo!()
-  }
-
-  fn next_sequence(&mut self) -> crate::Result<u64> {
-    todo!()
-  }
-
 }
