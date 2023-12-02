@@ -1,4 +1,4 @@
-use crate::bucket::{Bucket, BucketAPI, BucketIAPI, BucketIRef, BucketImpl, BucketMut, BucketR};
+use crate::bucket::{Bucket, BucketAPI, BucketIAPI, BucketIRef, BucketMut, BucketMutIRef, BucketR};
 use crate::common::memory::SCell;
 use crate::common::page::{CoerciblePage, RefPage, BUCKET_LEAF_FLAG};
 use crate::common::tree::{MappedBranchPage, MappedLeafPage, TreePage};
@@ -135,8 +135,8 @@ impl<'tx, B: BucketIRef<'tx>> CursorIAPI<'tx> for ICursor<'tx, B> {
     self.stack.clear();
 
     // TODO: Optimize this a bit for the internal API. BucketImpl::root_page_node
-    let root = BucketImpl::root(self.bucket);
-    let pn = BucketImpl::page_node(self.bucket, root);
+    let root = self.bucket.root();
+    let pn = self.bucket.page_node(root);
     self.stack.push(ElemRef { pn, index: 0 });
 
     self.go_to_first_element_on_the_stack();
@@ -239,8 +239,8 @@ impl<'tx, B: BucketIRef<'tx>> CursorIAPI<'tx> for ICursor<'tx, B> {
 
   fn api_last(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
     self.stack.truncate(0);
-    let root = BucketImpl::root(self.bucket);
-    let pn = BucketImpl::page_node(self.bucket, root);
+    let root = self.bucket.root();
+    let pn = self.bucket.page_node(root);
     let mut elem_ref = ElemRef { pn, index: 0 };
     elem_ref.index = elem_ref.count() - 1;
     self.stack.push(elem_ref);
@@ -282,7 +282,7 @@ impl<'tx, B: BucketIRef<'tx>> CursorIAPI<'tx> for ICursor<'tx, B> {
           Either::Right(node) => node.cell.borrow().inodes[elem.index as usize].pgid(),
         };
 
-        let pn = BucketImpl::page_node(self.bucket, pgid);
+        let pn = self.bucket.page_node(pgid);
         let mut next_elem = ElemRef { pn, index: 0 };
         next_elem.index = next_elem.count();
         self.stack.push(next_elem);
@@ -330,7 +330,7 @@ impl<'tx, B: BucketIRef<'tx>> CursorIAPI<'tx> for ICursor<'tx, B> {
 
   fn i_seek(&mut self, seek: &[u8]) -> Option<(&'tx [u8], &'tx [u8], u32)> {
     self.stack.truncate(0);
-    let root = BucketImpl::root(self.bucket);
+    let root = self.bucket.root();
     self.search(seek, root);
 
     self.key_value()
@@ -357,14 +357,14 @@ impl<'tx, B: BucketIRef<'tx>> CursorIAPI<'tx> for ICursor<'tx, B> {
           }
         }
       };
-      let pn = BucketImpl::page_node(self.bucket, pgid);
+      let pn = self.bucket.page_node(pgid);
       self.stack.push(ElemRef { pn, index: 0 })
     }
   }
 
   /// search recursively performs a binary search against a given page/node until it finds a given key.
   fn search(&mut self, key: &[u8], pgid: PgId) {
-    let pn = BucketImpl::page_node(self.bucket, pgid);
+    let pn = self.bucket.page_node(pgid);
 
     if let Either::Left(page) = &pn {
       if !page.is_leaf() && !page.is_branch() {
@@ -467,7 +467,7 @@ impl<'tx, B: BucketIRef<'tx>> CursorAPI<'tx> for ICursor<'tx, B> {
   }
 }
 
-impl<'tx> CursorMutIAPI<'tx> for CursorMut<'tx> {
+impl<'tx, B: BucketMutIRef<'tx>> CursorMutIAPI<'tx> for ICursor<'tx, B> {
   fn node(&mut self) -> NodeMut<'tx> {
     assert!(
       !self.stack.is_empty(),
@@ -485,7 +485,7 @@ impl<'tx> CursorMutIAPI<'tx> for CursorMut<'tx> {
     let mut n = {
       let first = self.stack.first().unwrap();
       match &self.stack.first().unwrap().pn {
-        Either::Left(page) => BucketImpl::node(self.bucket, page.id, None),
+        Either::Left(page) => BucketMutIRef::node(self.bucket, page.id, None),
         Either::Right(node) => *node,
       }
     };

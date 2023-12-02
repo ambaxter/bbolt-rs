@@ -1,4 +1,4 @@
-use crate::bucket::{Bucket, BucketAPI, BucketIAPI, BucketMut, BucketMutAPI};
+use crate::bucket::{Bucket, BucketAPI, BucketIAPI, BucketIRef, BucketMut, BucketMutAPI};
 use crate::common::inode::INode;
 use crate::common::memory::{CodSlice, SCell};
 use crate::common::page::{CoerciblePage, MutPage, RefPage};
@@ -28,7 +28,7 @@ impl<'tx> NodeW<'tx> {
     bucket: BucketMut<'tx>, parent: Option<NodeMut<'tx>>, page: &RefPage<'tx>,
   ) -> NodeW<'tx> {
     assert!(page.is_leaf() || page.is_branch(), "Non-tree page read");
-    let bump = bucket.tx().bump();
+    let bump = bucket.api_tx().bump();
     let mut inodes = BVec::with_capacity_in(page.count as usize, bump);
     INode::read_inodes_in(&mut inodes, page);
     let key = if inodes.len() > 0 {
@@ -60,7 +60,7 @@ impl<'tx> NodeMut<'tx> {
     bucket: BucketMut<'tx>, parent: Option<NodeMut<'tx>>, page: &RefPage<'tx>,
   ) -> NodeMut<'tx> {
     NodeMut {
-      cell: SCell::new_in(NodeW::read_in(bucket, parent, page), bucket.tx().bump()),
+      cell: SCell::new_in(NodeW::read_in(bucket, parent, page), bucket.api_tx().bump()),
     }
   }
 
