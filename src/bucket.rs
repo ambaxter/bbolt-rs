@@ -40,11 +40,7 @@ pub struct BucketStats {}
 pub(crate) trait BucketIAPI<'tx>: Copy + Clone + 'tx {
   type TxType: TxIRef<'tx>;
   type BucketType: BucketIRef<'tx>;
-}
 
-pub(crate) trait BucketIRef<'tx>:
-  BucketIAPI<'tx> + IRef<BucketR<'tx>, BucketP<'tx, Self::BucketType>>
-{
   fn new(
     bucket_header: InBucket, tx: &'tx Self::TxType, inline_page: Option<RefPage<'tx>>,
   ) -> Self::BucketType;
@@ -52,6 +48,11 @@ pub(crate) trait BucketIRef<'tx>:
   fn is_writeable(&self) -> bool;
 
   fn api_tx(self) -> &'tx Self::TxType;
+}
+
+pub(crate) trait BucketIRef<'tx>:
+  BucketIAPI<'tx> + IRef<BucketR<'tx>, BucketP<'tx, Self::BucketType>>
+{
 
   fn root(self) -> PgId {
     self.borrow_iref().0.bucket_header.root()
@@ -308,9 +309,6 @@ pub trait BucketMutAPI<'tx>: BucketAPI<'tx> {
 
   fn next_sequence(&mut self) -> crate::Result<u64>;
 
-  fn for_each_mut<F: Fn(&[u8]) -> crate::Result<()>>(&mut self, f: F) -> crate::Result<()>;
-
-  fn for_each_bucket_mut<F: Fn(&[u8]) -> crate::Result<()>>(&mut self, f: F) -> crate::Result<()>;
 }
 
 pub struct BucketR<'tx> {
@@ -372,24 +370,7 @@ pub struct Bucket<'tx> {
 impl<'tx> BucketIAPI<'tx> for Bucket<'tx> {
   type TxType = Tx<'tx>;
   type BucketType = Bucket<'tx>;
-}
 
-impl<'tx> IRef<BucketR<'tx>, BucketP<'tx, Bucket<'tx>>> for Bucket<'tx> {
-  fn borrow_iref(&self) -> (Ref<BucketR<'tx>>, Option<Ref<BucketP<'tx, Bucket<'tx>>>>) {
-    (self.cell.borrow(), None)
-  }
-
-  fn borrow_mut_iref(
-    &self,
-  ) -> (
-    RefMut<BucketR<'tx>>,
-    Option<RefMut<BucketP<'tx, Bucket<'tx>>>>,
-  ) {
-    (self.cell.borrow_mut(), None)
-  }
-}
-
-impl<'tx> BucketIRef<'tx> for Bucket<'tx> {
   fn new(
     bucket_header: InBucket, tx: &'tx Self::TxType, inline_page: Option<RefPage<'tx>>,
   ) -> Self::BucketType {
@@ -410,10 +391,28 @@ impl<'tx> BucketIRef<'tx> for Bucket<'tx> {
     false
   }
 
+  #[inline(always)]
   fn api_tx(self) -> &'tx Self::TxType {
     &self.tx
   }
 }
+
+impl<'tx> IRef<BucketR<'tx>, BucketP<'tx, Bucket<'tx>>> for Bucket<'tx> {
+  fn borrow_iref(&self) -> (Ref<BucketR<'tx>>, Option<Ref<BucketP<'tx, Bucket<'tx>>>>) {
+    (self.cell.borrow(), None)
+  }
+
+  fn borrow_mut_iref(
+    &self,
+  ) -> (
+    RefMut<BucketR<'tx>>,
+    Option<RefMut<BucketP<'tx, Bucket<'tx>>>>,
+  ) {
+    (self.cell.borrow_mut(), None)
+  }
+}
+
+impl<'tx> BucketIRef<'tx> for Bucket<'tx> {}
 
 impl<'tx> BucketAPI<'tx> for Bucket<'tx> {
   fn root(&self) -> PgId {
@@ -474,9 +473,7 @@ impl<'tx> IRef<BucketR<'tx>, BucketW<'tx>> for BucketMut<'tx> {
 impl<'tx> BucketIAPI<'tx> for BucketMut<'tx> {
   type TxType = TxMut<'tx>;
   type BucketType = BucketMut<'tx>;
-}
 
-impl<'tx> BucketIRef<'tx> for BucketMut<'tx> {
   fn new(
     bucket_header: InBucket, tx: &'tx Self::TxType, inline_page: Option<RefPage<'tx>>,
   ) -> Self::BucketType {
@@ -503,6 +500,9 @@ impl<'tx> BucketIRef<'tx> for BucketMut<'tx> {
   fn api_tx(self) -> &'tx Self::TxType {
     &self.tx
   }
+}
+
+impl<'tx> BucketIRef<'tx> for BucketMut<'tx> {
 }
 
 impl<'tx> BucketMutIRef<'tx> for BucketMut<'tx> {
@@ -835,11 +835,4 @@ impl<'tx> BucketMutAPI<'tx> for BucketMut<'tx> {
     todo!()
   }
 
-  fn for_each_mut<F: Fn(&[u8]) -> crate::Result<()>>(&mut self, f: F) -> crate::Result<()> {
-    todo!()
-  }
-
-  fn for_each_bucket_mut<F: Fn(&[u8]) -> crate::Result<()>>(&mut self, f: F) -> crate::Result<()> {
-    todo!()
-  }
 }
