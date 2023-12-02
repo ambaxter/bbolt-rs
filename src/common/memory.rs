@@ -186,3 +186,6 @@ impl IsAligned for *mut u8 {
     (self as usize & (mem::align_of::<U>() - 1)) == 0
   }
 }
+
+// As described in https://github.com/rust-lang/rust/issues/68318#issuecomment-1066221968
+pub type PhantomUnsend = PhantomData<*mut ()>;

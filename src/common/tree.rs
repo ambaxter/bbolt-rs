@@ -1,5 +1,5 @@
 use crate::common::inode::INode;
-use crate::common::memory::RWSlice;
+use crate::common::memory::{PhantomUnsend, RWSlice};
 use crate::common::page::{
   CoerciblePage, Page, BRANCH_PAGE_FLAG, BUCKET_LEAF_FLAG, LEAF_PAGE_FLAG, PAGE_HEADER_SIZE,
 };
@@ -64,6 +64,7 @@ pub struct LeafPageElement {
   pos: u32,
   key_size: u32,
   value_size: u32,
+  unsend: PhantomUnsend
 }
 
 impl LeafPageElement {
@@ -78,6 +79,7 @@ impl LeafPageElement {
       pos,
       key_size,
       value_size,
+      unsend: PhantomData
     }
   }
 
@@ -92,6 +94,7 @@ impl LeafPageElement {
         elem_ref: self,
         key_ref,
         value_ref,
+        unsend: PhantomData
       }
     }
   }
@@ -102,6 +105,7 @@ pub struct LeafElementRef<'tx> {
   elem_ref: &'tx LeafPageElement,
   key_ref: &'tx [u8],
   value_ref: &'tx [u8],
+  unsend: PhantomUnsend
 }
 
 impl<'tx> LeafElementRef<'tx> {
@@ -170,6 +174,7 @@ pub struct BranchPageElement {
   pgid: PgId,
   pos: u32,
   key_size: u32,
+  unsend: PhantomUnsend
 }
 
 impl BranchPageElement {
@@ -181,6 +186,7 @@ impl BranchPageElement {
       BranchElementRef {
         elem_ref: self,
         key_ref,
+        unsend: PhantomData
       }
     }
   }
@@ -190,6 +196,7 @@ impl BranchPageElement {
 pub struct BranchElementRef<'tx> {
   elem_ref: &'tx BranchPageElement,
   key_ref: &'tx [u8],
+  unsend: PhantomUnsend
 }
 
 impl<'tx> BranchElementRef<'tx> {

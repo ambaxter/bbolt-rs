@@ -1,4 +1,5 @@
-use crate::common::memory::CodSlice;
+use std::marker::PhantomData;
+use crate::common::memory::{CodSlice, PhantomUnsend};
 use crate::common::page::{CoerciblePage, MutPage, RefPage};
 use crate::common::tree::{
   BranchElementRef, LeafElementRef, MappedBranchPage, MappedLeafPage, TreePage,
@@ -14,6 +15,7 @@ pub struct INode<'tx> {
   pgid: PgId,
   key: CodSlice<'tx, u8>,
   value: CodSlice<'tx, u8>,
+  unsend: PhantomUnsend
 }
 
 impl<'tx> INode<'tx> {
@@ -23,6 +25,7 @@ impl<'tx> INode<'tx> {
       pgid: 0.into(),
       key: CodSlice::default_in(bump),
       value: CodSlice::default_in(bump),
+      unsend: PhantomData
     }
   }
 
@@ -32,6 +35,7 @@ impl<'tx> INode<'tx> {
       pgid,
       key: CodSlice::Mapped(key),
       value: CodSlice::Mapped(value),
+      unsend: PhantomData
     }
   }
 
@@ -43,6 +47,7 @@ impl<'tx> INode<'tx> {
       pgid,
       key: CodSlice::Owned(bump.alloc_slice_copy(key.as_ref())),
       value: CodSlice::Owned(bump.alloc_slice_copy(value.as_ref())),
+      unsend: PhantomData
     }
   }
 
