@@ -7,11 +7,11 @@ use crate::common::{BVec, HashMap, IRef, PgId, ZERO_PGID};
 use crate::cursor::{Cursor, CursorAPI, CursorIAPI, CursorMut, CursorMutIAPI, ElemRef, ICursor};
 use crate::node::{NodeMut, NodeW};
 use crate::tx::{Tx, TxAPI, TxIAPI, TxImpl, TxMut, TxMutIAPI, TxR, TxW};
-use crate::{CursorMutAPI, Error};
 use crate::Error::{
   BucketExists, BucketNameRequired, BucketNotFound, IncompatibleValue, KeyRequired, KeyTooLarge,
   ValueTooLarge,
 };
+use crate::{CursorMutAPI, Error};
 use bumpalo::Bump;
 use bytemuck::{Pod, Zeroable};
 use either::Either;
@@ -37,11 +37,10 @@ struct InlinePage {
 
 pub struct BucketStats {}
 
-pub(crate) trait BucketIAPI<'tx, T: TxIAPI<'tx>>: IRef<BucketR<'tx>, BucketP<'tx, T, Self>> + 'tx {
-
-  fn new(
-    bucket_header: InBucket, tx: &'tx T, inline_page: Option<RefPage<'tx>>,
-  ) -> Self;
+pub(crate) trait BucketIAPI<'tx, T: TxIAPI<'tx>>:
+  IRef<BucketR<'tx>, BucketP<'tx, T, Self>> + 'tx
+{
+  fn new(bucket_header: InBucket, tx: &'tx T, inline_page: Option<RefPage<'tx>>) -> Self;
 
   fn is_writeable(&self) -> bool;
 
@@ -54,7 +53,6 @@ pub(crate) trait BucketIAPI<'tx, T: TxIAPI<'tx>>: IRef<BucketR<'tx>, BucketP<'tx
   fn i_cursor(self) -> ICursor<'tx, T, Self> {
     ICursor::new(self, self.api_tx().bump())
   }
-
 
   fn api_bucket(self, name: &[u8]) -> Option<Self> {
     if self.is_writeable() {
@@ -285,7 +283,6 @@ pub trait BucketAPI<'tx, T: TxIAPI<'tx>>: BucketIAPI<'tx, T> {
 }
 
 pub trait BucketMutAPI<'tx>: BucketAPI<'tx, TxMut<'tx>> {
-
   fn create_bucket(&mut self, key: &[u8]) -> crate::Result<Self>;
 
   fn create_bucket_if_not_exists(&mut self, key: &[u8]) -> crate::Result<Self>;
@@ -301,7 +298,6 @@ pub trait BucketMutAPI<'tx>: BucketAPI<'tx, TxMut<'tx>> {
   fn set_sequence(&mut self, v: u64) -> crate::Result<()>;
 
   fn next_sequence(&mut self) -> crate::Result<u64>;
-
 }
 
 pub struct BucketR<'tx> {
@@ -325,7 +321,7 @@ pub struct BucketP<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> {
   buckets: HashMap<'tx, &'tx [u8], B>,
   nodes: HashMap<'tx, PgId, NodeMut<'tx>>,
   fill_percent: f64,
-  phantom_t: PhantomData<T>
+  phantom_t: PhantomData<T>,
 }
 
 impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> BucketP<'tx, T, B> {
@@ -335,7 +331,7 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> BucketP<'tx, T, B> {
       buckets: HashMap::new_in(bump),
       nodes: HashMap::new_in(bump),
       fill_percent: DEFAULT_FILL_PERCENT,
-      phantom_t: PhantomData
+      phantom_t: PhantomData,
     }
   }
 }
@@ -363,10 +359,7 @@ pub struct Bucket<'tx> {
 }
 
 impl<'tx> BucketIAPI<'tx, Tx<'tx>> for Bucket<'tx> {
-
-  fn new(
-    bucket_header: InBucket, tx: &'tx Tx<'tx>, inline_page: Option<RefPage<'tx>>,
-  ) -> Self {
+  fn new(bucket_header: InBucket, tx: &'tx Tx<'tx>, inline_page: Option<RefPage<'tx>>) -> Self {
     let r = BucketR {
       bucket_header,
       inline_page,
@@ -391,7 +384,12 @@ impl<'tx> BucketIAPI<'tx, Tx<'tx>> for Bucket<'tx> {
 }
 
 impl<'tx> IRef<BucketR<'tx>, BucketP<'tx, Tx<'tx>, Bucket<'tx>>> for Bucket<'tx> {
-  fn borrow_iref(&self) -> (Ref<BucketR<'tx>>, Option<Ref<BucketP<'tx, Tx<'tx>, Bucket<'tx>>>>) {
+  fn borrow_iref(
+    &self,
+  ) -> (
+    Ref<BucketR<'tx>>,
+    Option<Ref<BucketP<'tx, Tx<'tx>, Bucket<'tx>>>>,
+  ) {
     (self.cell.borrow(), None)
   }
 
@@ -462,10 +460,7 @@ impl<'tx> IRef<BucketR<'tx>, BucketW<'tx>> for BucketMut<'tx> {
 }
 
 impl<'tx> BucketIAPI<'tx, TxMut<'tx>> for BucketMut<'tx> {
-
-  fn new(
-    bucket_header: InBucket, tx: &'tx TxMut<'tx>, inline_page: Option<RefPage<'tx>>,
-  ) -> Self {
+  fn new(bucket_header: InBucket, tx: &'tx TxMut<'tx>, inline_page: Option<RefPage<'tx>>) -> Self {
     let r = BucketR {
       bucket_header,
       inline_page,

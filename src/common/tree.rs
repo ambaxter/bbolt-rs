@@ -246,6 +246,9 @@ pub trait TreePage<'tx>: Deref<Target = Page> + DerefMut {
   fn write_element(element: &mut Self::Elem, pos: u32, node: &INode);
   fn write_elements(&mut self, inodes: &[INode]) -> u32 {
     self.count = inodes.len() as u16;
+    if self.count == 0 {
+      return 0;
+    }
     let mut off = PAGE_HEADER_SIZE + self.page_element_size() * inodes.len();
     let page_ptr = unsafe { self.page_ptr() };
     izip!(self.elements_mut(), inodes).for_each(|(elem, inode)| {

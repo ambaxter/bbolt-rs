@@ -51,7 +51,6 @@ pub(crate) trait CursorMutIAPI<'tx>: CursorIAPI<'tx> {
 }
 
 pub trait CursorAPI<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>>: CursorIAPI<'tx> {
-
   fn bucket(&self) -> B;
 
   /// First moves the cursor to the first item in the bucket and returns its key and value.
@@ -78,7 +77,9 @@ pub trait CursorAPI<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>>: CursorIAPI<'tx>
   }
 }
 
-pub trait CursorMutAPI<'tx>: CursorAPI<'tx, TxMut<'tx>, BucketMut<'tx>> + CursorMutIAPI<'tx> {
+pub trait CursorMutAPI<'tx>:
+  CursorAPI<'tx, TxMut<'tx>, BucketMut<'tx>> + CursorMutIAPI<'tx>
+{
   fn delete(&mut self, key: &[u8]) -> crate::Result<()> {
     self.api_delete(key)
   }
@@ -110,7 +111,7 @@ impl<'tx> ElemRef<'tx> {
 pub struct ICursor<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> {
   bucket: B,
   stack: BVec<'tx, ElemRef<'tx>>,
-  phantom_t: PhantomData<T>
+  phantom_t: PhantomData<T>,
 }
 
 impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> ICursor<'tx, T, B> {
@@ -118,7 +119,7 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> ICursor<'tx, T, B> {
     ICursor {
       bucket: cell,
       stack: BVec::new_in(bump),
-      phantom_t: PhantomData
+      phantom_t: PhantomData,
     }
   }
 }
@@ -461,7 +462,6 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for ICursor<'tx
 }
 
 impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorAPI<'tx, T, B> for ICursor<'tx, T, B> {
-
   fn bucket(&self) -> B {
     self.bucket
   }
@@ -507,9 +507,8 @@ impl<'tx, B: BucketMutIAPI<'tx>> CursorMutIAPI<'tx> for ICursor<'tx, TxMut<'tx>,
   }
 }
 
-
 impl<'tx> CursorMutAPI<'tx> for CursorMut<'tx> {}
 
-pub type Cursor<'tx, T: TxIAPI<'tx>> = ICursor<'tx, T, Bucket<'tx>>;
+pub type Cursor<'tx, T> = ICursor<'tx, T, Bucket<'tx>>;
 
 pub type CursorMut<'tx> = ICursor<'tx, TxMut<'tx>, BucketMut<'tx>>;

@@ -40,13 +40,13 @@ impl<'tx> INode<'tx> {
   }
 
   pub fn new_owned_in<R: AsRef<[u8]>>(
-    flags: u32, pgid: PgId, key: &R, value: &R, bump: &'tx Bump,
+    flags: u32, pgid: PgId, key: R, value: R, bump: &'tx Bump,
   ) -> INode<'tx> {
     INode {
       flags,
       pgid,
-      key: CodSlice::Owned(bump.alloc_slice_copy(key.as_ref())),
-      value: CodSlice::Owned(bump.alloc_slice_copy(value.as_ref())),
+      key: CodSlice::Owned(bump.alloc_slice_copy(&key.as_ref())),
+      value: CodSlice::Owned(bump.alloc_slice_copy(&value.as_ref())),
       unsend: PhantomData,
     }
   }

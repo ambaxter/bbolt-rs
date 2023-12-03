@@ -14,7 +14,6 @@ use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 
 pub(crate) trait TxIAPI<'tx>: IRef<TxR<'tx>, TxW<'tx>> + 'tx {
-
   fn bump(&self) -> &'tx Bump;
 
   fn page_size(&self) -> usize;
@@ -29,7 +28,6 @@ pub(crate) trait TxIAPI<'tx>: IRef<TxR<'tx>, TxW<'tx>> + 'tx {
 pub trait TxMutIAPI<'tx> {
   fn freelist(&self) -> RefMut<Freelist<'tx>>;
 }
-
 
 pub(crate) struct TxImpl {}
 
@@ -81,7 +79,6 @@ impl<'tx> IRef<TxR<'tx>, TxW<'tx>> for Tx<'tx> {
 }
 
 impl<'tx> TxIAPI<'tx> for Tx<'tx> {
-
   #[inline(always)]
   fn bump(&self) -> &'tx Bump {
     todo!()
@@ -121,7 +118,6 @@ impl<'tx> IRef<TxR<'tx>, TxW<'tx>> for TxMut<'tx> {
 }
 
 impl<'tx> TxIAPI<'tx> for TxMut<'tx> {
-
   #[inline(always)]
   fn bump(&self) -> &'tx Bump {
     todo!()
@@ -137,7 +133,6 @@ impl<'tx> TxIAPI<'tx> for TxMut<'tx> {
   }
 }
 
-
 impl<'tx> TxAPI<'tx> for TxMut<'tx> {
   fn writeable(&self) -> bool {
     true
@@ -149,6 +144,5 @@ impl<'tx> TxMutIAPI<'tx> for TxMut<'tx> {
     todo!()
   }
 }
-
 
 impl<'tx> TxMutAPI<'tx> for TxMut<'tx> {}
