@@ -64,6 +64,11 @@ impl<'tx> INode<'tx> {
     inode
   }
 
+  pub fn own_in(&mut self, bump: &'tx Bump) {
+    self.key.own_in(bump);
+    self.value.own_in(bump);
+  }
+
   // WARNING! MAYBE UNSOUND/UNSAFE
   //TODO: I am not sure why I need to transmute. If deref() provides a 'tx lifetime, why is
   // Rust convinced is actually has a lifetime of 'a?

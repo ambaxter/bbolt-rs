@@ -33,6 +33,17 @@ impl<'a, T> Deref for SCell<'a, T> {
   }
 }
 
+impl<'a, T> PartialEq for SCell<'a, T>
+where
+  T: PartialEq,
+{
+  fn eq(&self, other: &Self) -> bool {
+    self.deref() == other.deref()
+  }
+}
+
+impl<'a, T> Eq for SCell<'a, T> where T: Eq {}
+
 /// Copy on Demand handling the case where we need to either point to a memory mapped slice or an Bump owned slice.
 #[derive(Copy, Clone)]
 pub enum CodSlice<'tx, T: Pod> {

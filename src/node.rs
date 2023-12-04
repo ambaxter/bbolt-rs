@@ -1,17 +1,19 @@
 use crate::bucket::{Bucket, BucketAPI, BucketIAPI, BucketMut, BucketMutAPI, BucketMutIAPI};
 use crate::common::inode::INode;
 use crate::common::memory::{CodSlice, SCell};
-use crate::common::page::{CoerciblePage, MutPage, RefPage, PAGE_HEADER_SIZE};
+use crate::common::page::{CoerciblePage, MutPage, RefPage, MIN_KEYS_PER_PAGE, PAGE_HEADER_SIZE};
 use crate::common::tree::{
   MappedBranchPage, MappedLeafPage, TreePage, BRANCH_PAGE_ELEMENT_SIZE, LEAF_PAGE_ELEMENT_SIZE,
 };
-use crate::common::{BVec, IRef, PgId};
-use crate::tx::{Tx, TxAPI, TxIAPI, TxMut};
+use crate::common::{BVec, IRef, PgId, ZERO_PGID};
+use crate::tx::{Tx, TxAPI, TxIAPI, TxMut, TxMutIAPI};
 use bumpalo::Bump;
+use hashbrown::Equivalent;
 use std::cell;
 use std::cell::{Ref, RefCell, RefMut};
 use std::marker::PhantomData;
 use std::mem;
+use std::ops::Deref;
 
 pub struct NodeW<'tx> {
   pub(crate) is_leaf: bool,
@@ -24,6 +26,14 @@ pub struct NodeW<'tx> {
   spilled: bool,
   children: BVec<'tx, NodeMut<'tx>>,
 }
+
+impl<'tx> PartialEq for NodeW<'tx> {
+  fn eq(&self, other: &Self) -> bool {
+    self.pgid == other.pgid && self.key == other.key
+  }
+}
+
+impl<'tx> Eq for NodeW<'tx> {}
 
 impl<'tx> NodeW<'tx> {
   pub(crate) fn read_in<'a>(
@@ -50,9 +60,69 @@ impl<'tx> NodeW<'tx> {
       children: BVec::with_capacity_in(page.count as usize, bump),
     }
   }
+
+  pub(crate) fn page_element_size(&self) -> usize {
+    if self.is_leaf {
+      LEAF_PAGE_ELEMENT_SIZE
+    } else {
+      BRANCH_PAGE_ELEMENT_SIZE
+    }
+  }
+
+  pub(crate) fn min_keys(&self) -> u32 {
+    if self.is_leaf {
+      1
+    } else {
+      2
+    }
+  }
+
+  pub(crate) fn size(&self) -> usize {
+    let mut size = PAGE_HEADER_SIZE;
+    let elem_size = self.page_element_size();
+    for inode in &self.inodes {
+      size += elem_size + inode.key().len() + inode.value().len();
+    }
+    size
+  }
+
+  pub(crate) fn size_less_than(&self, v: usize) -> bool {
+    let mut size = PAGE_HEADER_SIZE;
+    let elem_size = self.page_element_size();
+    for inode in &self.inodes {
+      size += elem_size + inode.key().len() + inode.value().len();
+      if size > v {
+        return false;
+      }
+    }
+    true
+  }
+
+  pub(crate) fn split_index(&self, threshold: usize) -> (usize, usize) {
+    let mut size = PAGE_HEADER_SIZE;
+    let mut index = 0;
+    if self.inodes.len() <= MIN_KEYS_PER_PAGE {
+      return (index, size);
+    }
+    for (idx, inode) in self
+      .inodes
+      .split_at(self.inodes.len() - MIN_KEYS_PER_PAGE)
+      .0
+      .iter()
+      .enumerate()
+    {
+      index = idx;
+      let elsize = self.page_element_size() + inode.key().len() + inode.value().len();
+      if index >= MIN_KEYS_PER_PAGE && size + elsize > threshold {
+        break;
+      }
+      size += elsize;
+    }
+    (index, size)
+  }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Eq, PartialEq)]
 pub struct NodeMut<'tx> {
   pub(crate) cell: SCell<'tx, NodeW<'tx>>,
 }
@@ -71,45 +141,6 @@ impl<'tx> NodeMut<'tx> {
     match parent {
       None => self,
       Some(p) => p.root(),
-    }
-  }
-
-  pub(crate) fn min_keys(self: NodeMut<'tx>) -> u32 {
-    if self.cell.borrow().is_leaf {
-      1
-    } else {
-      2
-    }
-  }
-
-  pub(crate) fn size(self: NodeMut<'tx>) -> usize {
-    let mut size = PAGE_HEADER_SIZE;
-    let elem_size = self.page_element_size();
-    let node = self.cell.borrow();
-    for inode in &node.inodes {
-      size += elem_size + inode.key().len() + inode.value().len();
-    }
-    size
-  }
-
-  pub(crate) fn size_less_than(self: NodeMut<'tx>, v: usize) -> bool {
-    let mut size = PAGE_HEADER_SIZE;
-    let elem_size = self.page_element_size();
-    let node = self.cell.borrow();
-    for inode in &node.inodes {
-      size += elem_size + inode.key().len() + inode.value().len();
-      if size > v {
-        return false;
-      }
-    }
-    true
-  }
-
-  pub(crate) fn page_element_size(self: NodeMut<'tx>) -> usize {
-    if self.cell.borrow().is_leaf {
-      LEAF_PAGE_ELEMENT_SIZE
-    } else {
-      BRANCH_PAGE_ELEMENT_SIZE
     }
   }
 
@@ -206,6 +237,7 @@ impl<'tx> NodeMut<'tx> {
   }
 
   pub(crate) fn write(self: NodeMut<'tx>, page: &mut MutPage<'tx>) {
+    // TODO: use INode.write_inodes
     let borrow = self.cell.borrow();
     if borrow.is_leaf {
       let mpage = MappedLeafPage::mut_into(page);
@@ -217,10 +249,22 @@ impl<'tx> NodeMut<'tx> {
   }
 
   pub(crate) fn split(self: NodeMut<'tx>, page_size: usize) -> BVec<'tx, NodeMut<'tx>> {
-    todo!()
+    let mut nodes = { BVec::new_in(self.cell.borrow().bucket.api_tx().bump()) };
+    let mut node = self;
+    loop {
+      let (a, b) = node.split_two(page_size);
+      nodes.push(a);
+      if b.is_none() {
+        break;
+      }
+      node = b.unwrap();
+    }
+    nodes
   }
 
-  pub(crate) fn split_two(self: NodeMut<'tx>, page_size: usize) -> (NodeMut<'tx>, NodeMut<'tx>) {
+  pub(crate) fn split_two(
+    self: NodeMut<'tx>, page_size: usize,
+  ) -> (NodeMut<'tx>, Option<NodeMut<'tx>>) {
     todo!()
   }
 
@@ -237,14 +281,35 @@ impl<'tx> NodeMut<'tx> {
   }
 
   pub(crate) fn remove_child(self: NodeMut<'tx>, target: NodeMut<'tx>) {
-    todo!()
+    let mut borrow = self.cell.borrow_mut();
+    if let Some(pos) = borrow.children.iter().position(|n| *n == target) {
+      borrow.children.remove(pos);
+    }
   }
 
+  // Descending the tree shouldn't create runtime issues
+  // We bend the rules here!
   pub(crate) fn own_in(self: NodeMut<'tx>, bump: &'tx Bump) {
-    todo!()
+    let mut borrow = self.cell.borrow_mut();
+    borrow.key.own_in(bump);
+    for inode in &mut borrow.inodes {
+      inode.own_in(bump);
+    }
+    for child in &borrow.children {
+      child.own_in(bump);
+    }
   }
 
   pub(crate) fn free(self: NodeMut<'tx>) {
-    todo!()
+    let (pgid, api_tx) = {
+      let borrow = self.cell.borrow();
+      if borrow.pgid == ZERO_PGID {
+        return;
+      }
+      (borrow.pgid, borrow.bucket.api_tx())
+    };
+    let page = api_tx.page(pgid);
+    let txid = api_tx.meta().txid();
+    api_tx.freelist().free(txid, &page);
   }
 }
