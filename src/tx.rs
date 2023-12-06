@@ -2,9 +2,9 @@ use crate::bucket::{Bucket, BucketIAPI, BucketMut};
 use crate::common::defaults::DEFAULT_PAGE_SIZE;
 use crate::common::memory::SCell;
 use crate::common::meta::Meta;
-use crate::common::page::RefPage;
+use crate::common::page::{MutPage, RefPage};
 use crate::common::selfowned::SelfOwned;
-use crate::common::{IRef, PgId};
+use crate::common::{IRef, PgId, TxId};
 use crate::freelist::Freelist;
 use crate::node::NodeMut;
 use bumpalo::Bump;
@@ -23,10 +23,14 @@ pub(crate) trait TxIAPI<'tx>: IRef<TxR<'tx>, TxW<'tx>> + 'tx {
   fn page(&self, id: PgId) -> RefPage<'tx> {
     todo!()
   }
+
+  fn txid(&self) -> TxId;
 }
 
 pub trait TxMutIAPI<'tx> {
   fn freelist(&self) -> RefMut<Freelist<'tx>>;
+
+  fn allocate(&self, count: usize) -> crate::Result<MutPage<'tx>>;
 }
 
 pub(crate) struct TxImpl {}
@@ -41,10 +45,13 @@ impl TxImpl {
   ) {
     todo!()
   }
+
 }
 
 pub trait TxAPI<'tx>: Copy + Clone + 'tx {
   fn writeable(&self) -> bool;
+
+
 }
 
 pub trait TxMutAPI<'tx>: TxAPI<'tx> {}
@@ -92,6 +99,10 @@ impl<'tx> TxIAPI<'tx> for Tx<'tx> {
   fn meta(&self) -> &Meta {
     todo!()
   }
+
+  fn txid(&self) -> TxId {
+    todo!()
+  }
 }
 
 impl<'tx> TxAPI<'tx> for Tx<'tx> {
@@ -129,6 +140,10 @@ impl<'tx> TxIAPI<'tx> for TxMut<'tx> {
   }
 
   fn meta(&self) -> &Meta {
+    todo!()
+  }
+
+  fn txid(&self) -> TxId {
     todo!()
   }
 }

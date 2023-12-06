@@ -1,4 +1,4 @@
-use crate::bucket::{Bucket, BucketAPI, BucketIAPI, BucketMut, BucketMutAPI, BucketMutIAPI};
+use crate::bucket::{Bucket, BucketAPI, BucketIAPI, BucketMut, BucketMutAPI, BucketMutIAPI, MAX_FILL_PERCENT, MIN_FILL_PERCENT};
 use crate::common::inode::INode;
 use crate::common::memory::{CodSlice, SCell};
 use crate::common::page::{CoerciblePage, MutPage, RefPage, MIN_KEYS_PER_PAGE, PAGE_HEADER_SIZE};
@@ -22,8 +22,8 @@ pub struct NodeW<'tx> {
   pub(crate) inodes: BVec<'tx, INode<'tx>>,
   bucket: BucketMut<'tx>,
   parent: Option<NodeMut<'tx>>,
-  unbalanced: bool,
-  spilled: bool,
+  is_unbalanced: bool,
+  is_spilled: bool,
   children: BVec<'tx, NodeMut<'tx>>,
 }
 
@@ -36,6 +36,39 @@ impl<'tx> PartialEq for NodeW<'tx> {
 impl<'tx> Eq for NodeW<'tx> {}
 
 impl<'tx> NodeW<'tx> {
+
+  fn new_parent_in(bucket: BucketMut<'tx>) -> NodeW<'tx> {
+    let bump = bucket.api_tx().bump();
+    NodeW {
+      is_leaf: false,
+      key: CodSlice::Owned(&[]),
+      //TODO: this usually defines an inline page
+      pgid: Default::default(),
+      inodes: BVec::new_in(bump),
+      bucket,
+      parent: None,
+      is_unbalanced: false,
+      is_spilled: false,
+      children: BVec::with_capacity_in(0, bump),
+    }
+  }
+
+  fn new_child_in(bucket: BucketMut<'tx>, is_leaf: bool, parent: NodeMut<'tx>) -> NodeW<'tx> {
+    let bump = bucket.api_tx().bump();
+    NodeW {
+      is_leaf,
+      key: CodSlice::Owned(&[]),
+      //TODO: this usually defines an inline page
+      pgid: Default::default(),
+      inodes: BVec::new_in(bump),
+      bucket,
+      parent: Some(parent),
+      is_unbalanced: false,
+      is_spilled: false,
+      children: BVec::with_capacity_in(0, bump),
+    }
+  }
+
   pub(crate) fn read_in<'a>(
     bucket: BucketMut<'tx>, parent: Option<NodeMut<'tx>>, page: &RefPage<'tx>,
   ) -> NodeW<'tx> {
@@ -55,8 +88,8 @@ impl<'tx> NodeW<'tx> {
       inodes,
       bucket,
       parent,
-      unbalanced: false,
-      spilled: false,
+      is_unbalanced: false,
+      is_spilled: false,
       children: BVec::with_capacity_in(page.count as usize, bump),
     }
   }
@@ -120,6 +153,17 @@ impl<'tx> NodeW<'tx> {
     }
     (index, size)
   }
+
+  fn write(&self, p: &mut MutPage) {
+    if self.inodes.len() >= 0xFFFF {
+      panic!("inode overflow: {} (pgid={})", self.inodes.len(), p.id);
+    }
+    if self.is_leaf {
+      MappedLeafPage::mut_into(p).write_elements(&self.inodes);
+    } else {
+      MappedBranchPage::mut_into(p).write_elements(&self.inodes);
+    }
+  }
 }
 
 #[derive(Copy, Clone, Eq, PartialEq)]
@@ -128,6 +172,18 @@ pub struct NodeMut<'tx> {
 }
 
 impl<'tx> NodeMut<'tx> {
+  fn new_parent_in(bucket: BucketMut<'tx>) -> NodeMut<'tx> {
+    NodeMut{
+      cell: SCell::new_in(NodeW::new_parent_in(bucket), bucket.api_tx().bump())
+    }
+  }
+
+  fn new_child_in(bucket: BucketMut<'tx>, is_leaf: bool, parent: NodeMut<'tx>) -> NodeMut<'tx> {
+    NodeMut{
+      cell: SCell::new_in(NodeW::new_child_in(bucket, is_leaf, parent), bucket.api_tx().bump())
+    }
+  }
+
   pub(crate) fn read_in(
     bucket: BucketMut<'tx>, parent: Option<NodeMut<'tx>>, page: &RefPage<'tx>,
   ) -> NodeMut<'tx> {
@@ -135,6 +191,9 @@ impl<'tx> NodeMut<'tx> {
       cell: SCell::new_in(NodeW::read_in(bucket, parent, page), bucket.api_tx().bump()),
     }
   }
+
+
+
 
   pub(crate) fn root(self: NodeMut<'tx>) -> NodeMut<'tx> {
     let parent = self.cell.borrow().parent;
@@ -233,7 +292,7 @@ impl<'tx> NodeMut<'tx> {
     if let Ok(exact) = index {
       borrow.inodes.remove(exact);
     }
-    borrow.unbalanced = true;
+    borrow.is_unbalanced = true;
   }
 
   pub(crate) fn write(self: NodeMut<'tx>, page: &mut MutPage<'tx>) {
@@ -248,11 +307,11 @@ impl<'tx> NodeMut<'tx> {
     }
   }
 
-  pub(crate) fn split(self: NodeMut<'tx>, page_size: usize) -> BVec<'tx, NodeMut<'tx>> {
-    let mut nodes = { BVec::new_in(self.cell.borrow().bucket.api_tx().bump()) };
+  pub(crate) fn split(self: NodeMut<'tx>, tx: &TxMut<'tx>, parent_children: &mut BVec<NodeMut<'tx>>) -> BVec<'tx, NodeMut<'tx>> {
+    let mut nodes = { BVec::new_in(tx.bump()) };
     let mut node = self;
     loop {
-      let (a, b) = node.split_two(page_size);
+      let (a, b) = node.split_two(tx.page_size(), parent_children);
       nodes.push(a);
       if b.is_none() {
         break;
@@ -263,17 +322,89 @@ impl<'tx> NodeMut<'tx> {
   }
 
   pub(crate) fn split_two(
-    self: NodeMut<'tx>, page_size: usize,
+    self: NodeMut<'tx>, page_size: usize, parent_children: &mut BVec<NodeMut<'tx>>
   ) -> (NodeMut<'tx>, Option<NodeMut<'tx>>) {
-    todo!()
+
+    let mut self_borrow = self.cell.borrow_mut();
+    if self_borrow.inodes.len() <= MIN_KEYS_PER_PAGE * 2 || self_borrow.size_less_than(page_size) {
+      return (self, None);
+    }
+    let mut fill_percent = self_borrow.bucket.borrow_iref().1.unwrap().fill_percent;
+    fill_percent = fill_percent.max(MIN_FILL_PERCENT).min(MAX_FILL_PERCENT);
+    let threshold = (page_size as f64 * fill_percent) as usize;
+    let (split_index, _) = self_borrow.split_index(threshold);
+    let parent = {
+      if let Some(parent) = self_borrow.parent {
+        parent
+      } else {
+        let parent = NodeMut::new_parent_in(self_borrow.bucket);
+        self_borrow.parent = Some(parent);
+        parent_children.push(self);
+        parent
+      }
+    };
+
+    let mut next = NodeMut::new_child_in(self_borrow.bucket, self_borrow.is_leaf, parent);
+    parent_children.push(next);
+
+    let mut next_borrow = next.cell.borrow_mut();
+    next_borrow.inodes = self_borrow.inodes.split_off(split_index);
+    (self, Some(next))
+
   }
 
-  pub(crate) fn split_index(self: NodeMut<'tx>, threshold: usize) -> (usize, usize) {
-    todo!()
-  }
 
-  pub(crate) fn spill(self: NodeMut<'tx>) -> crate::Result<()> {
-    todo!()
+  pub(crate) fn spill_child(self: NodeMut<'tx>, parent_children: &mut BVec<NodeMut<'tx>>) -> crate::Result<()> {
+    let(tx, mut children) = {
+      let mut self_borrow = self.cell.borrow_mut();
+      if self_borrow.is_spilled {
+        return Ok(());
+      }
+      let mut child_swap = BVec::with_capacity_in(0, self_borrow.bucket.api_tx().bump());
+      mem::swap(&mut self_borrow.children, &mut child_swap);
+      (self_borrow.bucket.api_tx(), child_swap)
+    };
+
+    children.sort_by_key(|probe | probe.cell.borrow().inodes[0].key());
+    let mut i: usize = 0;
+    loop {
+      if i < children.len() {
+        children[i].spill_child(&mut children)?;
+        i += 1;
+      } else {
+        break;
+      }
+    }
+
+    let nodes = self.split(tx, parent_children);
+    for node in nodes {
+      let node_borrow = node.cell.borrow_mut();
+      if node_borrow.pgid > ZERO_PGID {
+        tx.freelist().free(tx.txid(), &tx.page(node_borrow.pgid));
+        node_borrow.pgid = ZERO_PGID;
+      }
+      let mut p = tx.allocate((node_borrow.size() + tx.page_size() - 1)/ tx.page_size())?;
+      if p.id >= tx.meta().pgid() {
+        panic!("pgid {} above high water mark {}", p.id, tx.meta().pgid())
+      }
+
+      node_borrow.pgid = p.id;
+      node_borrow.write(&mut p);
+      node_borrow.is_spilled = true;
+      if let Some(parent) = node_borrow.parent {
+        let key = {
+          if node_borrow.key.len() == 0 {
+            node_borrow.inodes[0].key()
+          } else {
+            &node_borrow.key
+          }
+        };
+        parent.put(key, node_borrow.inodes[0].key(), &[], node_borrow.pgid, 0);
+        node_borrow.key = node_borrow.inodes[0].key();
+      }
+    }
+    Ok(())
+
   }
 
   pub(crate) fn rebalance(self: NodeMut<'tx>) {

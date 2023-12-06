@@ -28,6 +28,9 @@ const MAX_VALUE_SIZE: u32 = (1 << 31) - 2;
 const INLINE_PAGE_ALIGNMENT: usize = mem::align_of::<InlinePage>();
 const INLINE_PAGE_SIZE: usize = mem::size_of::<InlinePage>();
 
+pub(crate) const MIN_FILL_PERCENT: f64 = 0.1;
+pub(crate) const MAX_FILL_PERCENT: f64 = 1.0;
+
 #[repr(C)]
 #[derive(Copy, Clone, Default, Pod, Zeroable)]
 struct InlinePage {
@@ -320,7 +323,7 @@ pub struct BucketP<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> {
   root_node: Option<NodeMut<'tx>>,
   buckets: HashMap<'tx, &'tx [u8], B>,
   nodes: HashMap<'tx, PgId, NodeMut<'tx>>,
-  fill_percent: f64,
+  pub(crate) fill_percent: f64,
   phantom_t: PhantomData<T>,
 }
 
