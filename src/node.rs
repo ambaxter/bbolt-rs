@@ -1,4 +1,7 @@
-use crate::bucket::{Bucket, BucketAPI, BucketIAPI, BucketMut, BucketMutAPI, BucketMutIAPI, MAX_FILL_PERCENT, MIN_FILL_PERCENT};
+use crate::bucket::{
+  Bucket, BucketAPI, BucketIAPI, BucketMut, BucketMutAPI, BucketMutIAPI, MAX_FILL_PERCENT,
+  MIN_FILL_PERCENT,
+};
 use crate::common::inode::INode;
 use crate::common::memory::{CodSlice, SCell};
 use crate::common::page::{CoerciblePage, MutPage, RefPage, MIN_KEYS_PER_PAGE, PAGE_HEADER_SIZE};
@@ -36,7 +39,6 @@ impl<'tx> PartialEq for NodeW<'tx> {
 impl<'tx> Eq for NodeW<'tx> {}
 
 impl<'tx> NodeW<'tx> {
-
   fn new_parent_in(bucket: BucketMut<'tx>) -> NodeW<'tx> {
     let bump = bucket.api_tx().bump();
     NodeW {
@@ -102,12 +104,17 @@ impl<'tx> NodeW<'tx> {
     }
   }
 
-  pub(crate) fn min_keys(&self) -> u32 {
+  pub(crate) fn min_keys(&self) -> usize {
     if self.is_leaf {
       1
     } else {
       2
     }
+  }
+
+  pub(crate) fn key(&self) -> &'tx [u8] {
+    // I solemnly swear the key is owned by the transaction, not by the node
+    unsafe { std::mem::transmute(self.key.deref()) }
   }
 
   pub(crate) fn size(&self) -> usize {
@@ -164,6 +171,19 @@ impl<'tx> NodeW<'tx> {
       MappedBranchPage::mut_into(p).write_elements(&self.inodes);
     }
   }
+
+  fn del(&mut self, key: &'tx [u8]) {
+    if let Ok(index) = self.inodes.binary_search_by(|probe| probe.key().cmp(key)) {
+      self.inodes.remove(index);
+      self.is_unbalanced = true;
+    }
+  }
+
+  fn remove_child(&mut self, target: NodeMut<'tx>) {
+    if let Some(pos) = self.children.iter().position(|n| *n == target) {
+      self.children.remove(pos);
+    }
+  }
 }
 
 #[derive(Copy, Clone, Eq, PartialEq)]
@@ -173,14 +193,17 @@ pub struct NodeMut<'tx> {
 
 impl<'tx> NodeMut<'tx> {
   fn new_parent_in(bucket: BucketMut<'tx>) -> NodeMut<'tx> {
-    NodeMut{
-      cell: SCell::new_in(NodeW::new_parent_in(bucket), bucket.api_tx().bump())
+    NodeMut {
+      cell: SCell::new_in(NodeW::new_parent_in(bucket), bucket.api_tx().bump()),
     }
   }
 
   fn new_child_in(bucket: BucketMut<'tx>, is_leaf: bool, parent: NodeMut<'tx>) -> NodeMut<'tx> {
-    NodeMut{
-      cell: SCell::new_in(NodeW::new_child_in(bucket, is_leaf, parent), bucket.api_tx().bump())
+    NodeMut {
+      cell: SCell::new_in(
+        NodeW::new_child_in(bucket, is_leaf, parent),
+        bucket.api_tx().bump(),
+      ),
     }
   }
 
@@ -192,9 +215,6 @@ impl<'tx> NodeMut<'tx> {
     }
   }
 
-
-
-
   pub(crate) fn root(self: NodeMut<'tx>) -> NodeMut<'tx> {
     let parent = self.cell.borrow().parent;
     match parent {
@@ -205,11 +225,14 @@ impl<'tx> NodeMut<'tx> {
 
   pub(crate) fn child_at(self: NodeMut<'tx>, index: u32) -> NodeMut<'tx> {
     let (bucket, pgid) = {
-      let node = self.cell.borrow();
-      if node.is_leaf {
+      let self_borrow = self.cell.borrow();
+      if self_borrow.is_leaf {
         panic!("invalid child_at {} on leaf node", index);
       }
-      (node.bucket, node.inodes[index as usize].pgid())
+      (
+        self_borrow.bucket,
+        self_borrow.inodes[index as usize].pgid(),
+      )
     };
     bucket.node(pgid, Some(self))
   }
@@ -217,8 +240,8 @@ impl<'tx> NodeMut<'tx> {
   pub(crate) fn child_index(self: NodeMut<'tx>, child: NodeMut<'tx>) -> usize {
     let child_key = child.cell.borrow().key;
     let result = {
-      let node = self.cell.borrow();
-      node
+      let self_borrow = self.cell.borrow();
+      self_borrow
         .inodes
         .binary_search_by(|probe| probe.key().cmp(&child_key))
     };
@@ -260,54 +283,63 @@ impl<'tx> NodeMut<'tx> {
     self: NodeMut<'tx>, old_key: &'tx [u8], new_key: &'tx [u8], value: &'tx [u8], pgid: PgId,
     flags: u32,
   ) {
-    let mut borrow = self.cell.borrow_mut();
-    if pgid >= borrow.bucket.api_tx().meta().pgid() {
+    let mut self_borrow = self.cell.borrow_mut();
+    if pgid >= self_borrow.bucket.api_tx().meta().pgid() {
       panic!(
         "pgid {} above high water mark {}",
         pgid,
-        borrow.bucket.api_tx().meta().pgid()
+        self_borrow.bucket.api_tx().meta().pgid()
       );
     } else if old_key.is_empty() {
       panic!("put: zero-length old key");
     } else if new_key.is_empty() {
       panic!("put: zero-length new key");
     }
-    let index = borrow
+    let index = self_borrow
       .inodes
       .binary_search_by(|probe| probe.key().cmp(old_key));
-    let new_node =
-      INode::new_owned_in(flags, pgid, new_key, old_key, borrow.bucket.api_tx().bump());
+    let new_node = INode::new_owned_in(
+      flags,
+      pgid,
+      new_key,
+      old_key,
+      self_borrow.bucket.api_tx().bump(),
+    );
     if new_node.key().is_empty() {
       panic!("put: zero-length new key");
     }
     match index {
-      Ok(exact) => *borrow.inodes.get_mut(exact).unwrap() = new_node,
-      Err(closest) => borrow.inodes.insert(closest, new_node),
+      Ok(exact) => *self_borrow.inodes.get_mut(exact).unwrap() = new_node,
+      Err(closest) => self_borrow.inodes.insert(closest, new_node),
     }
   }
 
   pub(crate) fn del(self: NodeMut<'tx>, key: &[u8]) {
-    let mut borrow = self.cell.borrow_mut();
-    let index = borrow.inodes.binary_search_by(|probe| probe.key().cmp(key));
+    let mut self_borrow = self.cell.borrow_mut();
+    let index = self_borrow
+      .inodes
+      .binary_search_by(|probe| probe.key().cmp(key));
     if let Ok(exact) = index {
-      borrow.inodes.remove(exact);
+      self_borrow.inodes.remove(exact);
     }
-    borrow.is_unbalanced = true;
+    self_borrow.is_unbalanced = true;
   }
 
   pub(crate) fn write(self: NodeMut<'tx>, page: &mut MutPage<'tx>) {
     // TODO: use INode.write_inodes
-    let borrow = self.cell.borrow();
-    if borrow.is_leaf {
+    let self_borrow = self.cell.borrow();
+    if self_borrow.is_leaf {
       let mpage = MappedLeafPage::mut_into(page);
-      mpage.write_elements(&borrow.inodes);
+      mpage.write_elements(&self_borrow.inodes);
     } else {
       let mpage = MappedBranchPage::mut_into(page);
-      mpage.write_elements(&borrow.inodes);
+      mpage.write_elements(&self_borrow.inodes);
     }
   }
 
-  pub(crate) fn split(self: NodeMut<'tx>, tx: &TxMut<'tx>, parent_children: &mut BVec<NodeMut<'tx>>) -> BVec<'tx, NodeMut<'tx>> {
+  pub(crate) fn split(
+    self: NodeMut<'tx>, tx: &TxMut<'tx>, parent_children: &mut BVec<NodeMut<'tx>>,
+  ) -> BVec<'tx, NodeMut<'tx>> {
     let mut nodes = { BVec::new_in(tx.bump()) };
     let mut node = self;
     loop {
@@ -322,9 +354,8 @@ impl<'tx> NodeMut<'tx> {
   }
 
   pub(crate) fn split_two(
-    self: NodeMut<'tx>, page_size: usize, parent_children: &mut BVec<NodeMut<'tx>>
+    self: NodeMut<'tx>, page_size: usize, parent_children: &mut BVec<NodeMut<'tx>>,
   ) -> (NodeMut<'tx>, Option<NodeMut<'tx>>) {
-
     let mut self_borrow = self.cell.borrow_mut();
     if self_borrow.inodes.len() <= MIN_KEYS_PER_PAGE * 2 || self_borrow.size_less_than(page_size) {
       return (self, None);
@@ -344,18 +375,18 @@ impl<'tx> NodeMut<'tx> {
       }
     };
 
-    let mut next = NodeMut::new_child_in(self_borrow.bucket, self_borrow.is_leaf, parent);
+    let next = NodeMut::new_child_in(self_borrow.bucket, self_borrow.is_leaf, parent);
     parent_children.push(next);
 
     let mut next_borrow = next.cell.borrow_mut();
     next_borrow.inodes = self_borrow.inodes.split_off(split_index);
     (self, Some(next))
-
   }
 
-
-  pub(crate) fn spill_child(self: NodeMut<'tx>, parent_children: &mut BVec<NodeMut<'tx>>) -> crate::Result<()> {
-    let(tx, mut children) = {
+  pub(crate) fn spill_child(
+    self: NodeMut<'tx>, parent_children: &mut BVec<NodeMut<'tx>>,
+  ) -> crate::Result<()> {
+    let (tx, mut children) = {
       let mut self_borrow = self.cell.borrow_mut();
       if self_borrow.is_spilled {
         return Ok(());
@@ -365,7 +396,7 @@ impl<'tx> NodeMut<'tx> {
       (self_borrow.bucket.api_tx(), child_swap)
     };
 
-    children.sort_by_key(|probe | probe.cell.borrow().inodes[0].key());
+    children.sort_by_key(|probe| probe.cell.borrow().inodes[0].key());
     let mut i: usize = 0;
     loop {
       if i < children.len() {
@@ -378,12 +409,12 @@ impl<'tx> NodeMut<'tx> {
 
     let nodes = self.split(tx, parent_children);
     for node in nodes {
-      let node_borrow = node.cell.borrow_mut();
+      let mut node_borrow = node.cell.borrow_mut();
       if node_borrow.pgid > ZERO_PGID {
         tx.freelist().free(tx.txid(), &tx.page(node_borrow.pgid));
         node_borrow.pgid = ZERO_PGID;
       }
-      let mut p = tx.allocate((node_borrow.size() + tx.page_size() - 1)/ tx.page_size())?;
+      let mut p = tx.allocate((node_borrow.size() + tx.page_size() - 1) / tx.page_size())?;
       if p.id >= tx.meta().pgid() {
         panic!("pgid {} above high water mark {}", p.id, tx.meta().pgid())
       }
@@ -392,52 +423,174 @@ impl<'tx> NodeMut<'tx> {
       node_borrow.write(&mut p);
       node_borrow.is_spilled = true;
       if let Some(parent) = node_borrow.parent {
-        let key = {
+        let key: &'tx [u8] = {
           if node_borrow.key.len() == 0 {
             node_borrow.inodes[0].key()
           } else {
-            &node_borrow.key
+            node_borrow.key()
           }
         };
         parent.put(key, node_borrow.inodes[0].key(), &[], node_borrow.pgid, 0);
-        node_borrow.key = node_borrow.inodes[0].key();
+        node_borrow.key = node_borrow.inodes[0].cod_key();
       }
     }
     Ok(())
-
   }
 
+  /// rebalance attempts to combine the node with sibling nodes if the node fill
+  /// size is below a threshold or if there are not enough keys.
+  // TODO: Definitely needs optimizing
   pub(crate) fn rebalance(self: NodeMut<'tx>) {
-    todo!()
-  }
-
-  pub(crate) fn remove_child(self: NodeMut<'tx>, target: NodeMut<'tx>) {
-    let mut borrow = self.cell.borrow_mut();
-    if let Some(pos) = borrow.children.iter().position(|n| *n == target) {
-      borrow.children.remove(pos);
+    let mut self_borrow = self.cell.borrow_mut();
+    let bucket = self_borrow.bucket;
+    if !self_borrow.is_unbalanced {
+      return;
     }
+    self_borrow.is_unbalanced = false;
+    let tx = self_borrow.bucket.api_tx();
+
+    // Ignore if node is above threshold (25%) and has enough keys.
+    let threshold = tx.page_size() / 4;
+    if self_borrow.size() > threshold && self_borrow.inodes.len() > self_borrow.min_keys() {
+      return;
+    }
+
+    // Root node has special handling.
+    if self_borrow.parent.is_none() {
+      // If root node is a branch and only has one node then collapse it.
+      if !self_borrow.is_leaf && self_borrow.inodes.len() == 1 {
+        // Move root's child up.
+        let child = self_borrow
+          .bucket
+          .node(self_borrow.inodes.first().unwrap().pgid(), Some(self));
+        let mut child_borrow = child.cell.borrow_mut();
+        self_borrow.inodes.clear();
+        mem::swap(&mut self_borrow.inodes, &mut child_borrow.inodes);
+        self_borrow.children.clear();
+        mem::swap(&mut self_borrow.children, &mut child_borrow.children);
+
+        let (r, w) = self_borrow.bucket.borrow_mut_iref();
+        let mut wb = w.unwrap();
+
+        // Reparent all child nodes being moved.
+        for inode in &self_borrow.inodes {
+          if let Some(child) = wb.nodes.get_mut(&inode.pgid()) {
+            child.cell.borrow_mut().parent = Some(self);
+          }
+        }
+
+        // Remove old child.
+        child_borrow.parent = None;
+        wb.nodes.remove(&child_borrow.pgid);
+        child.free()
+      }
+      return;
+    }
+    let (r, w) = bucket.borrow_mut_iref();
+    let parent = self_borrow.parent.unwrap();
+    let mut parent_borrow = parent.cell.borrow_mut();
+
+    // If node has no keys then just remove it.
+    if self_borrow.inodes.is_empty() {
+      parent_borrow.del(self_borrow.key());
+      // drop self as we need to inspect self to remove child
+      // TODO: rewrite remove child to do the equivalency a cheaper way
+      drop(self_borrow);
+      parent_borrow.remove_child(self);
+      self.free();
+      // drop parent_borrow, and bucket to rebalance the parent
+      drop(parent_borrow);
+      drop(r);
+      drop(w);
+      parent.rebalance();
+      return;
+    }
+
+    assert!(
+      parent_borrow.inodes.len() > 1,
+      "parent must have at least 2 children"
+    );
+    drop(self_borrow);
+    drop(parent_borrow);
+
+    // Destination node is right sibling if idx == 0, otherwise left sibling.
+    let use_next_sibling = parent.child_index(self) == 0;
+    let target = if use_next_sibling {
+      self.next_sibling().unwrap()
+    } else {
+      self.prev_sibling().unwrap()
+    };
+    let mut target_borrow = target.cell.borrow_mut();
+    let (r, w) = bucket.borrow_mut_iref();
+    let mut wb = w.unwrap();
+    let mut self_borrow = self.cell.borrow_mut();
+
+    // If both this node and the target node are too small then merge them.
+    if use_next_sibling {
+      // Reparent all child nodes being moved.
+      for inode in &target_borrow.inodes {
+        if let Some(child) = wb.nodes.get(&inode.pgid()).cloned() {
+          let child_parent = child.cell.borrow().parent.unwrap();
+          child_parent.cell.borrow_mut().remove_child(child);
+          child.cell.borrow_mut().parent = Some(self);
+          self_borrow.children.push(child);
+        }
+      }
+
+      // Copy over inodes from target and remove target.
+      self_borrow.inodes.append(&mut target_borrow.inodes);
+      let parent = self_borrow.parent.unwrap();
+      parent.del(target_borrow.key());
+      let target_pgid = target_borrow.pgid;
+      drop(target_borrow);
+      parent.cell.borrow_mut().remove_child(target);
+      wb.nodes.remove(&target_pgid);
+      target.free();
+    } else {
+      // Reparent all child nodes being moved.
+      for inode in &self_borrow.inodes {
+        if let Some(child) = wb.nodes.get(&inode.pgid()).cloned() {
+          let child_parent = child.cell.borrow().parent.unwrap();
+          child_parent.cell.borrow_mut().remove_child(child);
+          child.cell.borrow_mut().parent = Some(target);
+          target_borrow.children.push(child);
+        }
+      }
+      // Copy over inodes to target and remove node.
+      target_borrow.inodes.append(&mut self_borrow.inodes);
+      let parent = self_borrow.parent.unwrap();
+      parent.del(self_borrow.key());
+      let self_pgid = self_borrow.pgid;
+      drop(self_borrow);
+      parent.cell.borrow_mut().remove_child(self);
+      wb.nodes.remove(&self_pgid);
+      self.free();
+    }
+
+    // Either this node or the target node was deleted from the parent so rebalance it.
+    parent.rebalance();
   }
 
   // Descending the tree shouldn't create runtime issues
   // We bend the rules here!
   pub(crate) fn own_in(self: NodeMut<'tx>, bump: &'tx Bump) {
-    let mut borrow = self.cell.borrow_mut();
-    borrow.key.own_in(bump);
-    for inode in &mut borrow.inodes {
+    let mut self_borrow = self.cell.borrow_mut();
+    self_borrow.key.own_in(bump);
+    for inode in &mut self_borrow.inodes {
       inode.own_in(bump);
     }
-    for child in &borrow.children {
+    for child in &self_borrow.children {
       child.own_in(bump);
     }
   }
 
   pub(crate) fn free(self: NodeMut<'tx>) {
     let (pgid, api_tx) = {
-      let borrow = self.cell.borrow();
-      if borrow.pgid == ZERO_PGID {
+      let self_borrow = self.cell.borrow();
+      if self_borrow.pgid == ZERO_PGID {
         return;
       }
-      (borrow.pgid, borrow.bucket.api_tx())
+      (self_borrow.pgid, self_borrow.bucket.api_tx())
     };
     let page = api_tx.page(pgid);
     let txid = api_tx.meta().txid();

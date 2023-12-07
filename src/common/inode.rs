@@ -74,7 +74,12 @@ impl<'tx> INode<'tx> {
   // Rust convinced is actually has a lifetime of 'a?
   #[inline]
   pub fn key<'a>(&'a self) -> &'tx [u8] {
+    // I solemnly swear the key is owned by the transaction, not by the node
     unsafe { std::mem::transmute(self.key.deref()) }
+  }
+
+  pub(crate) fn cod_key(&self) -> CodSlice<'tx, u8> {
+    self.key
   }
 
   #[inline]

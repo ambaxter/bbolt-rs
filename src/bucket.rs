@@ -322,7 +322,7 @@ impl<'tx> BucketR<'tx> {
 pub struct BucketP<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> {
   root_node: Option<NodeMut<'tx>>,
   buckets: HashMap<'tx, &'tx [u8], B>,
-  nodes: HashMap<'tx, PgId, NodeMut<'tx>>,
+  pub(crate) nodes: HashMap<'tx, PgId, NodeMut<'tx>>,
   pub(crate) fill_percent: f64,
   phantom_t: PhantomData<T>,
 }
@@ -632,7 +632,7 @@ impl<'tx> BucketMutIAPI<'tx> for BucketMut<'tx> {
         Some(_) => None,
       }
     }
-    materialize_root.and_then(|root| Some(Self::node(cell, root, None)));
+    materialize_root.and_then(|root| Some(cell.node(root, None)));
 
     let mut r = cell.borrow_mut_iref().0;
     r.bucket_header.inc_sequence();

@@ -45,13 +45,10 @@ impl TxImpl {
   ) {
     todo!()
   }
-
 }
 
 pub trait TxAPI<'tx>: Copy + Clone + 'tx {
   fn writeable(&self) -> bool;
-
-
 }
 
 pub trait TxMutAPI<'tx>: TxAPI<'tx> {}
@@ -156,6 +153,10 @@ impl<'tx> TxAPI<'tx> for TxMut<'tx> {
 
 impl<'tx> TxMutIAPI<'tx> for TxMut<'tx> {
   fn freelist(&self) -> RefMut<Freelist<'tx>> {
+    todo!()
+  }
+
+  fn allocate(&self, count: usize) -> crate::Result<MutPage<'tx>> {
     todo!()
   }
 }
