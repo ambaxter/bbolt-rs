@@ -14,8 +14,8 @@ pub enum Error {
   DatabaseOpen,
   /// InvalidDatabase is returned when both meta pages on a database are invalid.
   /// This typically occurs when a file is not a bolt database.
-  #[error("invalid database")]
-  InvalidDatabase,
+  #[error("invalid database - meta_can_read: `{0}`")]
+  InvalidDatabase(bool),
   /// InvalidMapping is returned when the database file fails to get mapped.
   #[error("database isn't correctly mapped")]
   InvalidMapping,
@@ -76,6 +76,8 @@ pub enum Error {
   #[error("incompatible value")]
   IncompatibleValue,
 
+  #[error("mmap too large")]
+  MMapTooLarge,
   // Chained errors from other sources
   #[error(transparent)]
   IO(#[from] io::Error),
@@ -88,7 +90,7 @@ impl PartialEq for Error {
     match (self, other) {
       (&Error::DatabaseNotOpen, &Error::DatabaseNotOpen) => true,
       (Error::DatabaseOpen, Error::DatabaseOpen) => true,
-      (Error::InvalidDatabase, Error::InvalidDatabase) => true,
+      (Error::InvalidDatabase(_), Error::InvalidDatabase(_)) => true,
       (Error::InvalidMapping, Error::InvalidMapping) => true,
       (Error::VersionMismatch, Error::VersionMismatch) => true,
       (Error::ChecksumMismatch, Error::ChecksumMismatch) => true,
@@ -104,6 +106,7 @@ impl PartialEq for Error {
       (Error::KeyTooLarge, Error::KeyTooLarge) => true,
       (Error::ValueTooLarge, Error::ValueTooLarge) => true,
       (Error::IncompatibleValue, Error::IncompatibleValue) => true,
+      (Error::MMapTooLarge, Error::MMapTooLarge) => true,
       _ => false,
     }
   }

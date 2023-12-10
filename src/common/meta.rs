@@ -31,7 +31,7 @@ pub struct Meta {
 impl Meta {
   pub fn validate(&self) -> Result<(), crate::Error> {
     if self.magic != MAGIC {
-      return Err(InvalidDatabase);
+      return Err(InvalidDatabase(true));
     } else if self.version != VERSION {
       return Err(VersionMismatch);
     } else if self.checksum != self.sum64() {
