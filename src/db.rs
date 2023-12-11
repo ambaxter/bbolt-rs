@@ -1,32 +1,36 @@
 use crate::arch::size::MAX_MAP_SIZE;
 use crate::common::bucket::InBucket;
 use crate::common::defaults::{DEFAULT_PAGE_SIZE, MAGIC, MAX_MMAP_STEP, PGID_NO_FREE_LIST};
+use crate::common::memory::SCell;
 use crate::common::meta::{MappedMetaPage, Meta};
 use crate::common::page::{CoerciblePage, MutPage, RefPage};
+use crate::common::selfowned::SelfOwned;
 use crate::common::tree::MappedLeafPage;
 use crate::common::{PgId, TxId};
 use crate::freelist::{Freelist, MappedFreeListPage};
 use crate::tx::TxMut;
 use crate::Error;
 use aligners::{alignment, AlignedBytes};
+use bumpalo::Bump;
 use fs4::FileExt;
 use itertools::min;
 use memmap2::{Advice, MmapOptions, MmapRaw};
-use std::cell::RefMut;
+use parking_lot::{Mutex, RwLock, RwLockReadGuard};
+use std::cell::{RefCell, RefMut};
 use std::fs::File;
 use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
-use std::{fs, io, mem};
 use std::sync::Arc;
-use parking_lot::{Mutex, RwLock};
+use std::{fs, io, mem};
 
-struct DBAccounting {
+pub struct DBRecords {
   txs: Vec<TxId>,
   rwtx: Option<TxId>,
   freelist: Freelist,
 }
 
-impl DBAccounting {
+impl DBRecords {
   /// freePages releases any pages associated with closed read-only transactions.
   fn free_pages(&mut self) {
     self.txs.sort();
@@ -46,7 +50,7 @@ impl DBAccounting {
   }
 }
 
-struct DBBackend {
+pub struct DBBackend {
   path: PathBuf,
   file: File,
   page_size: usize,
@@ -73,8 +77,7 @@ impl DBBackend {
     Ok(())
   }
 
-
-  fn meta(&self) -> Meta {
+  pub(crate) fn meta(&self) -> Meta {
     let (meta_a, meta_b) = {
       if self.meta1.meta.txid() > self.meta0.meta.txid() {
         (self.meta1.meta, self.meta0.meta)
@@ -90,11 +93,9 @@ impl DBBackend {
     panic!("bolt.db.meta: invalid meta page")
   }
 
-
   fn has_synced_free_list(&self) -> bool {
     self.meta().free_list() != PGID_NO_FREE_LIST
   }
-
 
   fn mmap_size(page_size: usize, size: u64) -> crate::Result<usize> {
     for i in 15..=30usize {
@@ -143,7 +144,6 @@ impl DBBackend {
     self.mmap_lock()?;
     Ok(())
   }
-
 
   fn get_page_size(file: &mut File) -> crate::Result<usize> {
     // Read the first meta page to determine the page size.
@@ -238,10 +238,67 @@ impl Drop for DBBackend {
   }
 }
 
-struct DBShared {
-  acct: Mutex<DBAccounting>,
-  backend: DBBackend,
+// In theory things are wired up ok. Here's hoping Miri is happy
+pub struct DBShared {
+  pub(crate) records: Mutex<DBRecords>,
+  pub(crate) backend: DBBackend,
 }
+
+pub(crate) trait DbIAPI<'tx>: 'tx {}
+
+struct Lest<'tx, T>
+where
+  T: Deref<Target = DBShared>,
+{
+  s: SCell<'tx, T>,
+}
+
+impl<'tx, T> Lest<'tx, T>
+where
+  T: Deref<Target = DBShared>,
+{
+  fn ll(&self) {
+    self.s.borrow().backend.meta0.meta.page_size() > 3;
+  }
+}
+
+struct TxOwned<T: Deref<Target = DBShared>> {
+  b: Bump,
+  l: RefCell<T>,
+}
+
+#[derive(Clone, Copy)]
+struct DBRef<'tx, T: Deref<Target = DBShared>> {
+  b: &'tx Bump,
+  l: &'tx RefCell<T>,
+}
+
+struct RORsrc<'tx, T: Deref<Target = DBShared> + Unpin> {
+  l: SelfOwned<TxOwned<T>, DBRef<'tx, T>>,
+}
+
+impl<'tx, T: Deref<Target = DBShared> + Unpin> RORsrc<'tx, T> {
+  fn new(lock: T) -> Self {
+    let shared = TxOwned {
+      b: Default::default(),
+      l: RefCell::new(lock),
+    };
+    let so = SelfOwned::new_with_map(shared, |o| DBRef { b: &o.b, l: &o.l });
+    RORsrc { l: so }
+  }
+
+  fn test(lock: RwLockReadGuard<'tx, DBShared>) -> RORsrc<'tx, RwLockReadGuard<'tx, DBShared>> {
+    RORsrc::new(lock)
+  }
+
+  fn release(self) {
+    let TxOwned { mut b, l } = self.l.into_owner();
+    b.reset();
+    let mut lock = l.into_inner();
+  }
+}
+
+pub(crate) trait DbMutIAPI<'tx>: DbIAPI<'tx> {}
 
 #[derive(Clone)]
 pub struct DB {
@@ -303,13 +360,5 @@ impl DB {
     Ok(buffer.len())
   }
 
-
-
-
   fn load_free_list(&mut self) {}
-
-
-
 }
-
-
