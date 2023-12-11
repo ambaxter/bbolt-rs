@@ -95,6 +95,7 @@ impl<'tx> DBAccess for DBHider<'tx, RwLockWriteGuard<'tx, DBShared>> {
 
 pub struct TxR<'tx> {
   b: &'tx Bump,
+  page_size: usize,
   db_ref: &'tx dyn DBAccess,
   managed: bool,
   meta: Meta,
@@ -130,12 +131,12 @@ impl<'tx> IRef<TxR<'tx>, TxW<'tx>> for Tx<'tx> {
 impl<'tx> TxIAPI<'tx> for Tx<'tx> {
   #[inline(always)]
   fn bump(&self) -> &'tx Bump {
-    todo!()
+    self.borrow_iref().0.b
   }
 
   #[inline(always)]
   fn page_size(&self) -> usize {
-    DEFAULT_PAGE_SIZE.bytes() as usize
+    self.borrow_iref().0.page_size
   }
 
   fn meta(&self) -> &Meta {
@@ -173,7 +174,7 @@ impl<'tx> IRef<TxR<'tx>, TxW<'tx>> for TxMut<'tx> {
 impl<'tx> TxIAPI<'tx> for TxMut<'tx> {
   #[inline(always)]
   fn bump(&self) -> &'tx Bump {
-    todo!()
+    self.borrow_iref().0.b
   }
 
   #[inline(always)]
@@ -216,6 +217,7 @@ struct TxSelfRef<'tx, T: TxIAPI<'tx>> {
 
 impl<'tx, T: TxIAPI<'tx>> TxSelfRef<'tx, T> {
   fn new_tx(o: &'tx mut TxOwned<RwLockReadGuard<'tx, DBShared>>) -> TxSelfRef<'tx, Tx<'tx>> {
+    let page_size = o.db.borrow().backend.meta().page_size() as usize;
     let mut uninit: MaybeUninit<TxSelfRef<'tx, Tx<'tx>>> = MaybeUninit::uninit();
     let ptr = uninit.as_mut_ptr();
     unsafe {
@@ -225,6 +227,7 @@ impl<'tx, T: TxIAPI<'tx>> TxSelfRef<'tx, T> {
         cell: SCell::new_in(
           TxR {
             b: &o.b,
+            page_size,
             db_ref: db,
             managed: false,
             meta: db.get().backend.meta(),
@@ -242,6 +245,7 @@ impl<'tx, T: TxIAPI<'tx>> TxSelfRef<'tx, T> {
   fn new_tx_mut(
     o: &'tx mut TxOwned<RwLockWriteGuard<'tx, DBShared>>,
   ) -> TxSelfRef<'tx, TxMut<'tx>> {
+    let page_size = o.db.borrow().backend.meta().page_size() as usize;
     let mut uninit: MaybeUninit<TxSelfRef<'tx, TxMut<'tx>>> = MaybeUninit::uninit();
     let ptr = uninit.as_mut_ptr();
     unsafe {
@@ -252,6 +256,7 @@ impl<'tx, T: TxIAPI<'tx>> TxSelfRef<'tx, T> {
           TxRW {
             r: TxR {
               b: &o.b,
+              page_size,
               db_ref: db,
               managed: false,
               meta: db.get().backend.meta(),
