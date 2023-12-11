@@ -94,16 +94,48 @@ impl DB {
     Ok(())
   }
 
+  fn get_page_size(file: &mut File) -> crate::Result<usize> {
+    // Read the first meta page to determine the page size.
+    let meta0_can_read = match Self::get_page_size_from_first_meta(file) {
+      Ok(page_size) => return Ok(page_size),
+      // We cannot read the page size from page 0, but can read page 0.
+      Err(Error::InvalidDatabase(meta_can_read)) => meta_can_read,
+      Err(e) => return Err(e),
+    };
+
+    // Read the second meta page to determine the page size.
+    let meta1_can_read = match Self::get_page_size_from_second_meta(file) {
+      Ok(page_size) => return Ok(page_size),
+      // We cannot read the page size from page 1, but can read page 1.
+      Err(Error::InvalidDatabase(meta_can_read)) => meta_can_read,
+      Err(e) => return Err(e),
+    };
+
+    // If we can't read the page size from both pages, but can read
+    // either page, then we assume it's the same as the OS or the one
+    // given, since that's how the page size was chosen in the first place.
+    //
+    // If both pages are invalid, and (this OS uses a different page size
+    // from what the database was created with or the given page size is
+    // different from what the database was created with), then we are out
+    // of luck and cannot access the database.
+    if meta0_can_read || meta1_can_read {
+      return Ok(DEFAULT_PAGE_SIZE.bytes() as usize);
+    }
+    Err(Error::InvalidDatabase(false))
+  }
+
+  //TODO: These can be done better
   fn get_page_size_from_first_meta(file: &mut File) -> crate::Result<usize> {
-    let mut buf = [0u8; 4096];
+    // we need this aligned to Page so we don't hit any runtime issues
+    let mut buffer = AlignedBytes::<alignment::Page>::new_zeroed(4096);
     let mut meta_can_read = false;
-    //TODO: Definitely make this look prettier
     if let Ok(Some(meta_page)) = file
       .seek(SeekFrom::Start(0))
-      .and_then(|_| file.read(&mut buf))
+      .and_then(|_| file.read(&mut buffer))
       .map(|_| {
         meta_can_read = true;
-        MappedMetaPage::coerce_ref(&RefPage::new(buf.as_ptr()))
+        MappedMetaPage::coerce_ref(&RefPage::new(buffer.as_ptr()))
       })
     {
       if meta_page.meta.validate().is_ok() {
@@ -115,7 +147,29 @@ impl DB {
 
   fn get_page_size_from_second_meta(file: &mut File) -> crate::Result<usize> {
     let mut meta_can_read = false;
-    todo!()
+    let metadata = file.metadata()?;
+    let file_size = metadata.len();
+    // we need this aligned to Page so we don't hit any runtime issues
+    let mut buffer = AlignedBytes::<alignment::Page>::new_zeroed(4096);
+    for i in 0..15u64 {
+      let pos = 1024u64 << i;
+      if pos >= file_size - 1024 {
+        break;
+      }
+      file.seek(SeekFrom::Start(pos))?;
+      let bw = file.read(&mut buffer)? as u64;
+      if bw == buffer.len() as u64 || bw == file_size - pos {
+        meta_can_read = true;
+        if let Some(meta_page) = MappedMetaPage::coerce_ref(&RefPage::new(buffer.as_ptr())) {
+          if meta_page.meta.validate().is_ok() {
+            return Ok(meta_page.meta.page_size() as usize);
+          }
+        }
+      }
+      // reset the buffer
+      buffer.fill(0);
+    }
+    Err(Error::InvalidDatabase(meta_can_read))
   }
 
   fn mmap_size(page_size: usize, size: u64) -> crate::Result<usize> {
