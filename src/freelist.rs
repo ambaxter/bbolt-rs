@@ -1,10 +1,10 @@
 use crate::common::page::Page;
 use crate::common::page::{CoerciblePage, FREE_LIST_PAGE_FLAG, PAGE_HEADER_SIZE};
 use crate::common::utility::is_sorted;
-use crate::common::{BVec, HashMap, HashSet, PgId, TxId};
-use bumpalo::Bump;
+use crate::common::{PgId, TxId};
 use bytemuck::{bytes_of, Contiguous};
 use itertools::Itertools;
+use std::collections::{HashMap, HashSet};
 use std::iter::{repeat, zip};
 use std::marker::PhantomData;
 use std::mem;
@@ -118,28 +118,28 @@ impl MappedFreeListPage {
 }
 
 #[derive(Debug)]
-pub struct Freelist<'tx> {
-  ids: BVec<'tx, PgId>,
-  allocs: HashMap<'tx, PgId, TxId>,
-  pub pending: HashMap<'tx, TxId, TxPending<'tx>>,
-  cache: HashSet<'tx, PgId>,
-  free_maps: HashMap<'tx, u64, HashSet<'tx, PgId>>,
-  forward_map: HashMap<'tx, PgId, u64>,
-  backward_map: HashMap<'tx, PgId, u64>,
+pub struct Freelist {
+  ids: Vec<PgId>,
+  allocs: HashMap<PgId, TxId>,
+  pub pending: HashMap<TxId, TxPending>,
+  cache: HashSet<PgId>,
+  free_maps: HashMap<u64, HashSet<PgId>>,
+  forward_map: HashMap<PgId, u64>,
+  backward_map: HashMap<PgId, u64>,
 }
 
 #[derive(Clone, Debug)]
-pub struct TxPending<'tx> {
-  pub ids: BVec<'tx, PgId>,
-  pub alloc_tx: BVec<'tx, TxId>,
+pub struct TxPending {
+  pub ids: Vec<PgId>,
+  pub alloc_tx: Vec<TxId>,
   pub last_release_begin: TxId,
 }
 
-impl<'tx> TxPending<'tx> {
-  pub(crate) fn new_in(bump: &'tx Bump) -> TxPending<'tx> {
+impl<'tx> TxPending {
+  pub(crate) fn new() -> TxPending {
     TxPending {
-      ids: BVec::new_in(bump),
-      alloc_tx: BVec::new_in(bump),
+      ids: Vec::new(),
+      alloc_tx: Vec::new(),
       last_release_begin: Default::default(),
     }
   }
@@ -151,16 +151,16 @@ pub(crate) fn merge_pids(dst: &mut [PgId], a: &[PgId], b: &[PgId]) {
   }
 }
 
-impl<'tx> Freelist<'tx> {
-  pub(crate) fn new_in(bump: &'tx Bump) -> Self {
+impl Freelist {
+  pub(crate) fn new() -> Self {
     Freelist {
-      ids: BVec::new_in(bump),
-      allocs: HashMap::new_in(bump),
-      pending: HashMap::new_in(bump),
-      cache: HashSet::new_in(bump),
-      free_maps: HashMap::new_in(bump),
-      forward_map: HashMap::new_in(bump),
-      backward_map: HashMap::new_in(bump),
+      ids: Vec::new(),
+      allocs: HashMap::new(),
+      pending: HashMap::new(),
+      cache: HashSet::new(),
+      free_maps: HashMap::new(),
+      forward_map: HashMap::new(),
+      backward_map: HashMap::new(),
     }
   }
 
@@ -229,7 +229,7 @@ impl<'tx> Freelist<'tx> {
     self
       .free_maps
       .entry(size)
-      .or_insert_with(|| HashSet::new_in(self.ids.bump()))
+      .or_insert_with(|| HashSet::new())
       .insert(start);
   }
 
@@ -279,10 +279,7 @@ impl<'tx> Freelist<'tx> {
     assert!(u64::from(p.id) > 1, "Cannot free page 0 or 1: {}", p.id);
 
     // Free page and all its overflow pages.
-    let txp = self
-      .pending
-      .entry(txid)
-      .or_insert_with(|| TxPending::new_in(self.ids.bump()));
+    let txp = self.pending.entry(txid).or_insert_with(|| TxPending::new());
     let alloc_tx_id = {
       if let Some(allocs_tx_id) = self.allocs.remove(&p.id) {
         allocs_tx_id
@@ -517,8 +514,7 @@ mod tests {
   #[test]
   // Ensure that a page is added to a transaction's freelist.
   fn freelist_free() {
-    let bump = Bump::new();
-    let mut f = Freelist::new_in(&bump);
+    let mut f = Freelist::new();
     let p = Page {
       id: pg(12),
       ..Default::default()
@@ -530,8 +526,7 @@ mod tests {
   #[test]
   // Ensure that a page and its overflow is added to a transaction's freelist.
   fn freelist_free_overflow() {
-    let bump = Bump::new();
-    let mut f = Freelist::new_in(&bump);
+    let mut f = Freelist::new();
     let p = Page {
       id: pg(12),
       overflow: 3,
@@ -547,8 +542,7 @@ mod tests {
   #[test]
   // Ensure that a transaction's free pages can be released.
   fn freelist_release() {
-    let bump = Bump::new();
-    let mut f = Freelist::new_in(&bump);
+    let mut f = Freelist::new();
     f.free(
       tx(100),
       &Page {
@@ -696,7 +690,7 @@ mod tests {
     let bump = Bump::new();
 
     for c in release_range_tests.iter() {
-      let mut f = Freelist::new_in(&bump);
+      let mut f = Freelist::new();
       let ids: Vec<PgId> = c
         .pages_in
         .iter()
@@ -728,8 +722,7 @@ mod tests {
 
   #[test]
   fn freelist_allocate() {
-    let bump = Bump::new();
-    let mut f = Freelist::new_in(&bump);
+    let mut f = Freelist::new();
     f.read_ids(
       &[3, 4, 5, 6, 7, 9, 12, 13, 18]
         .iter()
@@ -758,8 +751,7 @@ mod tests {
     mapped_page
       .page_ids_mut(2)
       .copy_from_slice(&[pg(23), pg(50)]);
-    let bump = Bump::new();
-    let mut f = Freelist::new_in(&bump);
+    let mut f = Freelist::new();
     f.read(&mapped_page);
     assert_eq!(&[23, 50], f.free_page_ids().as_slice());
   }
@@ -767,31 +759,29 @@ mod tests {
   #[test]
   fn freelist_write() {
     let mut mapped_page = mapped_page::<MappedFreeListPage>(4096);
-    let bump = Bump::new();
-    let mut f = Freelist::new_in(&bump);
+    let mut f = Freelist::new();
     f.read_ids(&[pg(12), pg(39)]);
     f.pending
       .entry(tx(100))
-      .or_insert_with(|| TxPending::new_in(&bump))
+      .or_insert_with(|| TxPending::new())
       .ids
       .extend_from_slice(&[pg(28), pg(11)]);
     f.pending
       .entry(tx(101))
-      .or_insert_with(|| TxPending::new_in(&bump))
+      .or_insert_with(|| TxPending::new())
       .ids
       .extend_from_slice(&[pg(3)]);
 
     f.write(&mut mapped_page);
 
-    let mut f2 = Freelist::new_in(&bump);
+    let mut f2 = Freelist::new();
     f2.read(&mapped_page);
     assert_eq!(&[3, 11, 12, 28, 39], f2.free_page_ids().as_slice());
   }
 
   #[test]
   fn freelist_read_ids_and_free_page_ids() {
-    let bump = Bump::new();
-    let mut f = Freelist::new_in(&bump);
+    let mut f = Freelist::new();
     let exp = [3, 4, 5, 6, 7, 9, 12, 13, 18]
       .iter()
       .cloned()
@@ -801,7 +791,7 @@ mod tests {
 
     assert_eq!(exp, f.free_page_ids().as_slice());
 
-    let mut f2 = Freelist::new_in(&bump);
+    let mut f2 = Freelist::new();
     let exp2 = &[];
     f2.read_ids(exp2);
     assert_eq!(exp2, f2.free_page_ids().as_slice());

@@ -4,7 +4,7 @@ use crate::common::memory::SCell;
 use crate::common::meta::Meta;
 use crate::common::page::{MutPage, RefPage};
 use crate::common::selfowned::SelfOwned;
-use crate::common::{IRef, PgId, TxId};
+use crate::common::{HashMap, IRef, PgId, TxId};
 use crate::freelist::Freelist;
 use crate::node::NodeMut;
 use bumpalo::Bump;
@@ -28,7 +28,7 @@ pub(crate) trait TxIAPI<'tx>: IRef<TxR<'tx>, TxW<'tx>> + 'tx {
 }
 
 pub trait TxMutIAPI<'tx> {
-  fn freelist(&self) -> RefMut<Freelist<'tx>>;
+  fn freelist(&self) -> RefMut<Freelist>;
 
   fn allocate(&self, count: usize) -> crate::Result<MutPage<'tx>>;
 }
@@ -55,10 +55,14 @@ pub trait TxMutAPI<'tx>: TxAPI<'tx> {}
 
 pub struct TxR<'tx> {
   bump: &'tx Bump,
+  managed: bool,
+  meta: Meta,
   p: PhantomData<&'tx u8>,
 }
 
 pub struct TxW<'tx> {
+  pages: HashMap<'tx, PgId, RefPage<'tx>>,
+  commit_handlers: Box<dyn FnMut()>,
   p: PhantomData<&'tx u8>,
 }
 
@@ -152,7 +156,7 @@ impl<'tx> TxAPI<'tx> for TxMut<'tx> {
 }
 
 impl<'tx> TxMutIAPI<'tx> for TxMut<'tx> {
-  fn freelist(&self) -> RefMut<Freelist<'tx>> {
+  fn freelist(&self) -> RefMut<Freelist> {
     todo!()
   }
 
@@ -162,3 +166,4 @@ impl<'tx> TxMutIAPI<'tx> for TxMut<'tx> {
 }
 
 impl<'tx> TxMutAPI<'tx> for TxMut<'tx> {}
+

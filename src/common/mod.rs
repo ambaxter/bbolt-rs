@@ -102,6 +102,14 @@ impl From<TxId> for u64 {
   }
 }
 
+impl Add<u64> for TxId {
+  type Output = TxId;
+
+  fn add(self, rhs: u64) -> Self::Output {
+    TxId(self.0 + rhs)
+  }
+}
+
 impl Sub<u64> for TxId {
   type Output = TxId;
 

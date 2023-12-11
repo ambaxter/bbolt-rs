@@ -21,3 +21,4 @@ fnv_rs = "0.4.3"
 thiserror = "1.0.50"
 anyhow = "1.0.75"
 fs4 = { version = "0.7.0", features = ["sync"] }
+parking_lot = "0.12.1"
