@@ -2,7 +2,7 @@ use crate::bucket::{Bucket, BucketAPI, BucketIAPI, BucketMut, BucketMutIAPI, Buc
 use crate::common::memory::SCell;
 use crate::common::page::{CoerciblePage, RefPage, BUCKET_LEAF_FLAG};
 use crate::common::tree::{MappedBranchPage, MappedLeafPage, TreePage};
-use crate::common::{BVec, IRef, PgId};
+use crate::common::{BVec, PgId, SplitRef};
 use crate::node::NodeMut;
 use crate::tx::{Tx, TxAPI, TxIAPI, TxMut};
 use crate::Error::IncompatibleValue;
@@ -47,12 +47,12 @@ pub trait CursorMutAPI<'tx>: CursorAPI<'tx> {
 
 pub struct CursorImpl<'tx, C: CursorIAPI<'tx>> {
   c: C,
-  p: PhantomData<&'tx u64>
+  p: PhantomData<&'tx u64>,
 }
 
 impl<'tx, C: CursorIAPI<'tx>> CursorImpl<'tx, C> {
   pub(crate) fn new(c: C) -> Self {
-    CursorImpl{
+    CursorImpl {
       c,
       p: Default::default(),
     }
@@ -83,12 +83,12 @@ impl<'tx, C: CursorIAPI<'tx>> CursorAPI<'tx> for CursorImpl<'tx, C> {
 
 pub struct CursorMutImpl<'tx, C: CursorMutIAPI<'tx>> {
   c: C,
-  p: PhantomData<&'tx u64>
+  p: PhantomData<&'tx u64>,
 }
 
 impl<'tx, C: CursorMutIAPI<'tx>> CursorMutImpl<'tx, C> {
   pub(crate) fn new(c: C) -> Self {
-    CursorMutImpl{
+    CursorMutImpl {
       c,
       p: Default::default(),
     }

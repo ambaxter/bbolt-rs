@@ -4,7 +4,7 @@ use crate::common::memory::SCell;
 use crate::common::meta::Meta;
 use crate::common::page::{MutPage, PageInfo, RefPage};
 use crate::common::selfowned::SelfOwned;
-use crate::common::{BVec, HashMap, IRef, PgId, TxId};
+use crate::common::{BVec, HashMap, PgId, SplitRef, TxId};
 use crate::db::DBShared;
 use crate::freelist::Freelist;
 use crate::node::NodeMut;
@@ -172,7 +172,7 @@ impl Sub<TxStats> for TxStats {
 }
 
 //TODO: now that the layout has been filled out these aren't needed anymore I don't think
-pub(crate) trait TxIAPI<'tx>: IRef<TxR<'tx>, TxW<'tx>> + 'tx {
+pub(crate) trait TxIAPI<'tx>: SplitRef<TxR<'tx>, TxW<'tx>> + 'tx {
   fn bump(&self) -> &'tx Bump;
 
   fn page_size(&self) -> usize;
@@ -265,12 +265,12 @@ pub struct Tx<'tx> {
   cell: SCell<'tx, TxR<'tx>>,
 }
 
-impl<'tx> IRef<TxR<'tx>, TxW<'tx>> for Tx<'tx> {
-  fn borrow_iref(&self) -> (Ref<TxR<'tx>>, Option<Ref<TxW<'tx>>>) {
+impl<'tx> SplitRef<TxR<'tx>, TxW<'tx>> for Tx<'tx> {
+  fn split_ref(&self) -> (Ref<TxR<'tx>>, Option<Ref<TxW<'tx>>>) {
     (RefCell::borrow(&*self.cell), None)
   }
 
-  fn borrow_mut_iref(&self) -> (RefMut<TxR<'tx>>, Option<RefMut<TxW<'tx>>>) {
+  fn split_ref_mut(&self) -> (RefMut<TxR<'tx>>, Option<RefMut<TxW<'tx>>>) {
     (self.cell.borrow_mut(), None)
   }
 }
@@ -300,13 +300,13 @@ pub struct TxMut<'tx> {
   cell: SCell<'tx, TxRW<'tx>>,
 }
 
-impl<'tx> IRef<TxR<'tx>, TxW<'tx>> for TxMut<'tx> {
-  fn borrow_iref(&self) -> (Ref<TxR<'tx>>, Option<Ref<TxW<'tx>>>) {
+impl<'tx> SplitRef<TxR<'tx>, TxW<'tx>> for TxMut<'tx> {
+  fn split_ref(&self) -> (Ref<TxR<'tx>>, Option<Ref<TxW<'tx>>>) {
     let (r, w) = Ref::map_split(RefCell::borrow(&*self.cell), |b| (&b.r, &b.w));
     (r, Some(w))
   }
 
-  fn borrow_mut_iref(&self) -> (RefMut<TxR<'tx>>, Option<RefMut<TxW<'tx>>>) {
+  fn split_ref_mut(&self) -> (RefMut<TxR<'tx>>, Option<RefMut<TxW<'tx>>>) {
     let (r, w) = RefMut::map_split(self.cell.borrow_mut(), |b| (&mut b.r, &mut b.w));
     (r, Some(w))
   }
