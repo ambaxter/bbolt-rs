@@ -348,7 +348,7 @@ impl Freelist {
     self.merge_spans(m);
   }
 
-  /// releaseRange moves pending pages allocated within an extent [begin,end] to the free list.
+  /// releaseRange moves pending pages allocated within an extent \[begin,end\] to the free list.
   pub(crate) fn release_range(&mut self, begin: TxId, end: TxId) {
     if begin > end {
       return;

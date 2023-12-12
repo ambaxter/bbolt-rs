@@ -2,23 +2,24 @@ use crate::bucket::{Bucket, BucketIAPI, BucketMut};
 use crate::common::defaults::DEFAULT_PAGE_SIZE;
 use crate::common::memory::SCell;
 use crate::common::meta::Meta;
-use crate::common::page::{MutPage, RefPage};
+use crate::common::page::{MutPage, PageInfo, RefPage};
 use crate::common::selfowned::SelfOwned;
 use crate::common::{BVec, HashMap, IRef, PgId, TxId};
-use crate::cursor::Cursor;
 use crate::db::DBShared;
 use crate::freelist::Freelist;
 use crate::node::NodeMut;
 use crate::{BucketAPI, CursorAPI, CursorMutAPI};
 use bumpalo::Bump;
 use parking_lot::{RwLockReadGuard, RwLockWriteGuard};
+use std::borrow::Cow;
 use std::cell;
 use std::cell::{Ref, RefCell, RefMut};
 use std::marker::{PhantomData, PhantomPinned};
 use std::mem::MaybeUninit;
-use std::ops::{Deref, DerefMut};
+use std::ops::{AddAssign, Deref, DerefMut, Sub};
 use std::pin::Pin;
 use std::ptr::addr_of_mut;
+use std::time::Duration;
 
 pub trait TxAPI<'tx>: 'tx {
   type CursorType: CursorAPI<'tx>;
@@ -87,8 +88,88 @@ pub trait TxMutAPI<'tx>: TxAPI<'tx> {
   fn commit(self) -> crate::Result<()>;
 }
 
-struct PageInfo {}
-pub struct TxStats {}
+#[derive(Copy, Clone)]
+pub struct TxStats {
+  // Page statistics.
+  //
+  /// number of page allocations
+  page_count: i64,
+  /// total bytes allocated
+  page_alloc: i64,
+
+  // Cursor statistics.
+  //
+  /// number of cursors created
+  cursor_count: i64,
+
+  // Node statistics
+  //
+  /// number of node allocations
+  node_count: i64,
+  /// number of node dereferences
+  node_deref: i64,
+
+  // Rebalance statistics.
+  //
+  /// number of node rebalances
+  rebalance: i64,
+  /// total time spent rebalancing
+  rebalance_time: Duration,
+
+  // Split/Spill statistics.
+  //
+  /// number of nodes split
+  split: i64,
+  /// number of nodes spilled
+  spill: i64,
+  /// total time spent spilling
+  spill_time: Duration,
+
+  // Write statistics.
+  //
+  /// number of writes performed
+  write: i64,
+  /// total time spent writing to disk
+  write_time: Duration,
+}
+
+impl AddAssign<TxStats> for TxStats {
+  fn add_assign(&mut self, rhs: TxStats) {
+    self.page_count += rhs.page_count;
+    self.page_alloc += rhs.page_alloc;
+    self.cursor_count += rhs.cursor_count;
+    self.node_count += rhs.node_count;
+    self.node_deref += rhs.node_deref;
+    self.rebalance += rhs.rebalance;
+    self.rebalance_time += rhs.rebalance_time;
+    self.split += rhs.split;
+    self.spill += rhs.spill;
+    self.spill_time += rhs.spill_time;
+    self.write += rhs.write;
+    self.write_time += rhs.write_time;
+  }
+}
+
+impl Sub<TxStats> for TxStats {
+  type Output = TxStats;
+
+  fn sub(self, rhs: TxStats) -> Self::Output {
+    TxStats {
+      page_count: self.page_count - rhs.page_count,
+      page_alloc: self.page_alloc - rhs.page_alloc,
+      cursor_count: self.cursor_count - rhs.cursor_count,
+      node_count: self.node_count - rhs.node_count,
+      node_deref: self.node_deref - rhs.node_deref,
+      rebalance: self.rebalance - rhs.rebalance,
+      rebalance_time: self.rebalance_time - rhs.rebalance_time,
+      split: self.split - rhs.split,
+      spill: self.spill - rhs.spill,
+      spill_time: self.spill_time - rhs.spill_time,
+      write: self.write - rhs.write,
+      write_time: self.write_time - rhs.write_time,
+    }
+  }
+}
 
 //TODO: now that the layout has been filled out these aren't needed anymore I don't think
 pub(crate) trait TxIAPI<'tx>: IRef<TxR<'tx>, TxW<'tx>> + 'tx {

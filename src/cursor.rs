@@ -11,7 +11,7 @@ use either::Either;
 use std::io;
 use std::marker::PhantomData;
 
-pub trait CursorAPI<'tx> {
+pub trait CursorAPI<'tx>: 'tx {
   /// First moves the cursor to the first item in the bucket and returns its key and value.
   /// If the bucket is empty then a nil key and value are returned.
   /// The returned key and value are only valid for the life of the transaction.
@@ -43,6 +43,84 @@ pub trait CursorMutAPI<'tx>: CursorAPI<'tx> {
   /// Delete removes the current key/value under the cursor from the bucket.
   /// Delete fails if current key/value is a bucket or if the transaction is not writable.
   fn delete(&mut self, key: &[u8]) -> crate::Result<()>;
+}
+
+pub struct CursorImpl<'tx, C: CursorIAPI<'tx>> {
+  c: C,
+  p: PhantomData<&'tx u64>
+}
+
+impl<'tx, C: CursorIAPI<'tx>> CursorImpl<'tx, C> {
+  pub(crate) fn new(c: C) -> Self {
+    CursorImpl{
+      c,
+      p: Default::default(),
+    }
+  }
+}
+
+impl<'tx, C: CursorIAPI<'tx>> CursorAPI<'tx> for CursorImpl<'tx, C> {
+  fn first(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
+    self.c.api_first()
+  }
+
+  fn last(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
+    self.c.api_last()
+  }
+
+  fn next(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
+    self.c.api_next()
+  }
+
+  fn prev(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
+    self.c.api_prev()
+  }
+
+  fn seek(&mut self, seek: &[u8]) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
+    self.c.api_seek(seek)
+  }
+}
+
+pub struct CursorMutImpl<'tx, C: CursorMutIAPI<'tx>> {
+  c: C,
+  p: PhantomData<&'tx u64>
+}
+
+impl<'tx, C: CursorMutIAPI<'tx>> CursorMutImpl<'tx, C> {
+  pub(crate) fn new(c: C) -> Self {
+    CursorMutImpl{
+      c,
+      p: Default::default(),
+    }
+  }
+}
+
+impl<'tx, C: CursorMutIAPI<'tx>> CursorAPI<'tx> for CursorMutImpl<'tx, C> {
+  fn first(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
+    self.c.api_first()
+  }
+
+  fn last(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
+    self.c.api_last()
+  }
+
+  fn next(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
+    self.c.api_next()
+  }
+
+  fn prev(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
+    self.c.api_prev()
+  }
+
+  fn seek(&mut self, seek: &[u8]) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
+    self.c.api_seek(seek)
+  }
+}
+
+impl<'tx, C: CursorMutIAPI<'tx>> CursorMutAPI<'tx> for CursorMutImpl<'tx, C> {
+  fn delete(&mut self, key: &[u8]) -> crate::Result<()> {
+    self.c.api_delete(key)
+  }
 }
 
 pub(crate) trait CursorIAPI<'tx>: Clone + 'tx {
@@ -499,8 +577,3 @@ impl<'tx, B: BucketMutIAPI<'tx>> CursorMutIAPI<'tx> for ICursor<'tx, TxMut<'tx>,
     Ok(())
   }
 }
-
-//TODO: Rework to be generic over bucket type
-pub type Cursor<'tx, T> = ICursor<'tx, T, Bucket<'tx>>;
-
-pub type CursorMut<'tx> = ICursor<'tx, TxMut<'tx>, BucketMut<'tx>>;

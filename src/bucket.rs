@@ -4,7 +4,7 @@ use crate::common::meta::MetaPage;
 use crate::common::page::{CoerciblePage, Page, RefPage, BUCKET_LEAF_FLAG, PAGE_HEADER_SIZE};
 use crate::common::tree::{MappedBranchPage, TreePage, LEAF_PAGE_ELEMENT_SIZE};
 use crate::common::{BVec, HashMap, IRef, PgId, ZERO_PGID};
-use crate::cursor::{Cursor, CursorAPI, CursorIAPI, CursorMut, CursorMutIAPI, ElemRef, ICursor};
+use crate::cursor::{CursorAPI, CursorIAPI, CursorImpl, CursorMutIAPI, CursorMutImpl, ElemRef, ICursor};
 use crate::node::{NodeMut, NodeW};
 use crate::tx::{Tx, TxAPI, TxIAPI, TxImpl, TxMut, TxMutIAPI, TxR, TxW};
 use crate::Error::{
@@ -19,7 +19,7 @@ use std::alloc::Layout;
 use std::cell::{Ref, RefCell, RefMut};
 use std::marker::PhantomData;
 use std::mem;
-use std::ops::{Deref, DerefMut};
+use std::ops::{AddAssign, Deref, DerefMut};
 use std::ptr::slice_from_raw_parts_mut;
 
 pub trait BucketAPI<'tx>: 'tx
@@ -32,7 +32,7 @@ where
   fn root(&self) -> PgId;
 
   /// Writable returns whether the bucket is writable.
-  fn writeable(&self) -> bool;
+  fn is_writeable(&self) -> bool;
 
   /// Cursor creates a cursor associated with the bucket.
   /// The cursor is only valid as long as the transaction is open.
@@ -42,12 +42,12 @@ where
   /// Bucket retrieves a nested bucket by name.
   /// Returns nil if the bucket does not exist.
   /// The bucket instance is only valid for the lifetime of the transaction.
-  fn bucket(&self, name: &[u8]) -> Self;
+  fn bucket(&self, name: &[u8]) -> Option<Self>;
 
   /// Get retrieves the value for a key in the bucket.
   /// Returns a nil value if the key does not exist or if the key is a nested bucket.
   /// The returned value is only valid for the life of the transaction.
-  fn get(&self, key: &[u8]) -> &'tx [u8];
+  fn get(&self, key: &[u8]) -> Option<&'tx [u8]>;
 
   /// Sequence returns the current integer for the bucket without incrementing it.
   fn sequence(&self) -> u64;
@@ -105,6 +105,191 @@ pub trait BucketMutAPI<'tx>: BucketAPI<'tx> {
   fn next_sequence(&mut self) -> crate::Result<u64>;
 }
 
+pub struct BucketImpl<'tx> {
+  b: Bucket<'tx>
+}
+
+impl<'tx> BucketAPI<'tx> for BucketImpl<'tx> {
+  type CursorType = CursorImpl<'tx, ICursor<'tx, Tx<'tx>, Bucket<'tx>>>;
+
+  fn root(&self) -> PgId {
+    self.b.root()
+  }
+
+  fn is_writeable(&self) -> bool {
+    self.b.is_writeable()
+  }
+
+  fn cursor(&self) -> Self::CursorType {
+    CursorImpl::new(ICursor::new(self.b, self.b.tx.bump()))
+  }
+
+  fn bucket(&self, name: &[u8]) -> Option<Self> {
+    self.b.api_bucket(name).map(|b| BucketImpl{ b })
+  }
+
+  fn get(&self, key: &[u8]) -> Option<&'tx [u8]> {
+    self.b.api_get(key)
+  }
+
+  fn sequence(&self) -> u64 {
+    self.b.api_sequence()
+  }
+
+  fn for_each<F: Fn(&[u8]) -> crate::Result<()>>(&self, f: F) -> crate::Result<()> {
+    self.b.api_for_each(f)
+  }
+
+  fn for_each_bucket<F: Fn(&[u8]) -> crate::Result<()>>(&self, f: F) -> crate::Result<()> {
+    self.b.api_for_each_bucket(f)
+  }
+
+  fn stats(&self) -> BucketStats {
+    todo!()
+  }
+}
+
+pub struct BucketMutImpl<'tx> {
+  b: BucketMut<'tx>
+}
+
+impl<'tx> BucketAPI<'tx> for BucketMutImpl<'tx> {
+  type CursorType = CursorImpl<'tx, ICursor<'tx, TxMut<'tx>, BucketMut<'tx>>>;
+
+  fn root(&self) -> PgId {
+    self.b.root()
+  }
+
+  fn is_writeable(&self) -> bool {
+    self.b.is_writeable()
+  }
+
+  fn cursor(&self) -> Self::CursorType {
+    CursorImpl::new(ICursor::new(self.b, self.b.tx.bump()))
+  }
+
+  fn bucket(&self, name: &[u8]) -> Option<Self> {
+    self.b.api_bucket(name).map(|b| BucketMutImpl{b})
+  }
+
+  fn get(&self, key: &[u8]) -> Option<&'tx [u8]> {
+    self.b.api_get(key)
+  }
+
+  fn sequence(&self) -> u64 {
+    self.b.api_sequence()
+  }
+
+  fn for_each<F: Fn(&[u8]) -> crate::Result<()>>(&self, f: F) -> crate::Result<()> {
+    self.b.api_for_each(f)
+  }
+
+  fn for_each_bucket<F: Fn(&[u8]) -> crate::Result<()>>(&self, f: F) -> crate::Result<()> {
+    self.b.api_for_each_bucket(f)
+  }
+
+  fn stats(&self) -> BucketStats {
+    todo!()
+  }
+}
+
+impl<'tx> BucketMutAPI<'tx> for BucketMutImpl<'tx>{
+  type CursorMutType = CursorMutImpl<'tx, ICursor<'tx, TxMut<'tx>, BucketMut<'tx>>>;
+
+  fn create_bucket(&mut self, key: &[u8]) -> crate::Result<Self> {
+    self.b.api_create_bucket(key).map(|b| BucketMutImpl{b})
+  }
+
+  fn create_bucket_if_not_exists(&mut self, key: &[u8]) -> crate::Result<Self> {
+    self.b.api_create_bucket_if_not_exists(key).map(|b| BucketMutImpl{b})
+  }
+
+  fn cursor_mut(&self) -> Self::CursorMutType {
+    CursorMutImpl::new(ICursor::new(self.b, self.b.tx.bump()))
+  }
+
+  fn delete_bucket(&mut self, key: &[u8]) -> crate::Result<()> {
+    self.b.api_delete_bucket(key)
+  }
+
+  fn put(&mut self, key: &[u8], data: &[u8]) -> crate::Result<()> {
+    self.b.api_put(key, data)
+  }
+
+  fn delete(&mut self, key: &[u8]) -> crate::Result<()> {
+    self.b.api_delete(key)
+  }
+
+  fn set_sequence(&mut self, v: u64) -> crate::Result<()> {
+    todo!()
+  }
+
+  fn next_sequence(&mut self) -> crate::Result<u64> {
+    todo!()
+  }
+}
+
+/// BucketStats records statistics about resources used by a bucket.
+#[derive(Copy, Clone)]
+pub struct BucketStats {
+  // Page count statistics.
+  /// number of logical branch pages
+  branch_page_n: i64,
+  /// number of physical branch overflow pages
+  branch_overflow_n: i64,
+  /// number of logical leaf pages
+  leaf_page_n: i64,
+  /// number of physical leaf overflow pages
+  leaf_overflow_n: i64,
+
+  // Tree statistics.
+  /// number of keys/value pairs
+  key_n: i64,
+  /// number of levels in B+tree
+  depth: i64,
+
+  // Page size utilization.
+  /// bytes allocated for physical branch pages
+  branch_alloc: i64,
+  /// bytes actually used for branch data
+  branch_in_use: i64,
+  /// bytes allocated for physical leaf pages
+  leaf_alloc: i64,
+  /// bytes actually used for leaf data
+  leaf_in_use: i64,
+
+  // Bucket statistics
+  /// total number of buckets including the top bucket
+  bucket_n: i64,
+  /// total number on inlined buckets
+  inline_bucket_n: i64,
+  /// bytes used for inlined buckets (also accounted for in LeafInuse)
+  inline_bucket_in_use: i64,
+}
+
+impl AddAssign<BucketStats> for BucketStats {
+  fn add_assign(&mut self, rhs: BucketStats) {
+    self.branch_page_n += rhs.branch_page_n;
+    self.branch_overflow_n += rhs.branch_overflow_n;
+    self.leaf_page_n += rhs.leaf_page_n;
+    self.leaf_overflow_n += rhs.leaf_overflow_n;
+
+    self.key_n += rhs.key_n;
+    if self.depth < rhs.depth {
+      self.depth = rhs.depth;
+    }
+
+    self.branch_alloc += rhs.branch_alloc;
+    self.branch_in_use += rhs.branch_in_use;
+    self.leaf_alloc += rhs.leaf_alloc;
+    self.leaf_in_use += rhs.leaf_in_use;
+
+    self.bucket_n += rhs.bucket_n;
+    self.inline_bucket_n += rhs.inline_bucket_n;
+    self.inline_bucket_in_use += rhs.inline_bucket_in_use;
+  }
+}
+
 const DEFAULT_FILL_PERCENT: f64 = 0.5;
 const MAX_KEY_SIZE: u32 = 32768;
 const MAX_VALUE_SIZE: u32 = (1 << 31) - 2;
@@ -120,8 +305,6 @@ struct InlinePage {
   header: InBucket,
   page: Page,
 }
-
-pub struct BucketStats {}
 
 pub(crate) trait BucketIAPI<'tx, T: TxIAPI<'tx>>:
   IRef<BucketR<'tx>, BucketP<'tx, T, Self>> + 'tx

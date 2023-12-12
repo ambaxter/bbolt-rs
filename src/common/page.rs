@@ -251,3 +251,10 @@ impl Page {
     }
   }
 }
+
+pub struct PageInfo {
+  id: u64,
+  t: Cow<'static, str>,
+  count: u64,
+  overflow_count: u64,
+}

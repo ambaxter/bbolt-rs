@@ -8,7 +8,7 @@ use crate::common::selfowned::SelfOwned;
 use crate::common::tree::MappedLeafPage;
 use crate::common::{PgId, TxId};
 use crate::freelist::{Freelist, MappedFreeListPage};
-use crate::tx::{Tx, TxMut};
+use crate::tx::{Tx, TxMut, TxStats};
 use crate::{Error, TxAPI, TxMutAPI};
 use aligners::{alignment, AlignedBytes};
 use bumpalo::Bump;
@@ -19,7 +19,7 @@ use parking_lot::{Mutex, RwLock, RwLockReadGuard};
 use std::cell::{RefCell, RefMut};
 use std::fs::File;
 use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
-use std::ops::Deref;
+use std::ops::{Deref, Sub};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::{fs, io, mem};
@@ -28,16 +28,136 @@ pub trait DbAPI: Clone
 where
   Self: Sized,
 {
-  fn open() -> Self;
+  type TxType<'tx>: TxAPI<'tx>
+  where
+    Self: 'tx;
+
+  /// Open creates and opens a database at the given path.
+  /// If the file does not exist then it will be created automatically.
+  /// Passing in nil options will cause Bolt to open the database with the default options.
+  fn open<T: Into<PathBuf>>(path: T) -> crate::Result<Self>;
+
+  /// Close releases all database resources.
+  /// It will block waiting for any open transactions to finish
+  /// before closing the database and returning.
   fn close(self);
+
+  /// Begin starts a new transaction.
+  /// Multiple read-only transactions can be used concurrently but only one
+  /// write transaction can be used at a time. Starting multiple write transactions
+  /// will cause the calls to block and be serialized until the current write
+  /// transaction finishes.
+  ///
+  /// Transactions should not be dependent on one another. Opening a read
+  /// transaction and a write transaction in the same goroutine can cause the
+  /// writer to deadlock because the database periodically needs to re-mmap itself
+  /// as it grows and it cannot do that while a read transaction is open.
+  ///
+  /// If a long running read transaction (for example, a snapshot transaction) is
+  /// needed, you might want to set DB.InitialMmapSize to a large enough value
+  /// to avoid potential blocking of write transaction.
+  ///
+  /// IMPORTANT: You must close read-only transactions after you are finished or
+  /// else the database will not reclaim old pages.
+  fn begin<'tx>(&'tx self) -> Self::TxType<'tx>;
+
+  /// View executes a function within the context of a managed read-only transaction.
+  /// Any error that is returned from the function is returned from the View() method.
+  ///
+  /// Attempting to manually rollback within the function will cause a panic.
+  fn view<'tx, F: FnMut(Tx<'tx>) -> crate::Result<()>>(&mut self, f: F) -> crate::Result<()>;
+
+  /// Stats retrieves ongoing performance stats for the database.
+  /// This is only updated when a transaction closes.
+  fn stats(&self) -> DbStats;
 }
 
-pub trait DbMutAPI: DbAPI {}
+pub trait DbMutAPI: DbAPI {
+  type TxMutType<'tx>: TxMutAPI<'tx>
+  where
+    Self: 'tx;
+
+  /// Begin starts a new transaction.
+  /// Multiple read-only transactions can be used concurrently but only one
+  /// write transaction can be used at a time. Starting multiple write transactions
+  /// will cause the calls to block and be serialized until the current write
+  /// transaction finishes.
+  ///
+  /// Transactions should not be dependent on one another. Opening a read
+  /// transaction and a write transaction in the same goroutine can cause the
+  /// writer to deadlock because the database periodically needs to re-mmap itself
+  /// as it grows and it cannot do that while a read transaction is open.
+  ///
+  /// If a long running read transaction (for example, a snapshot transaction) is
+  /// needed, you might want to set DB.InitialMmapSize to a large enough value
+  /// to avoid potential blocking of write transaction.
+  ///
+  /// IMPORTANT: You must close read-only transactions after you are finished or
+  /// else the database will not reclaim old pages.
+  fn begin_mut<'tx>(&'tx mut self) -> Self::TxMutType<'tx>;
+
+  /// Update executes a function within the context of a read-write managed transaction.
+  /// If no error is returned from the function then the transaction is committed.
+  /// If an error is returned then the entire transaction is rolled back.
+  /// Any error that is returned from the function or returned from the commit is
+  /// returned from the Update() method.
+  ///
+  /// Attempting to manually commit or rollback within the function will cause a panic.
+  fn update<'tx, F: FnMut(TxMut<'tx>) -> crate::Result<()>>(&mut self, f: F) -> crate::Result<()>;
+
+  /// Sync executes fdatasync() against the database file handle.
+  ///
+  /// This is not necessary under normal operation, however, if you use NoSync
+  /// then it allows you to force the database file to sync against the disk.
+  fn sync(&mut self) -> crate::Result<()>;
+}
+
+#[derive(Copy, Clone)]
+/// Stats represents statistics about the database.
+pub struct DbStats {
+  /// global, ongoing stats.
+  tx_stats: TxStats,
+
+  // Freelist stats
+  /// total number of free pages on the freelist
+  free_page_n: i64,
+  /// total number of pending pages on the freelist
+  pending_page_n: i64,
+  /// total bytes allocated in free pages
+  free_alloc: i64,
+  /// total bytes used by the freelist
+  free_list_in_use: i64,
+
+  // transaction stats
+  /// total number of started read transactions
+  tx_n: i64,
+  /// number of currently open read transactions
+  open_tx_n: i64,
+}
+
+impl Sub<&DbStats> for &DbStats {
+  type Output = DbStats;
+
+  fn sub(self, rhs: &DbStats) -> Self::Output {
+    DbStats {
+      tx_stats: self.tx_stats - rhs.tx_stats,
+      free_page_n: self.free_page_n - rhs.free_page_n,
+      pending_page_n: self.pending_page_n - rhs.pending_page_n,
+      free_alloc: self.free_alloc - rhs.free_alloc,
+      free_list_in_use: self.free_list_in_use - rhs.free_list_in_use,
+      tx_n: self.tx_n - rhs.tx_n,
+      open_tx_n: self.open_tx_n - rhs.open_tx_n,
+    }
+  }
+}
+
+pub struct DbInfo {}
 
 pub struct DBRecords {
   txs: Vec<TxId>,
   rwtx: Option<TxId>,
   freelist: Freelist,
+  stats: DbStats,
 }
 
 impl DBRecords {
@@ -371,22 +491,4 @@ impl DB {
   }
 
   fn load_free_list(&mut self) {}
-
-  pub fn close(self) {}
-
-  pub fn begin(&self) -> impl TxAPI<Tx> {
-    todo!()
-  }
-
-  pub fn begin_mut(&mut self) -> impl TxMutAPI {
-    todo!()
-  }
-
-  pub fn update<'tx, F: FnMut(TxMut<'tx>)>(&'tx mut self, f: F) {}
-
-  pub fn view<'tx, F: FnMut(Tx<'tx>)>(&'tx self, f: F) {}
-
-  pub fn batch<'tx, F: FnMut(TxMut<'tx>)>(&mut self, f: F) {}
-
-  pub fn sync(&mut self) {}
 }
