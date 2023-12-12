@@ -22,6 +22,89 @@ use std::mem;
 use std::ops::{Deref, DerefMut};
 use std::ptr::slice_from_raw_parts_mut;
 
+pub trait BucketAPI<'tx>: 'tx
+where
+  Self: Sized,
+{
+  type CursorType: CursorAPI<'tx>;
+
+  /// Root returns the root of the bucket.
+  fn root(&self) -> PgId;
+
+  /// Writable returns whether the bucket is writable.
+  fn writeable(&self) -> bool;
+
+  /// Cursor creates a cursor associated with the bucket.
+  /// The cursor is only valid as long as the transaction is open.
+  /// Do not use a cursor after the transaction is closed.
+  fn cursor(&self) -> Self::CursorType;
+
+  /// Bucket retrieves a nested bucket by name.
+  /// Returns nil if the bucket does not exist.
+  /// The bucket instance is only valid for the lifetime of the transaction.
+  fn bucket(&self, name: &[u8]) -> Self;
+
+  /// Get retrieves the value for a key in the bucket.
+  /// Returns a nil value if the key does not exist or if the key is a nested bucket.
+  /// The returned value is only valid for the life of the transaction.
+  fn get(&self, key: &[u8]) -> &'tx [u8];
+
+  /// Sequence returns the current integer for the bucket without incrementing it.
+  fn sequence(&self) -> u64;
+
+  /// ForEach executes a function for each key/value pair in a bucket.
+  /// Because ForEach uses a Cursor, the iteration over keys is in lexicographical order.
+  /// If the provided function returns an error then the iteration is stopped and
+  /// the error is returned to the caller. The provided function must not modify
+  /// the bucket; this will result in undefined behavior.
+  fn for_each<F: Fn(&[u8]) -> crate::Result<()>>(&self, f: F) -> crate::Result<()>;
+
+  fn for_each_bucket<F: Fn(&[u8]) -> crate::Result<()>>(&self, f: F) -> crate::Result<()>;
+
+  /// Stats returns stats on a bucket.
+  fn stats(&self) -> BucketStats;
+}
+
+pub trait BucketMutAPI<'tx>: BucketAPI<'tx> {
+  type CursorMutType: CursorMutAPI<'tx>;
+
+  /// CreateBucket creates a new bucket at the given key and returns the new bucket.
+  /// Returns an error if the key already exists, if the bucket name is blank, or if the bucket name is too long.
+  /// The bucket instance is only valid for the lifetime of the transaction.
+  fn create_bucket(&mut self, key: &[u8]) -> crate::Result<Self>;
+
+  /// CreateBucketIfNotExists creates a new bucket if it doesn't already exist and returns a reference to it.
+  /// Returns an error if the bucket name is blank, or if the bucket name is too long.
+  /// The bucket instance is only valid for the lifetime of the transaction.
+  fn create_bucket_if_not_exists(&mut self, key: &[u8]) -> crate::Result<Self>;
+
+  /// Cursor creates a cursor associated with the bucket.
+  /// The cursor is only valid as long as the transaction is open.
+  /// Do not use a cursor after the transaction is closed.
+  fn cursor_mut(&self) -> Self::CursorMutType;
+
+  /// DeleteBucket deletes a bucket at the given key.
+  /// Returns an error if the bucket does not exist, or if the key represents a non-bucket value.
+  fn delete_bucket(&mut self, key: &[u8]) -> crate::Result<()>;
+
+  /// Put sets the value for a key in the bucket.
+  /// If the key exist then its previous value will be overwritten.
+  /// Supplied value must remain valid for the life of the transaction.
+  /// Returns an error if the bucket was created from a read-only transaction, if the key is blank, if the key is too large, or if the value is too large.
+  fn put(&mut self, key: &[u8], data: &[u8]) -> crate::Result<()>;
+
+  /// Delete removes a key from the bucket.
+  /// If the key does not exist then nothing is done and a nil error is returned.
+  /// Returns an error if the bucket was created from a read-only transaction.
+  fn delete(&mut self, key: &[u8]) -> crate::Result<()>;
+
+  /// SetSequence updates the sequence number for the bucket.
+  fn set_sequence(&mut self, v: u64) -> crate::Result<()>;
+
+  /// NextSequence returns an autoincrementing integer for the bucket.
+  fn next_sequence(&mut self) -> crate::Result<u64>;
+}
+
 const DEFAULT_FILL_PERCENT: f64 = 0.5;
 const MAX_KEY_SIZE: u32 = 32768;
 const MAX_VALUE_SIZE: u32 = (1 << 31) - 2;
@@ -265,44 +348,6 @@ pub(crate) trait BucketMutIAPI<'tx>: BucketIAPI<'tx, TxMut<'tx>> {
   fn node(self, pgid: PgId, parent: Option<NodeMut<'tx>>) -> NodeMut<'tx>;
 }
 
-pub trait BucketAPI<'tx, T: TxIAPI<'tx>>: BucketIAPI<'tx, T> {
-  fn root(&self) -> PgId;
-
-  fn writeable(&self) -> bool;
-
-  fn cursor(&self) -> ICursor<'tx, T, Self>;
-
-  fn bucket(&self, name: &[u8]) -> Self;
-
-  fn get(&self, key: &[u8]) -> &'tx [u8];
-
-  fn sequence(&self) -> u64;
-
-  fn for_each<F: Fn(&[u8]) -> crate::Result<()>>(&self, f: F) -> crate::Result<()>;
-
-  fn for_each_bucket<F: Fn(&[u8]) -> crate::Result<()>>(&self, f: F) -> crate::Result<()>;
-
-  fn status(&self) -> BucketStats;
-}
-
-pub trait BucketMutAPI<'tx>: BucketAPI<'tx, TxMut<'tx>> {
-  fn create_bucket(&mut self, key: &[u8]) -> crate::Result<Self>;
-
-  fn create_bucket_if_not_exists(&mut self, key: &[u8]) -> crate::Result<Self>;
-
-  fn cursor_mut(&self) -> CursorMut<'tx>;
-
-  fn delete_bucket(&mut self, key: &[u8]) -> crate::Result<()>;
-
-  fn put(&mut self, key: &[u8], data: &[u8]) -> crate::Result<()>;
-
-  fn delete(&mut self, key: &[u8]) -> crate::Result<()>;
-
-  fn set_sequence(&mut self, v: u64) -> crate::Result<()>;
-
-  fn next_sequence(&mut self) -> crate::Result<u64>;
-}
-
 pub struct BucketR<'tx> {
   pub(crate) bucket_header: InBucket,
   pub(crate) inline_page: Option<RefPage<'tx>>,
@@ -403,44 +448,6 @@ impl<'tx> IRef<BucketR<'tx>, BucketP<'tx, Tx<'tx>, Bucket<'tx>>> for Bucket<'tx>
     Option<RefMut<BucketP<'tx, Tx<'tx>, Bucket<'tx>>>>,
   ) {
     (self.cell.borrow_mut(), None)
-  }
-}
-
-impl<'tx> BucketAPI<'tx, Tx<'tx>> for Bucket<'tx> {
-  fn root(&self) -> PgId {
-    todo!()
-  }
-
-  fn writeable(&self) -> bool {
-    todo!()
-  }
-
-  fn cursor(&self) -> Cursor<'tx, Tx<'tx>> {
-    todo!()
-  }
-
-  fn bucket(&self, name: &[u8]) -> Self {
-    todo!()
-  }
-
-  fn get(&self, key: &[u8]) -> &'tx [u8] {
-    todo!()
-  }
-
-  fn sequence(&self) -> u64 {
-    todo!()
-  }
-
-  fn for_each<F: Fn(&[u8]) -> crate::Result<()>>(&self, f: F) -> crate::Result<()> {
-    todo!()
-  }
-
-  fn for_each_bucket<F: Fn(&[u8]) -> crate::Result<()>>(&self, f: F) -> crate::Result<()> {
-    todo!()
-  }
-
-  fn status(&self) -> BucketStats {
-    todo!()
   }
 }
 
@@ -744,43 +751,5 @@ impl<'tx> BucketMutIAPI<'tx> for BucketMut<'tx> {
     let mut wb = w.unwrap();
     wb.nodes.insert(pgid, n);
     n
-  }
-}
-
-impl<'tx> BucketAPI<'tx, TxMut<'tx>> for BucketMut<'tx> {
-  fn root(&self) -> PgId {
-    todo!()
-  }
-
-  fn writeable(&self) -> bool {
-    todo!()
-  }
-
-  fn cursor(&self) -> ICursor<'tx, TxMut<'tx>, Self> {
-    todo!()
-  }
-
-  fn bucket(&self, name: &[u8]) -> Self {
-    todo!()
-  }
-
-  fn get(&self, key: &[u8]) -> &'tx [u8] {
-    todo!()
-  }
-
-  fn sequence(&self) -> u64 {
-    todo!()
-  }
-
-  fn for_each<F: Fn(&[u8]) -> crate::Result<()>>(&self, f: F) -> crate::Result<()> {
-    todo!()
-  }
-
-  fn for_each_bucket<F: Fn(&[u8]) -> crate::Result<()>>(&self, f: F) -> crate::Result<()> {
-    todo!()
-  }
-
-  fn status(&self) -> BucketStats {
-    todo!()
   }
 }

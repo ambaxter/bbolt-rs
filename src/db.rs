@@ -8,8 +8,8 @@ use crate::common::selfowned::SelfOwned;
 use crate::common::tree::MappedLeafPage;
 use crate::common::{PgId, TxId};
 use crate::freelist::{Freelist, MappedFreeListPage};
-use crate::tx::TxMut;
-use crate::Error;
+use crate::tx::{Tx, TxMut};
+use crate::{Error, TxAPI, TxMutAPI};
 use aligners::{alignment, AlignedBytes};
 use bumpalo::Bump;
 use fs4::FileExt;
@@ -23,6 +23,16 @@ use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::{fs, io, mem};
+
+pub trait DbAPI: Clone
+where
+  Self: Sized,
+{
+  fn open() -> Self;
+  fn close(self);
+}
+
+pub trait DbMutAPI: DbAPI {}
 
 pub struct DBRecords {
   txs: Vec<TxId>,
@@ -361,4 +371,22 @@ impl DB {
   }
 
   fn load_free_list(&mut self) {}
+
+  pub fn close(self) {}
+
+  pub fn begin(&self) -> impl TxAPI<Tx> {
+    todo!()
+  }
+
+  pub fn begin_mut(&mut self) -> impl TxMutAPI {
+    todo!()
+  }
+
+  pub fn update<'tx, F: FnMut(TxMut<'tx>)>(&'tx mut self, f: F) {}
+
+  pub fn view<'tx, F: FnMut(Tx<'tx>)>(&'tx self, f: F) {}
+
+  pub fn batch<'tx, F: FnMut(TxMut<'tx>)>(&mut self, f: F) {}
+
+  pub fn sync(&mut self) {}
 }

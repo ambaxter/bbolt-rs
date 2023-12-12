@@ -11,6 +11,40 @@ use either::Either;
 use std::io;
 use std::marker::PhantomData;
 
+pub trait CursorAPI<'tx> {
+  /// First moves the cursor to the first item in the bucket and returns its key and value.
+  /// If the bucket is empty then a nil key and value are returned.
+  /// The returned key and value are only valid for the life of the transaction.
+  fn first(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)>;
+
+  /// Last moves the cursor to the last item in the bucket and returns its key and value.
+  /// If the bucket is empty then a nil key and value are returned.
+  /// The returned key and value are only valid for the life of the transaction.
+  fn last(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)>;
+
+  /// Next moves the cursor to the next item in the bucket and returns its key and value.
+  /// If the cursor is at the end of the bucket then a nil key and value are returned.
+  /// The returned key and value are only valid for the life of the transaction.
+  fn next(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)>;
+
+  /// Prev moves the cursor to the previous item in the bucket and returns its key and value.
+  /// If the cursor is at the beginning of the bucket then a nil key and value are returned.
+  /// The returned key and value are only valid for the life of the transaction.
+  fn prev(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)>;
+
+  /// Seek moves the cursor to a given key using a b-tree search and returns it.
+  /// If the key does not exist then the next key is used. If no keys
+  /// follow, a nil key is returned.
+  /// The returned key and value are only valid for the life of the transaction.
+  fn seek(&mut self, seek: &[u8]) -> Option<(&'tx [u8], Option<&'tx [u8]>)>;
+}
+
+pub trait CursorMutAPI<'tx>: CursorAPI<'tx> {
+  /// Delete removes the current key/value under the cursor from the bucket.
+  /// Delete fails if current key/value is a bucket or if the transaction is not writable.
+  fn delete(&mut self, key: &[u8]) -> crate::Result<()>;
+}
+
 pub(crate) trait CursorIAPI<'tx>: Clone + 'tx {
   fn api_first(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)>;
   fn i_first(&mut self) -> Option<(&'tx [u8], &'tx [u8], u32)>;
@@ -48,41 +82,6 @@ pub(crate) trait CursorMutIAPI<'tx>: CursorIAPI<'tx> {
   fn node(&mut self) -> NodeMut<'tx>;
 
   fn api_delete(&mut self, key: &[u8]) -> crate::Result<()>;
-}
-
-pub trait CursorAPI<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>>: CursorIAPI<'tx> {
-  fn bucket(&self) -> B;
-
-  /// First moves the cursor to the first item in the bucket and returns its key and value.
-  /// If the bucket is empty then a nil key and value are returned.
-  /// The returned key and value are only valid for the life of the transaction.
-  fn first(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
-    self.api_first()
-  }
-
-  fn last(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
-    self.api_last()
-  }
-
-  fn next(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
-    self.api_next()
-  }
-
-  fn prev(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
-    self.api_prev()
-  }
-
-  fn seek(&mut self, seek: &[u8]) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
-    self.api_seek(seek)
-  }
-}
-
-pub trait CursorMutAPI<'tx>:
-  CursorAPI<'tx, TxMut<'tx>, BucketMut<'tx>> + CursorMutIAPI<'tx>
-{
-  fn delete(&mut self, key: &[u8]) -> crate::Result<()> {
-    self.api_delete(key)
-  }
 }
 
 #[derive(Clone)]
@@ -234,7 +233,7 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for ICursor<'tx
     }
 
     // Move down the stack to find the last element of the last leaf under this branch.
-    self.last();
+    self.i_last();
 
     self.key_value()
   }
@@ -246,10 +245,10 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for ICursor<'tx
     let mut elem_ref = ElemRef { pn, index: 0 };
     elem_ref.index = elem_ref.count() - 1;
     self.stack.push(elem_ref);
-    self.last();
+    self.i_last();
 
     if let Some(_) = self.stack.last() {
-      self.prev();
+      self.i_prev();
     }
 
     if self.stack.is_empty() {
@@ -461,12 +460,6 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for ICursor<'tx
   }
 }
 
-impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorAPI<'tx, T, B> for ICursor<'tx, T, B> {
-  fn bucket(&self) -> B {
-    self.bucket
-  }
-}
-
 impl<'tx, B: BucketMutIAPI<'tx>> CursorMutIAPI<'tx> for ICursor<'tx, TxMut<'tx>, B> {
   fn node(&mut self) -> NodeMut<'tx> {
     assert!(
@@ -507,8 +500,7 @@ impl<'tx, B: BucketMutIAPI<'tx>> CursorMutIAPI<'tx> for ICursor<'tx, TxMut<'tx>,
   }
 }
 
-impl<'tx> CursorMutAPI<'tx> for CursorMut<'tx> {}
-
+//TODO: Rework to be generic over bucket type
 pub type Cursor<'tx, T> = ICursor<'tx, T, Bucket<'tx>>;
 
 pub type CursorMut<'tx> = ICursor<'tx, TxMut<'tx>, BucketMut<'tx>>;

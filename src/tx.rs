@@ -5,12 +5,13 @@ use crate::common::meta::Meta;
 use crate::common::page::{MutPage, RefPage};
 use crate::common::selfowned::SelfOwned;
 use crate::common::{BVec, HashMap, IRef, PgId, TxId};
+use crate::cursor::Cursor;
 use crate::db::DBShared;
 use crate::freelist::Freelist;
 use crate::node::NodeMut;
+use crate::{BucketAPI, CursorAPI, CursorMutAPI};
 use bumpalo::Bump;
 use parking_lot::{RwLockReadGuard, RwLockWriteGuard};
-use std::borrow::Borrow;
 use std::cell;
 use std::cell::{Ref, RefCell, RefMut};
 use std::marker::{PhantomData, PhantomPinned};
@@ -19,12 +20,83 @@ use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::ptr::addr_of_mut;
 
+pub trait TxAPI<'tx>: 'tx {
+  type CursorType: CursorAPI<'tx>;
+  type BucketType: BucketAPI<'tx>;
+
+  /// ID returns the transaction id.
+  fn id(&self) -> TxId;
+
+  /// Size returns current database size in bytes as seen by this transaction.
+  fn size(&self) -> u64;
+
+  /// Writable returns whether the transaction can perform write operations.
+  fn writeable(&self) -> bool;
+
+  /// Cursor creates a cursor associated with the root bucket.
+  /// All items in the cursor will return a nil value because all root bucket keys point to buckets.
+  /// The cursor is only valid as long as the transaction is open.
+  /// Do not use a cursor after the transaction is closed.
+  fn cursor(&self) -> Self::CursorType;
+
+  /// Stats retrieves a copy of the current transaction statistics.
+  fn stats(&self) -> TxStats;
+
+  /// Bucket retrieves a bucket by name.
+  /// Returns nil if the bucket does not exist.
+  /// The bucket instance is only valid for the lifetime of the transaction.
+  fn bucket(&self, name: &[u8]) -> Option<Self::BucketType>;
+
+  fn for_each<F: FnMut(&[u8], Self::BucketType)>(&self, f: F) -> crate::Result<()>;
+
+  /// Rollback closes the transaction and ignores all previous updates. Read-only
+  /// transactions must be rolled back and not committed.
+  fn rollback(self) -> crate::Result<()>;
+
+  /// Page returns page information for a given page number.
+  /// This is only safe for concurrent use when used by a writable transaction.
+  fn page(id: PgId) -> crate::Result<PageInfo>;
+}
+
+pub trait TxMutAPI<'tx>: TxAPI<'tx> {
+  type CursorMutType: CursorMutAPI<'tx>;
+
+  /// Cursor creates a cursor associated with the root bucket.
+  /// All items in the cursor will return a nil value because all root bucket keys point to buckets.
+  /// The cursor is only valid as long as the transaction is open.
+  /// Do not use a cursor after the transaction is closed.
+  fn cursor_mut(&mut self) -> Self::CursorMutType;
+
+  /// CreateBucket creates a new bucket.
+  /// Returns an error if the bucket already exists, if the bucket name is blank, or if the bucket name is too long.
+  /// The bucket instance is only valid for the lifetime of the transaction.
+  fn create_bucket(&mut self, name: &[u8]) -> crate::Result<Self::BucketType>;
+
+  /// CreateBucketIfNotExists creates a new bucket if it doesn't already exist.
+  /// Returns an error if the bucket name is blank, or if the bucket name is too long.
+  /// The bucket instance is only valid for the lifetime of the transaction.
+  fn create_bucket_if_not_exists(&mut self, name: &[u8]) -> crate::Result<Self::BucketType>;
+
+  /// DeleteBucket deletes a bucket.
+  /// Returns an error if the bucket cannot be found or if the key represents a non-bucket value.
+  fn delete_bucket(name: &[u8]) -> crate::Result<()>;
+
+  /// Commit writes all changes to disk and updates the meta page.
+  /// Returns an error if a disk write error occurs, or if Commit is
+  /// called on a read-only transaction.
+  fn commit(self) -> crate::Result<()>;
+}
+
+struct PageInfo {}
+pub struct TxStats {}
+
+//TODO: now that the layout has been filled out these aren't needed anymore I don't think
 pub(crate) trait TxIAPI<'tx>: IRef<TxR<'tx>, TxW<'tx>> + 'tx {
   fn bump(&self) -> &'tx Bump;
 
   fn page_size(&self) -> usize;
 
-  fn meta(&self) -> &Meta;
+  fn meta(&self) -> Ref<Meta>;
 
   fn page(&self, id: PgId) -> RefPage<'tx> {
     todo!()
@@ -52,12 +124,6 @@ impl TxImpl {
     todo!()
   }
 }
-
-pub trait TxAPI<'tx>: Copy + Clone + 'tx {
-  fn writeable(&self) -> bool;
-}
-
-pub trait TxMutAPI<'tx>: TxAPI<'tx> {}
 
 struct TxOwned<D: Deref<Target = DBShared> + Unpin> {
   b: Bump,
@@ -131,26 +197,20 @@ impl<'tx> IRef<TxR<'tx>, TxW<'tx>> for Tx<'tx> {
 impl<'tx> TxIAPI<'tx> for Tx<'tx> {
   #[inline(always)]
   fn bump(&self) -> &'tx Bump {
-    self.borrow_iref().0.b
+    self.cell.borrow().b
   }
 
   #[inline(always)]
   fn page_size(&self) -> usize {
-    self.borrow_iref().0.page_size
+    RefCell::borrow(&self.cell).page_size
   }
 
-  fn meta(&self) -> &Meta {
-    todo!()
+  fn meta(&self) -> Ref<Meta> {
+    Ref::map(RefCell::borrow(&self.cell), |tx| &tx.meta)
   }
 
   fn txid(&self) -> TxId {
-    todo!()
-  }
-}
-
-impl<'tx> TxAPI<'tx> for Tx<'tx> {
-  fn writeable(&self) -> bool {
-    false
+    RefCell::borrow(&self.cell).meta.txid()
   }
 }
 
@@ -174,26 +234,20 @@ impl<'tx> IRef<TxR<'tx>, TxW<'tx>> for TxMut<'tx> {
 impl<'tx> TxIAPI<'tx> for TxMut<'tx> {
   #[inline(always)]
   fn bump(&self) -> &'tx Bump {
-    self.borrow_iref().0.b
+    self.cell.borrow().r.b
   }
 
   #[inline(always)]
   fn page_size(&self) -> usize {
-    DEFAULT_PAGE_SIZE.bytes() as usize
+    self.cell.borrow().r.page_size
   }
 
-  fn meta(&self) -> &Meta {
-    todo!()
+  fn meta(&self) -> Ref<Meta> {
+    Ref::map(self.cell.borrow(), |tx| &tx.r.meta)
   }
 
   fn txid(&self) -> TxId {
-    todo!()
-  }
-}
-
-impl<'tx> TxAPI<'tx> for TxMut<'tx> {
-  fn writeable(&self) -> bool {
-    true
+    self.cell.borrow().r.meta.txid()
   }
 }
 
@@ -206,8 +260,6 @@ impl<'tx> TxMutIAPI<'tx> for TxMut<'tx> {
     todo!()
   }
 }
-
-impl<'tx> TxMutAPI<'tx> for TxMut<'tx> {}
 
 struct TxSelfRef<'tx, T: TxIAPI<'tx>> {
   h: Pin<Box<dyn DBAccess + 'tx>>,
