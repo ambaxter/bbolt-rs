@@ -8,7 +8,7 @@ use crate::cursor::{
   CursorApi, CursorIAPI, CursorImpl, CursorMutIAPI, CursorRwImpl, ElemRef, InnerCursor,
 };
 use crate::node::{NodeRwCell, NodeW};
-use crate::tx::{TxCell, TxApi, TxIAPI, TxImpl, TxRwCell, TxMutIAPI, TxR, TxW};
+use crate::tx::{TxApi, TxCell, TxIAPI, TxImpl, TxMutIAPI, TxR, TxRwCell, TxW};
 use crate::Error::{
   BucketExists, BucketNameRequired, BucketNotFound, IncompatibleValue, KeyRequired, KeyTooLarge,
   ValueTooLarge,
@@ -619,7 +619,9 @@ impl<'tx> BucketIAPI<'tx, TxCell<'tx>> for BucketCell<'tx> {
   }
 }
 
-impl<'tx> SplitRef<BucketR<'tx>, InnerBucketW<'tx, TxCell<'tx>, BucketCell<'tx>>> for BucketCell<'tx> {
+impl<'tx> SplitRef<BucketR<'tx>, InnerBucketW<'tx, TxCell<'tx>, BucketCell<'tx>>>
+  for BucketCell<'tx>
+{
   fn split_ref(
     &self,
   ) -> (
@@ -658,7 +660,9 @@ impl<'tx> SplitRef<BucketR<'tx>, BucketW<'tx>> for BucketRwCell<'tx> {
 }
 
 impl<'tx> BucketIAPI<'tx, TxRwCell<'tx>> for BucketRwCell<'tx> {
-  fn new(bucket_header: InBucket, tx: &'tx TxRwCell<'tx>, inline_page: Option<RefPage<'tx>>) -> Self {
+  fn new(
+    bucket_header: InBucket, tx: &'tx TxRwCell<'tx>, inline_page: Option<RefPage<'tx>>,
+  ) -> Self {
     let r = BucketR {
       bucket_header,
       inline_page,

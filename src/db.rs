@@ -103,7 +103,9 @@ pub trait DbMutAPI: DbApi {
   /// returned from the Update() method.
   ///
   /// Attempting to manually commit or rollback within the function will cause a panic.
-  fn update<'tx, F: FnMut(TxRwCell<'tx>) -> crate::Result<()>>(&mut self, f: F) -> crate::Result<()>;
+  fn update<'tx, F: FnMut(TxRwCell<'tx>) -> crate::Result<()>>(
+    &mut self, f: F,
+  ) -> crate::Result<()>;
 
   /// Sync executes fdatasync() against the database file handle.
   ///

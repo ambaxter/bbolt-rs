@@ -1,5 +1,5 @@
 use crate::bucket::{
-  BucketCell, BucketApi, BucketIAPI, BucketRwCell, BucketRwApi, BucketRwIAPI, MAX_FILL_PERCENT,
+  BucketApi, BucketCell, BucketIAPI, BucketRwApi, BucketRwCell, BucketRwIAPI, MAX_FILL_PERCENT,
   MIN_FILL_PERCENT,
 };
 use crate::common::inode::INode;
@@ -9,7 +9,7 @@ use crate::common::tree::{
   MappedBranchPage, MappedLeafPage, TreePage, BRANCH_PAGE_ELEMENT_SIZE, LEAF_PAGE_ELEMENT_SIZE,
 };
 use crate::common::{BVec, PgId, SplitRef, ZERO_PGID};
-use crate::tx::{TxCell, TxApi, TxIAPI, TxRwCell, TxMutIAPI};
+use crate::tx::{TxApi, TxCell, TxIAPI, TxMutIAPI, TxRwCell};
 use bumpalo::Bump;
 use hashbrown::Equivalent;
 use std::cell;
@@ -198,7 +198,9 @@ impl<'tx> NodeRwCell<'tx> {
     }
   }
 
-  fn new_child_in(bucket: BucketRwCell<'tx>, is_leaf: bool, parent: NodeRwCell<'tx>) -> NodeRwCell<'tx> {
+  fn new_child_in(
+    bucket: BucketRwCell<'tx>, is_leaf: bool, parent: NodeRwCell<'tx>,
+  ) -> NodeRwCell<'tx> {
     NodeRwCell {
       cell: SCell::new_in(
         NodeW::new_child_in(bucket, is_leaf, parent),
