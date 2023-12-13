@@ -1,5 +1,5 @@
 use crate::bucket::{
-  Bucket, BucketAPI, BucketIAPI, BucketMut, BucketMutAPI, BucketMutIAPI, MAX_FILL_PERCENT,
+  BucketCell, BucketApi, BucketIAPI, BucketRwCell, BucketRwApi, BucketRwIAPI, MAX_FILL_PERCENT,
   MIN_FILL_PERCENT,
 };
 use crate::common::inode::INode;
@@ -9,7 +9,7 @@ use crate::common::tree::{
   MappedBranchPage, MappedLeafPage, TreePage, BRANCH_PAGE_ELEMENT_SIZE, LEAF_PAGE_ELEMENT_SIZE,
 };
 use crate::common::{BVec, PgId, SplitRef, ZERO_PGID};
-use crate::tx::{Tx, TxAPI, TxIAPI, TxMut, TxMutIAPI};
+use crate::tx::{TxCell, TxApi, TxIAPI, TxRwCell, TxMutIAPI};
 use bumpalo::Bump;
 use hashbrown::Equivalent;
 use std::cell;
@@ -23,11 +23,11 @@ pub struct NodeW<'tx> {
   pub(crate) key: CodSlice<'tx, u8>,
   pub(crate) pgid: PgId,
   pub(crate) inodes: BVec<'tx, INode<'tx>>,
-  bucket: BucketMut<'tx>,
-  parent: Option<NodeMut<'tx>>,
+  bucket: BucketRwCell<'tx>,
+  parent: Option<NodeRwCell<'tx>>,
   is_unbalanced: bool,
   is_spilled: bool,
-  children: BVec<'tx, NodeMut<'tx>>,
+  children: BVec<'tx, NodeRwCell<'tx>>,
 }
 
 impl<'tx> PartialEq for NodeW<'tx> {
@@ -39,7 +39,7 @@ impl<'tx> PartialEq for NodeW<'tx> {
 impl<'tx> Eq for NodeW<'tx> {}
 
 impl<'tx> NodeW<'tx> {
-  fn new_parent_in(bucket: BucketMut<'tx>) -> NodeW<'tx> {
+  fn new_parent_in(bucket: BucketRwCell<'tx>) -> NodeW<'tx> {
     let bump = bucket.api_tx().bump();
     NodeW {
       is_leaf: false,
@@ -55,7 +55,7 @@ impl<'tx> NodeW<'tx> {
     }
   }
 
-  fn new_child_in(bucket: BucketMut<'tx>, is_leaf: bool, parent: NodeMut<'tx>) -> NodeW<'tx> {
+  fn new_child_in(bucket: BucketRwCell<'tx>, is_leaf: bool, parent: NodeRwCell<'tx>) -> NodeW<'tx> {
     let bump = bucket.api_tx().bump();
     NodeW {
       is_leaf,
@@ -72,7 +72,7 @@ impl<'tx> NodeW<'tx> {
   }
 
   pub(crate) fn read_in<'a>(
-    bucket: BucketMut<'tx>, parent: Option<NodeMut<'tx>>, page: &RefPage<'tx>,
+    bucket: BucketRwCell<'tx>, parent: Option<NodeRwCell<'tx>>, page: &RefPage<'tx>,
   ) -> NodeW<'tx> {
     assert!(page.is_leaf() || page.is_branch(), "Non-tree page read");
     let bump = bucket.api_tx().bump();
@@ -179,7 +179,7 @@ impl<'tx> NodeW<'tx> {
     }
   }
 
-  fn remove_child(&mut self, target: NodeMut<'tx>) {
+  fn remove_child(&mut self, target: NodeRwCell<'tx>) {
     if let Some(pos) = self.children.iter().position(|n| *n == target) {
       self.children.remove(pos);
     }
@@ -187,19 +187,19 @@ impl<'tx> NodeW<'tx> {
 }
 
 #[derive(Copy, Clone, Eq, PartialEq)]
-pub struct NodeMut<'tx> {
+pub struct NodeRwCell<'tx> {
   pub(crate) cell: SCell<'tx, NodeW<'tx>>,
 }
 
-impl<'tx> NodeMut<'tx> {
-  fn new_parent_in(bucket: BucketMut<'tx>) -> NodeMut<'tx> {
-    NodeMut {
+impl<'tx> NodeRwCell<'tx> {
+  fn new_parent_in(bucket: BucketRwCell<'tx>) -> NodeRwCell<'tx> {
+    NodeRwCell {
       cell: SCell::new_in(NodeW::new_parent_in(bucket), bucket.api_tx().bump()),
     }
   }
 
-  fn new_child_in(bucket: BucketMut<'tx>, is_leaf: bool, parent: NodeMut<'tx>) -> NodeMut<'tx> {
-    NodeMut {
+  fn new_child_in(bucket: BucketRwCell<'tx>, is_leaf: bool, parent: NodeRwCell<'tx>) -> NodeRwCell<'tx> {
+    NodeRwCell {
       cell: SCell::new_in(
         NodeW::new_child_in(bucket, is_leaf, parent),
         bucket.api_tx().bump(),
@@ -208,14 +208,14 @@ impl<'tx> NodeMut<'tx> {
   }
 
   pub(crate) fn read_in(
-    bucket: BucketMut<'tx>, parent: Option<NodeMut<'tx>>, page: &RefPage<'tx>,
-  ) -> NodeMut<'tx> {
-    NodeMut {
+    bucket: BucketRwCell<'tx>, parent: Option<NodeRwCell<'tx>>, page: &RefPage<'tx>,
+  ) -> NodeRwCell<'tx> {
+    NodeRwCell {
       cell: SCell::new_in(NodeW::read_in(bucket, parent, page), bucket.api_tx().bump()),
     }
   }
 
-  pub(crate) fn root(self: NodeMut<'tx>) -> NodeMut<'tx> {
+  pub(crate) fn root(self: NodeRwCell<'tx>) -> NodeRwCell<'tx> {
     let parent = self.cell.borrow().parent;
     match parent {
       None => self,
@@ -223,7 +223,7 @@ impl<'tx> NodeMut<'tx> {
     }
   }
 
-  pub(crate) fn child_at(self: NodeMut<'tx>, index: u32) -> NodeMut<'tx> {
+  pub(crate) fn child_at(self: NodeRwCell<'tx>, index: u32) -> NodeRwCell<'tx> {
     let (bucket, pgid) = {
       let self_borrow = self.cell.borrow();
       if self_borrow.is_leaf {
@@ -237,7 +237,7 @@ impl<'tx> NodeMut<'tx> {
     bucket.node(pgid, Some(self))
   }
 
-  pub(crate) fn child_index(self: NodeMut<'tx>, child: NodeMut<'tx>) -> usize {
+  pub(crate) fn child_index(self: NodeRwCell<'tx>, child: NodeRwCell<'tx>) -> usize {
     let child_key = child.cell.borrow().key;
     let result = {
       let self_borrow = self.cell.borrow();
@@ -251,11 +251,11 @@ impl<'tx> NodeMut<'tx> {
     }
   }
 
-  pub(crate) fn num_children(self: NodeMut<'tx>) -> usize {
+  pub(crate) fn num_children(self: NodeRwCell<'tx>) -> usize {
     self.cell.borrow().inodes.len()
   }
 
-  pub(crate) fn next_sibling(self: NodeMut<'tx>) -> Option<NodeMut<'tx>> {
+  pub(crate) fn next_sibling(self: NodeRwCell<'tx>) -> Option<NodeRwCell<'tx>> {
     let parent = self.cell.borrow().parent;
     if let Some(parent_node) = parent {
       let index = parent_node.child_index(self);
@@ -267,7 +267,7 @@ impl<'tx> NodeMut<'tx> {
     None
   }
 
-  pub(crate) fn prev_sibling(self: NodeMut<'tx>) -> Option<NodeMut<'tx>> {
+  pub(crate) fn prev_sibling(self: NodeRwCell<'tx>) -> Option<NodeRwCell<'tx>> {
     let parent = self.cell.borrow().parent;
     if let Some(parent_node) = parent {
       let index = parent_node.child_index(self);
@@ -280,7 +280,7 @@ impl<'tx> NodeMut<'tx> {
   }
 
   pub(crate) fn put(
-    self: NodeMut<'tx>, old_key: &'tx [u8], new_key: &'tx [u8], value: &'tx [u8], pgid: PgId,
+    self: NodeRwCell<'tx>, old_key: &'tx [u8], new_key: &'tx [u8], value: &'tx [u8], pgid: PgId,
     flags: u32,
   ) {
     let mut self_borrow = self.cell.borrow_mut();
@@ -314,7 +314,7 @@ impl<'tx> NodeMut<'tx> {
     }
   }
 
-  pub(crate) fn del(self: NodeMut<'tx>, key: &[u8]) {
+  pub(crate) fn del(self: NodeRwCell<'tx>, key: &[u8]) {
     let mut self_borrow = self.cell.borrow_mut();
     let index = self_borrow
       .inodes
@@ -325,7 +325,7 @@ impl<'tx> NodeMut<'tx> {
     self_borrow.is_unbalanced = true;
   }
 
-  pub(crate) fn write(self: NodeMut<'tx>, page: &mut MutPage<'tx>) {
+  pub(crate) fn write(self: NodeRwCell<'tx>, page: &mut MutPage<'tx>) {
     // TODO: use INode.write_inodes
     let self_borrow = self.cell.borrow();
     if self_borrow.is_leaf {
@@ -338,8 +338,8 @@ impl<'tx> NodeMut<'tx> {
   }
 
   pub(crate) fn split(
-    self: NodeMut<'tx>, tx: &TxMut<'tx>, parent_children: &mut BVec<NodeMut<'tx>>,
-  ) -> BVec<'tx, NodeMut<'tx>> {
+    self: NodeRwCell<'tx>, tx: &TxRwCell<'tx>, parent_children: &mut BVec<NodeRwCell<'tx>>,
+  ) -> BVec<'tx, NodeRwCell<'tx>> {
     let mut nodes = { BVec::new_in(tx.bump()) };
     let mut node = self;
     loop {
@@ -354,8 +354,8 @@ impl<'tx> NodeMut<'tx> {
   }
 
   pub(crate) fn split_two(
-    self: NodeMut<'tx>, page_size: usize, parent_children: &mut BVec<NodeMut<'tx>>,
-  ) -> (NodeMut<'tx>, Option<NodeMut<'tx>>) {
+    self: NodeRwCell<'tx>, page_size: usize, parent_children: &mut BVec<NodeRwCell<'tx>>,
+  ) -> (NodeRwCell<'tx>, Option<NodeRwCell<'tx>>) {
     let mut self_borrow = self.cell.borrow_mut();
     if self_borrow.inodes.len() <= MIN_KEYS_PER_PAGE * 2 || self_borrow.size_less_than(page_size) {
       return (self, None);
@@ -368,14 +368,14 @@ impl<'tx> NodeMut<'tx> {
       if let Some(parent) = self_borrow.parent {
         parent
       } else {
-        let parent = NodeMut::new_parent_in(self_borrow.bucket);
+        let parent = NodeRwCell::new_parent_in(self_borrow.bucket);
         self_borrow.parent = Some(parent);
         parent_children.push(self);
         parent
       }
     };
 
-    let next = NodeMut::new_child_in(self_borrow.bucket, self_borrow.is_leaf, parent);
+    let next = NodeRwCell::new_child_in(self_borrow.bucket, self_borrow.is_leaf, parent);
     parent_children.push(next);
 
     let mut next_borrow = next.cell.borrow_mut();
@@ -384,7 +384,7 @@ impl<'tx> NodeMut<'tx> {
   }
 
   pub(crate) fn spill_child(
-    self: NodeMut<'tx>, parent_children: &mut BVec<NodeMut<'tx>>,
+    self: NodeRwCell<'tx>, parent_children: &mut BVec<NodeRwCell<'tx>>,
   ) -> crate::Result<()> {
     let (tx, mut children) = {
       let mut self_borrow = self.cell.borrow_mut();
@@ -440,7 +440,7 @@ impl<'tx> NodeMut<'tx> {
   /// rebalance attempts to combine the node with sibling nodes if the node fill
   /// size is below a threshold or if there are not enough keys.
   // TODO: Definitely needs optimizing
-  pub(crate) fn rebalance(self: NodeMut<'tx>) {
+  pub(crate) fn rebalance(self: NodeRwCell<'tx>) {
     let mut self_borrow = self.cell.borrow_mut();
     let bucket = self_borrow.bucket;
     if !self_borrow.is_unbalanced {
@@ -573,7 +573,7 @@ impl<'tx> NodeMut<'tx> {
 
   // Descending the tree shouldn't create runtime issues
   // We bend the rules here!
-  pub(crate) fn own_in(self: NodeMut<'tx>, bump: &'tx Bump) {
+  pub(crate) fn own_in(self: NodeRwCell<'tx>, bump: &'tx Bump) {
     let mut self_borrow = self.cell.borrow_mut();
     self_borrow.key.own_in(bump);
     for inode in &mut self_borrow.inodes {
@@ -584,7 +584,7 @@ impl<'tx> NodeMut<'tx> {
     }
   }
 
-  pub(crate) fn free(self: NodeMut<'tx>) {
+  pub(crate) fn free(self: NodeRwCell<'tx>) {
     let (pgid, api_tx) = {
       let self_borrow = self.cell.borrow();
       if self_borrow.pgid == ZERO_PGID {

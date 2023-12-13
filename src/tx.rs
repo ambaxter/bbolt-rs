@@ -1,4 +1,4 @@
-use crate::bucket::{Bucket, BucketIAPI, BucketMut};
+use crate::bucket::{BucketCell, BucketIAPI, BucketRwCell};
 use crate::common::defaults::DEFAULT_PAGE_SIZE;
 use crate::common::memory::SCell;
 use crate::common::meta::Meta;
@@ -7,8 +7,8 @@ use crate::common::selfowned::SelfOwned;
 use crate::common::{BVec, HashMap, PgId, SplitRef, TxId};
 use crate::db::DBShared;
 use crate::freelist::Freelist;
-use crate::node::NodeMut;
-use crate::{BucketAPI, CursorAPI, CursorMutAPI};
+use crate::node::NodeRwCell;
+use crate::{BucketApi, CursorApi, CursorRwApi};
 use bumpalo::Bump;
 use parking_lot::{RwLockReadGuard, RwLockWriteGuard};
 use std::borrow::Cow;
@@ -21,9 +21,9 @@ use std::pin::Pin;
 use std::ptr::addr_of_mut;
 use std::time::Duration;
 
-pub trait TxAPI<'tx>: 'tx {
-  type CursorType: CursorAPI<'tx>;
-  type BucketType: BucketAPI<'tx>;
+pub trait TxApi<'tx>: 'tx {
+  type CursorType: CursorApi<'tx>;
+  type BucketType: BucketApi<'tx>;
 
   /// ID returns the transaction id.
   fn id(&self) -> TxId;
@@ -59,14 +59,14 @@ pub trait TxAPI<'tx>: 'tx {
   fn page(id: PgId) -> crate::Result<PageInfo>;
 }
 
-pub trait TxMutAPI<'tx>: TxAPI<'tx> {
-  type CursorMutType: CursorMutAPI<'tx>;
+pub trait TxMutApi<'tx>: TxApi<'tx> {
+  type CursorRwType: CursorRwApi<'tx>;
 
   /// Cursor creates a cursor associated with the root bucket.
   /// All items in the cursor will return a nil value because all root bucket keys point to buckets.
   /// The cursor is only valid as long as the transaction is open.
   /// Do not use a cursor after the transaction is closed.
-  fn cursor_mut(&mut self) -> Self::CursorMutType;
+  fn cursor_mut(&mut self) -> Self::CursorRwType;
 
   /// CreateBucket creates a new bucket.
   /// Returns an error if the bucket already exists, if the bucket name is blank, or if the bucket name is too long.
@@ -251,6 +251,7 @@ pub struct TxR<'tx> {
 
 pub struct TxW<'tx> {
   pages: HashMap<'tx, PgId, RefPage<'tx>>,
+  //TODO: We leak memory when this drops. Need special handling here
   commit_handlers: BVec<'tx, Box<dyn FnMut()>>,
   p: PhantomData<&'tx u8>,
 }
@@ -261,11 +262,11 @@ pub struct TxRW<'tx> {
 }
 
 #[derive(Copy, Clone)]
-pub struct Tx<'tx> {
+pub struct TxCell<'tx> {
   cell: SCell<'tx, TxR<'tx>>,
 }
 
-impl<'tx> SplitRef<TxR<'tx>, TxW<'tx>> for Tx<'tx> {
+impl<'tx> SplitRef<TxR<'tx>, TxW<'tx>> for TxCell<'tx> {
   fn split_ref(&self) -> (Ref<TxR<'tx>>, Option<Ref<TxW<'tx>>>) {
     (RefCell::borrow(&*self.cell), None)
   }
@@ -275,7 +276,7 @@ impl<'tx> SplitRef<TxR<'tx>, TxW<'tx>> for Tx<'tx> {
   }
 }
 
-impl<'tx> TxIAPI<'tx> for Tx<'tx> {
+impl<'tx> TxIAPI<'tx> for TxCell<'tx> {
   #[inline(always)]
   fn bump(&self) -> &'tx Bump {
     self.cell.borrow().b
@@ -296,11 +297,11 @@ impl<'tx> TxIAPI<'tx> for Tx<'tx> {
 }
 
 #[derive(Copy, Clone)]
-pub struct TxMut<'tx> {
+pub struct TxRwCell<'tx> {
   cell: SCell<'tx, TxRW<'tx>>,
 }
 
-impl<'tx> SplitRef<TxR<'tx>, TxW<'tx>> for TxMut<'tx> {
+impl<'tx> SplitRef<TxR<'tx>, TxW<'tx>> for TxRwCell<'tx> {
   fn split_ref(&self) -> (Ref<TxR<'tx>>, Option<Ref<TxW<'tx>>>) {
     let (r, w) = Ref::map_split(RefCell::borrow(&*self.cell), |b| (&b.r, &b.w));
     (r, Some(w))
@@ -312,7 +313,7 @@ impl<'tx> SplitRef<TxR<'tx>, TxW<'tx>> for TxMut<'tx> {
   }
 }
 
-impl<'tx> TxIAPI<'tx> for TxMut<'tx> {
+impl<'tx> TxIAPI<'tx> for TxRwCell<'tx> {
   #[inline(always)]
   fn bump(&self) -> &'tx Bump {
     self.cell.borrow().r.b
@@ -332,7 +333,7 @@ impl<'tx> TxIAPI<'tx> for TxMut<'tx> {
   }
 }
 
-impl<'tx> TxMutIAPI<'tx> for TxMut<'tx> {
+impl<'tx> TxMutIAPI<'tx> for TxRwCell<'tx> {
   fn freelist(&self) -> RefMut<Freelist> {
     todo!()
   }
@@ -349,14 +350,14 @@ struct TxSelfRef<'tx, T: TxIAPI<'tx>> {
 }
 
 impl<'tx, T: TxIAPI<'tx>> TxSelfRef<'tx, T> {
-  fn new_tx(o: &'tx mut TxOwned<RwLockReadGuard<'tx, DBShared>>) -> TxSelfRef<'tx, Tx<'tx>> {
+  fn new_tx(o: &'tx mut TxOwned<RwLockReadGuard<'tx, DBShared>>) -> TxSelfRef<'tx, TxCell<'tx>> {
     let page_size = o.db.borrow().backend.meta().page_size() as usize;
-    let mut uninit: MaybeUninit<TxSelfRef<'tx, Tx<'tx>>> = MaybeUninit::uninit();
+    let mut uninit: MaybeUninit<TxSelfRef<'tx, TxCell<'tx>>> = MaybeUninit::uninit();
     let ptr = uninit.as_mut_ptr();
     unsafe {
       addr_of_mut!((*ptr).h).write(Box::pin(DBHider { db: &o.db }));
       let db = &(**(addr_of_mut!((*ptr).h)));
-      let tx = Tx {
+      let tx = TxCell {
         cell: SCell::new_in(
           TxR {
             b: &o.b,
@@ -377,14 +378,14 @@ impl<'tx, T: TxIAPI<'tx>> TxSelfRef<'tx, T> {
 
   fn new_tx_mut(
     o: &'tx mut TxOwned<RwLockWriteGuard<'tx, DBShared>>,
-  ) -> TxSelfRef<'tx, TxMut<'tx>> {
+  ) -> TxSelfRef<'tx, TxRwCell<'tx>> {
     let page_size = o.db.borrow().backend.meta().page_size() as usize;
-    let mut uninit: MaybeUninit<TxSelfRef<'tx, TxMut<'tx>>> = MaybeUninit::uninit();
+    let mut uninit: MaybeUninit<TxSelfRef<'tx, TxRwCell<'tx>>> = MaybeUninit::uninit();
     let ptr = uninit.as_mut_ptr();
     unsafe {
       addr_of_mut!((*ptr).h).write(Box::pin(DBHider { db: &o.db }));
       let db = &(**(addr_of_mut!((*ptr).h)));
-      let tx = TxMut {
+      let tx = TxRwCell {
         cell: SCell::new_in(
           TxRW {
             r: TxR {
@@ -418,27 +419,27 @@ struct TxHolder<'tx, D: Deref<Target = DBShared> + Unpin, T: TxIAPI<'tx>> {
 impl<'tx, D: Deref<Target = DBShared> + Unpin, T: TxIAPI<'tx>> TxHolder<'tx, D, T> {
   fn new_tx(
     lock: RwLockReadGuard<'tx, DBShared>,
-  ) -> TxHolder<'tx, RwLockReadGuard<'tx, DBShared>, Tx<'tx>> {
+  ) -> TxHolder<'tx, RwLockReadGuard<'tx, DBShared>, TxCell<'tx>> {
     let bump = Bump::new();
     let tx_owned = TxOwned {
       b: bump,
       db: RefCell::new(lock),
     };
     TxHolder {
-      s: SelfOwned::new_with_map(tx_owned, |t| TxSelfRef::<Tx<'tx>>::new_tx(t)),
+      s: SelfOwned::new_with_map(tx_owned, |t| TxSelfRef::<TxCell<'tx>>::new_tx(t)),
     }
   }
 
   fn new_rwtx(
     lock: RwLockWriteGuard<'tx, DBShared>,
-  ) -> TxHolder<'tx, RwLockWriteGuard<'tx, DBShared>, TxMut<'tx>> {
+  ) -> TxHolder<'tx, RwLockWriteGuard<'tx, DBShared>, TxRwCell<'tx>> {
     let bump = Bump::new();
     let tx_owned = TxOwned {
       b: bump,
       db: RefCell::new(lock),
     };
     TxHolder {
-      s: SelfOwned::new_with_map(tx_owned, |t| TxSelfRef::<TxMut<'tx>>::new_tx_mut(t)),
+      s: SelfOwned::new_with_map(tx_owned, |t| TxSelfRef::<TxRwCell<'tx>>::new_tx_mut(t)),
     }
   }
 }

@@ -1,17 +1,17 @@
-use crate::bucket::{Bucket, BucketAPI, BucketIAPI, BucketMut, BucketMutIAPI, BucketR};
+use crate::bucket::{BucketCell, BucketApi, BucketIAPI, BucketRwCell, BucketRwIAPI, BucketR};
 use crate::common::memory::SCell;
 use crate::common::page::{CoerciblePage, RefPage, BUCKET_LEAF_FLAG};
 use crate::common::tree::{MappedBranchPage, MappedLeafPage, TreePage};
 use crate::common::{BVec, PgId, SplitRef};
-use crate::node::NodeMut;
-use crate::tx::{Tx, TxAPI, TxIAPI, TxMut};
+use crate::node::NodeRwCell;
+use crate::tx::{TxCell, TxApi, TxIAPI, TxRwCell};
 use crate::Error::IncompatibleValue;
 use bumpalo::Bump;
 use either::Either;
 use std::io;
 use std::marker::PhantomData;
 
-pub trait CursorAPI<'tx>: 'tx {
+pub trait CursorApi<'tx>: 'tx {
   /// First moves the cursor to the first item in the bucket and returns its key and value.
   /// If the bucket is empty then a nil key and value are returned.
   /// The returned key and value are only valid for the life of the transaction.
@@ -39,7 +39,7 @@ pub trait CursorAPI<'tx>: 'tx {
   fn seek(&mut self, seek: &[u8]) -> Option<(&'tx [u8], Option<&'tx [u8]>)>;
 }
 
-pub trait CursorMutAPI<'tx>: CursorAPI<'tx> {
+pub trait CursorRwApi<'tx>: CursorApi<'tx> {
   /// Delete removes the current key/value under the cursor from the bucket.
   /// Delete fails if current key/value is a bucket or if the transaction is not writable.
   fn delete(&mut self, key: &[u8]) -> crate::Result<()>;
@@ -59,7 +59,7 @@ impl<'tx, C: CursorIAPI<'tx>> CursorImpl<'tx, C> {
   }
 }
 
-impl<'tx, C: CursorIAPI<'tx>> CursorAPI<'tx> for CursorImpl<'tx, C> {
+impl<'tx, C: CursorIAPI<'tx>> CursorApi<'tx> for CursorImpl<'tx, C> {
   fn first(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
     self.c.api_first()
   }
@@ -81,21 +81,21 @@ impl<'tx, C: CursorIAPI<'tx>> CursorAPI<'tx> for CursorImpl<'tx, C> {
   }
 }
 
-pub struct CursorMutImpl<'tx, C: CursorMutIAPI<'tx>> {
+pub struct CursorRwImpl<'tx, C: CursorMutIAPI<'tx>> {
   c: C,
   p: PhantomData<&'tx u64>,
 }
 
-impl<'tx, C: CursorMutIAPI<'tx>> CursorMutImpl<'tx, C> {
+impl<'tx, C: CursorMutIAPI<'tx>> CursorRwImpl<'tx, C> {
   pub(crate) fn new(c: C) -> Self {
-    CursorMutImpl {
+    CursorRwImpl {
       c,
       p: Default::default(),
     }
   }
 }
 
-impl<'tx, C: CursorMutIAPI<'tx>> CursorAPI<'tx> for CursorMutImpl<'tx, C> {
+impl<'tx, C: CursorMutIAPI<'tx>> CursorApi<'tx> for CursorRwImpl<'tx, C> {
   fn first(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
     self.c.api_first()
   }
@@ -117,7 +117,7 @@ impl<'tx, C: CursorMutIAPI<'tx>> CursorAPI<'tx> for CursorMutImpl<'tx, C> {
   }
 }
 
-impl<'tx, C: CursorMutIAPI<'tx>> CursorMutAPI<'tx> for CursorMutImpl<'tx, C> {
+impl<'tx, C: CursorMutIAPI<'tx>> CursorRwApi<'tx> for CursorRwImpl<'tx, C> {
   fn delete(&mut self, key: &[u8]) -> crate::Result<()> {
     self.c.api_delete(key)
   }
@@ -151,20 +151,20 @@ pub(crate) trait CursorIAPI<'tx>: Clone + 'tx {
 
   fn search_inodes(&mut self, key: &[u8]);
 
-  fn search_node(&mut self, key: &[u8], node: NodeMut<'tx>);
+  fn search_node(&mut self, key: &[u8], node: NodeRwCell<'tx>);
 
   fn search_page(&mut self, key: &[u8], page: &RefPage);
 }
 
 pub(crate) trait CursorMutIAPI<'tx>: CursorIAPI<'tx> {
-  fn node(&mut self) -> NodeMut<'tx>;
+  fn node(&mut self) -> NodeRwCell<'tx>;
 
   fn api_delete(&mut self, key: &[u8]) -> crate::Result<()>;
 }
 
 #[derive(Clone)]
 pub struct ElemRef<'tx> {
-  pn: Either<RefPage<'tx>, NodeMut<'tx>>,
+  pn: Either<RefPage<'tx>, NodeRwCell<'tx>>,
   index: u32,
 }
 
@@ -185,15 +185,15 @@ impl<'tx> ElemRef<'tx> {
 }
 
 #[derive(Clone)]
-pub struct ICursor<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> {
+pub struct InnerCursor<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> {
   bucket: B,
   stack: BVec<'tx, ElemRef<'tx>>,
   phantom_t: PhantomData<T>,
 }
 
-impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> ICursor<'tx, T, B> {
+impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> InnerCursor<'tx, T, B> {
   pub(crate) fn new(cell: B, bump: &'tx Bump) -> Self {
-    ICursor {
+    InnerCursor {
       bucket: cell,
       stack: BVec::new_in(bump),
       phantom_t: PhantomData,
@@ -201,7 +201,7 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> ICursor<'tx, T, B> {
   }
 }
 
-impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for ICursor<'tx, T, B> {
+impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for InnerCursor<'tx, T, B> {
   fn api_first(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
     let (k, v, flags) = self.i_first()?;
     if (flags & BUCKET_LEAF_FLAG) != 0 {
@@ -487,7 +487,7 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for ICursor<'tx
     }
   }
 
-  fn search_node(&mut self, key: &[u8], node: NodeMut<'tx>) {
+  fn search_node(&mut self, key: &[u8], node: NodeRwCell<'tx>) {
     let (index, pgid) = {
       let w = node.cell.borrow();
       let r = w.inodes.binary_search_by_key(&key, |inode| inode.key());
@@ -538,8 +538,8 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for ICursor<'tx
   }
 }
 
-impl<'tx, B: BucketMutIAPI<'tx>> CursorMutIAPI<'tx> for ICursor<'tx, TxMut<'tx>, B> {
-  fn node(&mut self) -> NodeMut<'tx> {
+impl<'tx, B: BucketRwIAPI<'tx>> CursorMutIAPI<'tx> for InnerCursor<'tx, TxRwCell<'tx>, B> {
+  fn node(&mut self) -> NodeRwCell<'tx> {
     assert!(
       !self.stack.is_empty(),
       "accessing a node with a zero-length cursor stack"
@@ -556,7 +556,7 @@ impl<'tx, B: BucketMutIAPI<'tx>> CursorMutIAPI<'tx> for ICursor<'tx, TxMut<'tx>,
     let mut n = {
       let first = self.stack.first().unwrap();
       match &self.stack.first().unwrap().pn {
-        Either::Left(page) => BucketMutIAPI::node(self.bucket, page.id, None),
+        Either::Left(page) => BucketRwIAPI::node(self.bucket, page.id, None),
         Either::Right(node) => *node,
       }
     };

@@ -8,8 +8,8 @@ use crate::common::selfowned::SelfOwned;
 use crate::common::tree::MappedLeafPage;
 use crate::common::{PgId, TxId};
 use crate::freelist::{Freelist, MappedFreeListPage};
-use crate::tx::{Tx, TxMut, TxStats};
-use crate::{Error, TxAPI, TxMutAPI};
+use crate::tx::{TxCell, TxRwCell, TxStats};
+use crate::{Error, TxApi, TxMutApi};
 use aligners::{alignment, AlignedBytes};
 use bumpalo::Bump;
 use fs4::FileExt;
@@ -24,11 +24,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::{fs, io, mem};
 
-pub trait DbAPI: Clone
+pub trait DbApi: Clone
 where
   Self: Sized,
 {
-  type TxType<'tx>: TxAPI<'tx>
+  type TxType<'tx>: TxApi<'tx>
   where
     Self: 'tx;
 
@@ -65,15 +65,15 @@ where
   /// Any error that is returned from the function is returned from the View() method.
   ///
   /// Attempting to manually rollback within the function will cause a panic.
-  fn view<'tx, F: FnMut(Tx<'tx>) -> crate::Result<()>>(&mut self, f: F) -> crate::Result<()>;
+  fn view<'tx, F: FnMut(TxCell<'tx>) -> crate::Result<()>>(&mut self, f: F) -> crate::Result<()>;
 
   /// Stats retrieves ongoing performance stats for the database.
   /// This is only updated when a transaction closes.
   fn stats(&self) -> DbStats;
 }
 
-pub trait DbMutAPI: DbAPI {
-  type TxMutType<'tx>: TxMutAPI<'tx>
+pub trait DbMutAPI: DbApi {
+  type TxMutType<'tx>: TxMutApi<'tx>
   where
     Self: 'tx;
 
@@ -103,7 +103,7 @@ pub trait DbMutAPI: DbAPI {
   /// returned from the Update() method.
   ///
   /// Attempting to manually commit or rollback within the function will cause a panic.
-  fn update<'tx, F: FnMut(TxMut<'tx>) -> crate::Result<()>>(&mut self, f: F) -> crate::Result<()>;
+  fn update<'tx, F: FnMut(TxRwCell<'tx>) -> crate::Result<()>>(&mut self, f: F) -> crate::Result<()>;
 
   /// Sync executes fdatasync() against the database file handle.
   ///
