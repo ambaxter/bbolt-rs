@@ -362,7 +362,7 @@ impl<'tx> NodeRwCell<'tx> {
     if self_borrow.inodes.len() <= MIN_KEYS_PER_PAGE * 2 || self_borrow.size_less_than(page_size) {
       return (self, None);
     }
-    let mut fill_percent = self_borrow.bucket.split_ref().1.unwrap().fill_percent;
+    let mut fill_percent = self_borrow.bucket.split_ref().2.unwrap().fill_percent;
     fill_percent = fill_percent.max(MIN_FILL_PERCENT).min(MAX_FILL_PERCENT);
     let threshold = (page_size as f64 * fill_percent) as usize;
     let (split_index, _) = self_borrow.split_index(threshold);
@@ -409,11 +409,11 @@ impl<'tx> NodeRwCell<'tx> {
       }
     }
 
-    let nodes = self.split(tx, parent_children);
+    let nodes = self.split(tx.deref(), parent_children);
     for node in nodes {
       let mut node_borrow = node.cell.borrow_mut();
       if node_borrow.pgid > ZERO_PGID {
-        tx.freelist().free(tx.txid(), &tx.page(node_borrow.pgid));
+        tx.freelist().free(tx.api_id(), &tx.page(node_borrow.pgid));
         node_borrow.pgid = ZERO_PGID;
       }
       let mut p = tx.allocate((node_borrow.size() + tx.page_size() - 1) / tx.page_size())?;
@@ -471,7 +471,7 @@ impl<'tx> NodeRwCell<'tx> {
         self_borrow.children.clear();
         mem::swap(&mut self_borrow.children, &mut child_borrow.children);
 
-        let (r, w) = self_borrow.bucket.split_ref_mut();
+        let (r, _, w) = self_borrow.bucket.split_ref_mut();
         let mut wb = w.unwrap();
 
         // Reparent all child nodes being moved.
@@ -488,7 +488,7 @@ impl<'tx> NodeRwCell<'tx> {
       }
       return;
     }
-    let (r, w) = bucket.split_ref_mut();
+    let (r, _, w) = bucket.split_ref_mut();
     let parent = self_borrow.parent.unwrap();
     let mut parent_borrow = parent.cell.borrow_mut();
 
@@ -523,7 +523,7 @@ impl<'tx> NodeRwCell<'tx> {
       self.prev_sibling().unwrap()
     };
     let mut target_borrow = target.cell.borrow_mut();
-    let (r, w) = bucket.split_ref_mut();
+    let (r, _, w) = bucket.split_ref_mut();
     let mut wb = w.unwrap();
     let mut self_borrow = self.cell.borrow_mut();
 

@@ -1,10 +1,11 @@
-use crate::bucket::{BucketCell, BucketIAPI, BucketRwCell};
+use crate::bucket::{BucketCell, BucketIAPI, BucketRW, BucketRwCell};
 use crate::common::defaults::DEFAULT_PAGE_SIZE;
 use crate::common::memory::SCell;
 use crate::common::meta::Meta;
 use crate::common::page::{MutPage, PageInfo, RefPage};
 use crate::common::selfowned::SelfOwned;
 use crate::common::{BVec, HashMap, PgId, SplitRef, TxId};
+use crate::cursor::{CursorMutIAPI, InnerCursor};
 use crate::db::DBShared;
 use crate::freelist::Freelist;
 use crate::node::NodeRwCell;
@@ -18,7 +19,8 @@ use std::marker::{PhantomData, PhantomPinned};
 use std::mem::MaybeUninit;
 use std::ops::{AddAssign, Deref, DerefMut, Sub};
 use std::pin::Pin;
-use std::ptr::addr_of_mut;
+use std::ptr::{addr_of, addr_of_mut};
+use std::rc::Rc;
 use std::time::Duration;
 
 pub trait TxApi<'tx>: 'tx {
@@ -80,7 +82,7 @@ pub trait TxMutApi<'tx>: TxApi<'tx> {
 
   /// DeleteBucket deletes a bucket.
   /// Returns an error if the bucket cannot be found or if the key represents a non-bucket value.
-  fn delete_bucket(name: &[u8]) -> crate::Result<()>;
+  fn delete_bucket(&mut self, name: &[u8]) -> crate::Result<()>;
 
   /// Commit writes all changes to disk and updates the meta page.
   /// Returns an error if a disk write error occurs, or if Commit is
@@ -172,29 +174,95 @@ impl Sub<TxStats> for TxStats {
 }
 
 //TODO: now that the layout has been filled out these aren't needed anymore I don't think
-pub(crate) trait TxIAPI<'tx>: SplitRef<TxR<'tx>, TxW<'tx>> + 'tx {
-  fn bump(&self) -> &'tx Bump;
+pub(crate) trait TxIAPI<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> + 'tx {
+  type BucketType: BucketIAPI<'tx, Self>;
 
-  fn page_size(&self) -> usize;
+  fn bump(self) -> &'tx Bump {
+    let (r, _, _) = self.split_ref();
+    r.b
+  }
 
-  fn meta(&self) -> Ref<Meta>;
+  fn page_size(self) -> usize {
+    let (r, _, _) = self.split_ref();
+    r.page_size
+  }
 
-  fn page(&self, id: PgId) -> RefPage<'tx> {
+  fn meta<'a>(&'a self) -> Ref<'a, Meta>
+  where
+    'tx: 'a,
+  {
+    let (r, _, _) = self.split_ref();
+    Ref::map(r, |tx| &tx.meta)
+  }
+
+  fn page(self, id: PgId) -> RefPage<'tx> {
     todo!()
   }
 
-  fn txid(&self) -> TxId;
+  fn page_mut(self, id: PgId) -> MutPage<'tx> {
+    todo!()
+  }
+
+  fn api_id(self) -> TxId {
+    let (r, _, _) = self.split_ref();
+    r.meta.txid()
+  }
+
+  fn api_size(self) -> u64 {
+    let (r, _, _) = self.split_ref();
+    r.meta.pgid().0 * r.meta.page_size() as u64
+  }
+
+  fn api_writeable(self) -> bool {
+    let (_, _, w) = self.split_ref();
+    w.is_some()
+  }
+
+  fn api_cursor(self) -> InnerCursor<'tx, Self, Self::BucketType> {
+    todo!()
+  }
+
+  fn api_stats(self) -> TxStats {
+    todo!()
+  }
+
+  fn api_bucket(self, name: &[u8]) -> Option<Self::BucketType> {
+    todo!()
+  }
+
+  fn api_for_each<F: FnMut(&[u8], Self::BucketType)>(&self, f: F) -> crate::Result<()> {
+    todo!()
+  }
+
+  fn api_rollback(self) -> crate::Result<()> {
+    todo!()
+  }
+
+  fn api_page(id: PgId) -> crate::Result<PageInfo> {
+    todo!()
+  }
 }
 
-pub trait TxMutIAPI<'tx> {
-  fn freelist(&self) -> RefMut<Freelist>;
+pub(crate) trait TxMutIAPI<'tx>: TxIAPI<'tx> {
+  type CursorRwType: CursorMutIAPI<'tx>;
+  fn freelist(self) -> RefMut<'tx, Freelist>;
 
-  fn allocate(&self, count: usize) -> crate::Result<MutPage<'tx>>;
+  fn allocate(self, count: usize) -> crate::Result<MutPage<'tx>>;
+
+  fn api_cursor_mut(self) -> Self::CursorRwType;
+
+  fn api_create_bucket(self, name: &[u8]) -> crate::Result<Self::BucketType>;
+
+  fn api_create_bucket_if_not_exist(self, name: &[u8]) -> crate::Result<Self::BucketType>;
+
+  fn api_delete_bucket(self, name: &[u8]) -> crate::Result<()>;
+
+  fn api_commit(self) -> crate::Result<()>;
 }
 
-pub(crate) struct TxImpl {}
+pub(crate) struct TxImplTODORenameMe {}
 
-impl TxImpl {
+impl TxImplTODORenameMe {
   pub fn page<'tx, T: TxIAPI<'tx>>(cell: &T, id: PgId) -> RefPage<'tx> {
     todo!()
   }
@@ -243,6 +311,7 @@ impl<'tx> DBAccess for DBHider<'tx, RwLockWriteGuard<'tx, DBShared>> {
 pub struct TxR<'tx> {
   b: &'tx Bump,
   page_size: usize,
+
   db_ref: &'tx dyn DBAccess,
   managed: bool,
   meta: Meta,
@@ -250,7 +319,7 @@ pub struct TxR<'tx> {
 }
 
 pub struct TxW<'tx> {
-  pages: HashMap<'tx, PgId, RefPage<'tx>>,
+  pages: HashMap<'tx, PgId, MutPage<'tx>>,
   //TODO: We leak memory when this drops. Need special handling here
   commit_handlers: BVec<'tx, Box<dyn FnMut()>>,
   p: PhantomData<&'tx u8>,
@@ -263,114 +332,125 @@ pub struct TxRW<'tx> {
 
 #[derive(Copy, Clone)]
 pub struct TxCell<'tx> {
-  cell: SCell<'tx, TxR<'tx>>,
+  pub(crate) cell: SCell<'tx, (TxR<'tx>, BucketCell<'tx>)>,
 }
 
-impl<'tx> SplitRef<TxR<'tx>, TxW<'tx>> for TxCell<'tx> {
-  fn split_ref(&self) -> (Ref<TxR<'tx>>, Option<Ref<TxW<'tx>>>) {
-    (RefCell::borrow(&*self.cell), None)
+impl<'tx> SplitRef<TxR<'tx>, BucketCell<'tx>, TxW<'tx>> for TxCell<'tx> {
+  fn split_ref(&self) -> (Ref<TxR<'tx>>, Ref<BucketCell<'tx>>, Option<Ref<TxW<'tx>>>) {
+    let (r, bucket) = Ref::map_split(self.cell.borrow(), |c| (&c.0, &c.1));
+    (r, bucket, None)
   }
 
-  fn split_ref_mut(&self) -> (RefMut<TxR<'tx>>, Option<RefMut<TxW<'tx>>>) {
-    (self.cell.borrow_mut(), None)
+  fn split_ref_mut(
+    &self,
+  ) -> (
+    RefMut<TxR<'tx>>,
+    RefMut<BucketCell<'tx>>,
+    Option<RefMut<TxW<'tx>>>,
+  ) {
+    let (r, bucket) = RefMut::map_split(self.cell.borrow_mut(), |c| (&mut c.0, &mut c.1));
+    (r, bucket, None)
   }
 }
 
 impl<'tx> TxIAPI<'tx> for TxCell<'tx> {
-  #[inline(always)]
-  fn bump(&self) -> &'tx Bump {
-    self.cell.borrow().b
-  }
-
-  #[inline(always)]
-  fn page_size(&self) -> usize {
-    RefCell::borrow(&self.cell).page_size
-  }
-
-  fn meta(&self) -> Ref<Meta> {
-    Ref::map(RefCell::borrow(&self.cell), |tx| &tx.meta)
-  }
-
-  fn txid(&self) -> TxId {
-    RefCell::borrow(&self.cell).meta.txid()
-  }
+  type BucketType = BucketCell<'tx>;
 }
 
 #[derive(Copy, Clone)]
 pub struct TxRwCell<'tx> {
-  cell: SCell<'tx, TxRW<'tx>>,
+  pub(crate) cell: SCell<'tx, (TxRW<'tx>, BucketRwCell<'tx>)>,
 }
 
-impl<'tx> SplitRef<TxR<'tx>, TxW<'tx>> for TxRwCell<'tx> {
-  fn split_ref(&self) -> (Ref<TxR<'tx>>, Option<Ref<TxW<'tx>>>) {
-    let (r, w) = Ref::map_split(RefCell::borrow(&*self.cell), |b| (&b.r, &b.w));
-    (r, Some(w))
+impl<'tx> SplitRef<TxR<'tx>, BucketRwCell<'tx>, TxW<'tx>> for TxRwCell<'tx> {
+  fn split_ref(&self) -> (Ref<TxR<'tx>>, Ref<BucketRwCell<'tx>>, Option<Ref<TxW<'tx>>>) {
+    let (bucket, rw) = Ref::map_split(self.cell.borrow(), |c| (&c.1, &c.0));
+    let (r, w) = Ref::map_split(rw, |b| (&b.r, &b.w));
+    (r, bucket, Some(w))
   }
 
-  fn split_ref_mut(&self) -> (RefMut<TxR<'tx>>, Option<RefMut<TxW<'tx>>>) {
-    let (r, w) = RefMut::map_split(self.cell.borrow_mut(), |b| (&mut b.r, &mut b.w));
-    (r, Some(w))
+  fn split_ref_mut(
+    &self,
+  ) -> (
+    RefMut<TxR<'tx>>,
+    RefMut<BucketRwCell<'tx>>,
+    Option<RefMut<TxW<'tx>>>,
+  ) {
+    let (bucket, rw) = RefMut::map_split(self.cell.borrow_mut(), |c| (&mut c.1, &mut c.0));
+    let (r, w) = RefMut::map_split(rw, |b| (&mut b.r, &mut b.w));
+    (r, bucket, Some(w))
   }
 }
 
 impl<'tx> TxIAPI<'tx> for TxRwCell<'tx> {
-  #[inline(always)]
-  fn bump(&self) -> &'tx Bump {
-    self.cell.borrow().r.b
-  }
-
-  #[inline(always)]
-  fn page_size(&self) -> usize {
-    self.cell.borrow().r.page_size
-  }
-
-  fn meta(&self) -> Ref<Meta> {
-    Ref::map(self.cell.borrow(), |tx| &tx.r.meta)
-  }
-
-  fn txid(&self) -> TxId {
-    self.cell.borrow().r.meta.txid()
-  }
+  type BucketType = BucketRwCell<'tx>;
 }
 
 impl<'tx> TxMutIAPI<'tx> for TxRwCell<'tx> {
-  fn freelist(&self) -> RefMut<Freelist> {
+  type CursorRwType = InnerCursor<'tx, Self, Self::BucketType>;
+
+  fn freelist(self) -> RefMut<'tx, Freelist> {
     todo!()
   }
 
-  fn allocate(&self, count: usize) -> crate::Result<MutPage<'tx>> {
+  fn allocate(self, count: usize) -> crate::Result<MutPage<'tx>> {
+    todo!()
+  }
+
+  fn api_cursor_mut(self) -> Self::CursorRwType {
+    todo!()
+  }
+
+  fn api_create_bucket(self, name: &[u8]) -> crate::Result<Self::BucketType> {
+    todo!()
+  }
+
+  fn api_create_bucket_if_not_exist(self, name: &[u8]) -> crate::Result<Self::BucketType> {
+    todo!()
+  }
+
+  fn api_delete_bucket(self, name: &[u8]) -> crate::Result<()> {
+    todo!()
+  }
+
+  fn api_commit(self) -> crate::Result<()> {
     todo!()
   }
 }
 
 struct TxSelfRef<'tx, T: TxIAPI<'tx>> {
   h: Pin<Box<dyn DBAccess + 'tx>>,
-  tx: T,
+  tx: Pin<Rc<T>>,
   marker: PhantomPinned,
 }
 
 impl<'tx, T: TxIAPI<'tx>> TxSelfRef<'tx, T> {
   fn new_tx(o: &'tx mut TxOwned<RwLockReadGuard<'tx, DBShared>>) -> TxSelfRef<'tx, TxCell<'tx>> {
-    let page_size = o.db.borrow().backend.meta().page_size() as usize;
+    let bump = &o.b;
+    let meta = o.db.borrow().backend.meta();
+    let page_size = meta.page_size() as usize;
+    let inline_bucket = meta.root();
     let mut uninit: MaybeUninit<TxSelfRef<'tx, TxCell<'tx>>> = MaybeUninit::uninit();
     let ptr = uninit.as_mut_ptr();
     unsafe {
       addr_of_mut!((*ptr).h).write(Box::pin(DBHider { db: &o.db }));
       let db = &(**(addr_of_mut!((*ptr).h)));
-      let tx = TxCell {
-        cell: SCell::new_in(
-          TxR {
-            b: &o.b,
-            page_size,
-            db_ref: db,
-            managed: false,
-            meta: db.get().backend.meta(),
-            p: Default::default(),
-          },
-          &o.b,
-        ),
-      };
-      addr_of_mut!((*ptr).tx).write(tx);
+      let tx = Rc::new_cyclic(|weak_tx| {
+        let r = TxR {
+          b: &o.b,
+          page_size,
+          db_ref: db,
+          managed: false,
+          meta,
+          p: Default::default(),
+        };
+        let bucket = BucketCell::new_in(bump, inline_bucket, weak_tx.clone(), None);
+        TxCell {
+          cell: SCell::new_in((r, bucket), bump),
+        }
+      });
+
+      addr_of_mut!((*ptr).tx).write(Pin::new(tx));
       addr_of_mut!((*ptr).marker).write(PhantomPinned);
       uninit.assume_init()
     }
@@ -379,33 +459,37 @@ impl<'tx, T: TxIAPI<'tx>> TxSelfRef<'tx, T> {
   fn new_tx_mut(
     o: &'tx mut TxOwned<RwLockWriteGuard<'tx, DBShared>>,
   ) -> TxSelfRef<'tx, TxRwCell<'tx>> {
-    let page_size = o.db.borrow().backend.meta().page_size() as usize;
+    let bump = &o.b;
+    let meta = o.db.borrow().backend.meta();
+    let page_size = meta.page_size() as usize;
+    let inline_bucket = meta.root();
     let mut uninit: MaybeUninit<TxSelfRef<'tx, TxRwCell<'tx>>> = MaybeUninit::uninit();
     let ptr = uninit.as_mut_ptr();
     unsafe {
       addr_of_mut!((*ptr).h).write(Box::pin(DBHider { db: &o.db }));
       let db = &(**(addr_of_mut!((*ptr).h)));
-      let tx = TxRwCell {
-        cell: SCell::new_in(
-          TxRW {
-            r: TxR {
-              b: &o.b,
-              page_size,
-              db_ref: db,
-              managed: false,
-              meta: db.get().backend.meta(),
-              p: Default::default(),
-            },
-            w: TxW {
-              pages: HashMap::with_capacity_in(0, &o.b),
-              commit_handlers: BVec::with_capacity_in(0, &o.b),
-              p: Default::default(),
-            },
+      let tx = Rc::new_cyclic(|weak_tx| {
+        let rw = TxRW {
+          r: TxR {
+            b: &o.b,
+            page_size,
+            db_ref: db,
+            managed: false,
+            meta: meta,
+            p: Default::default(),
           },
-          &o.b,
-        ),
-      };
-      addr_of_mut!((*ptr).tx).write(tx);
+          w: TxW {
+            pages: HashMap::with_capacity_in(0, &o.b),
+            commit_handlers: BVec::with_capacity_in(0, &o.b),
+            p: Default::default(),
+          },
+        };
+        let bucket = BucketRwCell::new_in(bump, inline_bucket, weak_tx.clone(), None);
+        TxRwCell {
+          cell: SCell::new_in((rw, bucket), bump),
+        }
+      });
+      addr_of_mut!((*ptr).tx).write(Pin::new(tx));
       addr_of_mut!((*ptr).marker).write(PhantomPinned);
       uninit.assume_init()
     }
@@ -443,3 +527,11 @@ impl<'tx, D: Deref<Target = DBShared> + Unpin, T: TxIAPI<'tx>> TxHolder<'tx, D, 
     }
   }
 }
+
+pub struct TxImpl {}
+
+pub struct TxRwImpl {}
+
+pub struct TxRef {}
+
+pub struct TxRwRef {}

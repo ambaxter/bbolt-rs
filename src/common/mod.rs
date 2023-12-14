@@ -27,8 +27,8 @@ pub type HashMap<'tx, K, V> = hashbrown::HashMap<K, V, DefaultHashBuilder, &'tx 
 
 pub type HashSet<'tx, K> = hashbrown::HashSet<K, DefaultHashBuilder, &'tx Bump>;
 
-pub(crate) trait SplitRef<R, W>: Copy + Clone {
-  fn split_ref(&self) -> (cell::Ref<R>, Option<cell::Ref<W>>);
+pub(crate) trait SplitRef<R, T, W>: Copy + Clone {
+  fn split_ref(&self) -> (cell::Ref<R>, cell::Ref<T>, Option<cell::Ref<W>>);
 
-  fn split_ref_mut(&self) -> (cell::RefMut<R>, Option<cell::RefMut<W>>);
+  fn split_ref_mut(&self) -> (cell::RefMut<R>, cell::RefMut<T>, Option<cell::RefMut<W>>);
 }
