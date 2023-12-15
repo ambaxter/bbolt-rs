@@ -25,7 +25,7 @@ use std::ops::{AddAssign, Deref, DerefMut};
 use std::ptr::slice_from_raw_parts_mut;
 use std::rc::{Rc, Weak};
 
-pub trait BucketApi<'tx>: 'tx
+pub trait BucketApi<'tx>
 where
   Self: Sized,
 {
@@ -313,7 +313,7 @@ struct InlinePage {
 }
 
 pub(crate) trait BucketIAPI<'tx, T: TxIAPI<'tx>>:
-  SplitRef<BucketR<'tx>, Weak<T>, InnerBucketW<'tx, T, Self>> + 'tx
+  SplitRef<BucketR<'tx>, Weak<T>, InnerBucketW<'tx, T, Self>>
 {
   fn new_in(
     bump: &'tx Bump, bucket_header: InBucket, tx: Weak<T>, inline_page: Option<RefPage<'tx>>,

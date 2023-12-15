@@ -23,7 +23,7 @@ use std::ptr::{addr_of, addr_of_mut};
 use std::rc::Rc;
 use std::time::Duration;
 
-pub trait TxApi<'tx>: 'tx {
+pub trait TxApi<'tx>: {
   type CursorType: CursorApi<'tx>;
   type BucketType: BucketApi<'tx>;
 
@@ -174,7 +174,7 @@ impl Sub<TxStats> for TxStats {
 }
 
 //TODO: now that the layout has been filled out these aren't needed anymore I don't think
-pub(crate) trait TxIAPI<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> + 'tx {
+pub(crate) trait TxIAPI<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
   type BucketType: BucketIAPI<'tx, Self>;
 
   fn bump(self) -> &'tx Bump {
