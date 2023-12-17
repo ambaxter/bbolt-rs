@@ -482,6 +482,16 @@ impl Freelist {
   pub(crate) fn reload(&mut self, header: &Page) {
     todo!()
   }
+
+  /// size returns the size of the page after serialization.
+  pub(crate) fn size(&self) -> u64 {
+    let mut n = self.count();
+    if n >= 0xFFFF {
+      n += 1;
+    }
+
+    PAGE_HEADER_SIZE as u64 + (mem::size_of::<PgId>() as u64 * n)
+  }
 }
 
 #[cfg(test)]

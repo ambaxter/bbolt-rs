@@ -9,7 +9,7 @@ use crate::common::tree::{
   MappedBranchPage, MappedLeafPage, TreePage, BRANCH_PAGE_ELEMENT_SIZE, LEAF_PAGE_ELEMENT_SIZE,
 };
 use crate::common::{BVec, PgId, SplitRef, ZERO_PGID};
-use crate::tx::{TxApi, TxCell, TxIAPI, TxMutIAPI, TxRwCell};
+use crate::tx::{TxApi, TxCell, TxIAPI, TxRwIAPI, TxRwCell};
 use bumpalo::Bump;
 use hashbrown::Equivalent;
 use std::cell;

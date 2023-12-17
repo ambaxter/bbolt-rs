@@ -81,12 +81,12 @@ impl<'tx, C: CursorIAPI<'tx>> CursorApi<'tx> for CursorImpl<'tx, C> {
   }
 }
 
-pub struct CursorRwImpl<'tx, C: CursorMutIAPI<'tx>> {
+pub struct CursorRwImpl<'tx, C: CursorRwIAPI<'tx>> {
   c: C,
   p: PhantomData<&'tx u64>,
 }
 
-impl<'tx, C: CursorMutIAPI<'tx>> CursorRwImpl<'tx, C> {
+impl<'tx, C: CursorRwIAPI<'tx>> CursorRwImpl<'tx, C> {
   pub(crate) fn new(c: C) -> Self {
     CursorRwImpl {
       c,
@@ -95,7 +95,7 @@ impl<'tx, C: CursorMutIAPI<'tx>> CursorRwImpl<'tx, C> {
   }
 }
 
-impl<'tx, C: CursorMutIAPI<'tx>> CursorApi<'tx> for CursorRwImpl<'tx, C> {
+impl<'tx, C: CursorRwIAPI<'tx>> CursorApi<'tx> for CursorRwImpl<'tx, C> {
   fn first(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
     self.c.api_first()
   }
@@ -117,7 +117,7 @@ impl<'tx, C: CursorMutIAPI<'tx>> CursorApi<'tx> for CursorRwImpl<'tx, C> {
   }
 }
 
-impl<'tx, C: CursorMutIAPI<'tx>> CursorRwApi<'tx> for CursorRwImpl<'tx, C> {
+impl<'tx, C: CursorRwIAPI<'tx>> CursorRwApi<'tx> for CursorRwImpl<'tx, C> {
   fn delete(&mut self, key: &[u8]) -> crate::Result<()> {
     self.c.api_delete(key)
   }
@@ -156,7 +156,7 @@ pub(crate) trait CursorIAPI<'tx>: Clone {
   fn search_page(&mut self, key: &[u8], page: &RefPage);
 }
 
-pub(crate) trait CursorMutIAPI<'tx>: CursorIAPI<'tx> {
+pub(crate) trait CursorRwIAPI<'tx>: CursorIAPI<'tx> {
   fn node(&mut self) -> NodeRwCell<'tx>;
 
   fn api_delete(&mut self, key: &[u8]) -> crate::Result<()>;
@@ -538,7 +538,7 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for InnerCursor
   }
 }
 
-impl<'tx, B: BucketRwIAPI<'tx>> CursorMutIAPI<'tx> for InnerCursor<'tx, TxRwCell<'tx>, B> {
+impl<'tx, B: BucketRwIAPI<'tx>> CursorRwIAPI<'tx> for InnerCursor<'tx, TxRwCell<'tx>, B> {
   fn node(&mut self) -> NodeRwCell<'tx> {
     assert!(
       !self.stack.is_empty(),

@@ -5,10 +5,10 @@ use crate::common::page::{CoerciblePage, Page, RefPage, BUCKET_LEAF_FLAG, PAGE_H
 use crate::common::tree::{MappedBranchPage, TreePage, LEAF_PAGE_ELEMENT_SIZE};
 use crate::common::{BVec, HashMap, PgId, SplitRef, ZERO_PGID};
 use crate::cursor::{
-  CursorApi, CursorIAPI, CursorImpl, CursorMutIAPI, CursorRwImpl, ElemRef, InnerCursor,
+  CursorApi, CursorIAPI, CursorImpl, CursorRwIAPI, CursorRwImpl, ElemRef, InnerCursor,
 };
 use crate::node::{NodeRwCell, NodeW};
-use crate::tx::{TxApi, TxCell, TxIAPI, TxImplTODORenameMe, TxMutIAPI, TxR, TxRwCell, TxW};
+use crate::tx::{TxApi, TxCell, TxIAPI, TxImplTODORenameMe, TxRwIAPI, TxR, TxRwCell, TxW};
 use crate::Error::{
   BucketExists, BucketNameRequired, BucketNotFound, IncompatibleValue, KeyRequired, KeyTooLarge,
   ValueTooLarge,

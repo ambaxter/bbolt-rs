@@ -5,7 +5,7 @@ use crate::common::meta::Meta;
 use crate::common::page::{MutPage, PageInfo, RefPage};
 use crate::common::selfowned::SelfOwned;
 use crate::common::{BVec, HashMap, PgId, SplitRef, TxId};
-use crate::cursor::{CursorMutIAPI, InnerCursor};
+use crate::cursor::{CursorRwIAPI, InnerCursor};
 use crate::db::DBShared;
 use crate::freelist::Freelist;
 use crate::node::NodeRwCell;
@@ -219,7 +219,8 @@ pub(crate) trait TxIAPI<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
   }
 
   fn api_cursor(self) -> InnerCursor<'tx, Self, Self::BucketType> {
-    todo!()
+    let(_, root_bucket, _) = self.split_ref();
+    root_bucket.i_cursor()
   }
 
   fn api_stats(self) -> TxStats {
@@ -227,24 +228,38 @@ pub(crate) trait TxIAPI<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
   }
 
   fn api_bucket(self, name: &[u8]) -> Option<Self::BucketType> {
-    todo!()
+    let(_, root_bucket, _) = self.split_ref();
+    root_bucket.api_bucket(name)
   }
 
-  fn api_for_each<F: FnMut(&[u8], Self::BucketType)>(&self, f: F) -> crate::Result<()> {
-    todo!()
+  fn api_for_each<F: FnMut(&[u8], Self::BucketType)>(&self, mut f: F) -> crate::Result<()> {
+    let(_, root_bucket, _) = self.split_ref();
+    // TODO: Are we calling the right function?
+    root_bucket.api_for_each_bucket(|k| {
+      let bucket = root_bucket.api_bucket(k).unwrap();
+      Ok(f(k, bucket))
+    })
   }
 
   fn api_rollback(self) -> crate::Result<()> {
     todo!()
   }
 
+  fn non_physical_rollback(self) -> crate::Result<()>;
+
+  fn rollback(self) -> crate::Result<()> {
+    todo!()
+  }
+
   fn api_page(id: PgId) -> crate::Result<PageInfo> {
     todo!()
   }
+
+  fn close(self) -> crate::Result<()>;
 }
 
-pub(crate) trait TxMutIAPI<'tx>: TxIAPI<'tx> {
-  type CursorRwType: CursorMutIAPI<'tx>;
+pub(crate) trait TxRwIAPI<'tx>: TxIAPI<'tx> {
+  type CursorRwType: CursorRwIAPI<'tx>;
   fn freelist(self) -> RefMut<'tx, Freelist>;
 
   fn allocate(self, count: usize) -> crate::Result<MutPage<'tx>>;
@@ -313,7 +328,8 @@ pub struct TxR<'tx> {
   page_size: usize,
 
   db_ref: &'tx dyn DBAccess,
-  managed: bool,
+  is_managed: bool,
+  is_rollback: bool,
   meta: Meta,
   p: PhantomData<&'tx u8>,
 }
@@ -322,6 +338,7 @@ pub struct TxW<'tx> {
   pages: HashMap<'tx, PgId, MutPage<'tx>>,
   //TODO: We leak memory when this drops. Need special handling here
   commit_handlers: BVec<'tx, Box<dyn FnMut()>>,
+  is_commit: bool,
   p: PhantomData<&'tx u8>,
 }
 
@@ -355,6 +372,14 @@ impl<'tx> SplitRef<TxR<'tx>, BucketCell<'tx>, TxW<'tx>> for TxCell<'tx> {
 
 impl<'tx> TxIAPI<'tx> for TxCell<'tx> {
   type BucketType = BucketCell<'tx>;
+
+  fn non_physical_rollback(self) -> crate::Result<()> {
+    todo!()
+  }
+
+  fn close(self) -> crate::Result<()> {
+    todo!()
+  }
 }
 
 #[derive(Copy, Clone)]
@@ -386,7 +411,7 @@ impl<'tx> TxIAPI<'tx> for TxRwCell<'tx> {
   type BucketType = BucketRwCell<'tx>;
 }
 
-impl<'tx> TxMutIAPI<'tx> for TxRwCell<'tx> {
+impl<'tx> TxRwIAPI<'tx> for TxRwCell<'tx> {
   type CursorRwType = InnerCursor<'tx, Self, Self::BucketType>;
 
   fn freelist(self) -> RefMut<'tx, Freelist> {
@@ -440,7 +465,8 @@ impl<'tx, T: TxIAPI<'tx>> TxSelfRef<'tx, T> {
           b: &o.b,
           page_size,
           db_ref: db,
-          managed: false,
+          is_managed: false,
+          is_rollback: false,
           meta,
           p: Default::default(),
         };
@@ -474,13 +500,15 @@ impl<'tx, T: TxIAPI<'tx>> TxSelfRef<'tx, T> {
             b: &o.b,
             page_size,
             db_ref: db,
-            managed: false,
-            meta: meta,
+            is_managed: false,
+            is_rollback: false,
+            meta,
             p: Default::default(),
           },
           w: TxW {
             pages: HashMap::with_capacity_in(0, &o.b),
             commit_handlers: BVec::with_capacity_in(0, &o.b),
+            is_commit: false,
             p: Default::default(),
           },
         };
@@ -532,6 +560,10 @@ pub struct TxImpl {}
 
 pub struct TxRwImpl {}
 
-pub struct TxRef {}
+pub struct TxRef<'tx> {
+  tx: TxCell<'tx>
+}
 
-pub struct TxRwRef {}
+pub struct TxRwRef<'tx> {
+  tx: TxRwCell<'tx>
+}

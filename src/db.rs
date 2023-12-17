@@ -13,9 +13,9 @@ use crate::{Error, TxApi, TxMutApi};
 use aligners::{alignment, AlignedBytes};
 use bumpalo::Bump;
 use fs4::FileExt;
-use itertools::min;
+use itertools::{Itertools, min};
 use memmap2::{Advice, MmapOptions, MmapRaw};
-use parking_lot::{Mutex, RwLock, RwLockReadGuard};
+use parking_lot::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::cell::{RefCell, RefMut};
 use std::fs::File;
 use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
@@ -156,6 +156,7 @@ impl Sub<&DbStats> for &DbStats {
 pub struct DbInfo {}
 
 pub struct DBRecords {
+  bump_pool: Vec<Bump>,
   txs: Vec<TxId>,
   rwtx: Option<TxId>,
   freelist: Freelist,
@@ -179,6 +180,41 @@ impl DBRecords {
       minid = *txid + 1;
     }
     self.freelist.release_range(minid, TxId(0xFFFFFFFFFFFFFFFF));
+  }
+
+  pub(crate) fn remove_rw_tx<'tx>(&mut self, page_size: usize, rem_tx: TxId, tx_stats: TxStats, mut bump: Bump, db_lock: RwLockWriteGuard<'tx, DBShared>) {
+
+    let free_list_free_n = self.freelist.free_count();
+    let free_list_pending_n = self.freelist.pending_count();
+    let free_list_alloc = self.freelist.size();
+
+    bump.reset();
+    self.bump_pool.push(bump);
+
+    self.rwtx = None;
+    drop(db_lock);
+
+
+
+    self.stats.free_page_n = free_list_free_n as i64;
+    self.stats.pending_page_n = free_list_pending_n as i64;
+    self.stats.free_alloc = ((free_list_free_n + free_list_pending_n) * page_size as u64) as i64;
+    self.stats.free_list_in_use = free_list_alloc as i64;
+    self.stats.tx_stats += tx_stats;
+  }
+
+  pub(crate) fn remove_tx<'tx>(&mut self, rem_tx: TxId, tx_stats: TxStats, mut bump: Bump, db_lock: RwLockReadGuard<'tx, DBShared>) {
+    if let Some(pos) = self.txs.iter().position(|tx| *tx == rem_tx) {
+      self.txs.swap_remove(pos);
+    }
+
+    bump.reset();
+    self.bump_pool.push(bump);
+    drop(db_lock);
+
+    let n = self.txs.len();
+    self.stats.open_tx_n = n as i64;
+    self.stats.tx_stats += tx_stats;
   }
 }
 
@@ -374,6 +410,10 @@ impl Drop for DBBackend {
 pub struct DBShared {
   pub(crate) records: Mutex<DBRecords>,
   pub(crate) backend: DBBackend,
+}
+
+impl DBShared {
+
 }
 
 pub(crate) trait DbIAPI<'tx>: 'tx {}
