@@ -18,4 +18,4 @@ mod tx;
 pub use bucket::{BucketApi, BucketRwApi};
 pub use common::errors::{Error, Result};
 pub use cursor::{CursorApi, CursorRwApi};
-pub use tx::{TxApi, TxMutApi};
+pub use tx::{TxApi, TxRwApi};

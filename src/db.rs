@@ -9,8 +9,8 @@ use crate::common::tree::MappedLeafPage;
 use crate::common::{PgId, TxId};
 use crate::freelist::{Freelist, MappedFreeListPage};
 use crate::tx::{TxCell, TxRwCell, TxStats};
-use crate::{Error, TxApi, TxMutApi};
-use aligners::{alignment, AlignedBytes};
+use crate::{Error, TxApi, TxRwApi};
+use aligners::{alignment, AlignedBytes, Aligned};
 use bumpalo::Bump;
 use fs4::FileExt;
 use itertools::{Itertools, min};
@@ -72,8 +72,8 @@ where
   fn stats(&self) -> DbStats;
 }
 
-pub trait DbMutAPI: DbApi {
-  type TxMutType<'tx>: TxMutApi<'tx>
+pub trait DbRwAPI: DbApi {
+  type TxRwType<'tx>: TxRwApi<'tx>
   where
     Self: 'tx;
 
@@ -94,7 +94,7 @@ pub trait DbMutAPI: DbApi {
   ///
   /// IMPORTANT: You must close read-only transactions after you are finished or
   /// else the database will not reclaim old pages.
-  fn begin_mut<'tx>(&'tx mut self) -> Self::TxMutType<'tx>;
+  fn begin_mut<'tx>(&'tx mut self) -> Self::TxRwType<'tx>;
 
   /// Update executes a function within the context of a read-write managed transaction.
   /// If no error is returned from the function then the transaction is committed.
@@ -161,6 +161,7 @@ pub struct DBRecords {
   rwtx: Option<TxId>,
   freelist: Freelist,
   stats: DbStats,
+  page_pool: Vec<AlignedBytes::<alignment::Page>>
 }
 
 impl DBRecords {
@@ -413,6 +414,45 @@ pub struct DBShared {
 }
 
 impl DBShared {
+
+  // TODO: We are probably violating something here in &self
+  fn page(&self, pgid: PgId) -> RefPage {
+    let r = self.records.lock();
+    // Disallow returning free pages
+    if r.freelist.freed(pgid) {
+      panic!("db.page: Page {} in the free list", pgid);
+    }
+    let addr =  pgid.0 as usize * self.backend.page_size;
+    // Disallow returning anything beyond the existing file boundaries
+    if (addr + self.backend.page_size) as u64 > self.backend.data_size {
+      panic!("db.page: Page {} beyond data_size", pgid);
+    }
+    let mmap = self.backend.mmap.as_ref().unwrap();
+    let page_ptr = unsafe {mmap.as_ptr().add(pgid.0 as usize * self.backend.page_size) };
+    RefPage::new(page_ptr)
+  }
+
+  fn allocate<'tx>(&mut self, tx_id: TxId, count: u64, tx: TxRwCell<'tx>) -> crate::Result<SelfOwned<AlignedBytes<alignment::Page>, MutPage<'tx>>> {
+    let r = self.records.lock();
+    let bytes = if count == 1 && !r.page_pool.is_empty() {
+      r.page_pool.pop().unwrap()
+    } else {
+      AlignedBytes::new_zeroed(count as usize * self.backend.page_size)
+    };
+
+    let mut mut_page = SelfOwned::new_with_map(bytes, |b| MutPage::new(b.as_mut_ptr()));
+    mut_page.overflow = (count - 1) as u32;
+
+    if let Some(pid) = r.freelist.allocate(tx_id, count) {
+      mut_page.id = pid;
+      return Ok(mut_page);
+    }
+
+    // TODO: How do we signal back that the file is at a new high water mark?
+    // TODO: When remapping the file how do we signal that we should own/dereference before we go further?
+    // I think we can just pass in the tx when we grow the db size
+    Ok(mut_page)
+  }
 
 }
 

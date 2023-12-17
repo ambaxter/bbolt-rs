@@ -61,7 +61,7 @@ pub trait TxApi<'tx>: {
   fn page(id: PgId) -> crate::Result<PageInfo>;
 }
 
-pub trait TxMutApi<'tx>: TxApi<'tx> {
+pub trait TxRwApi<'tx>: TxApi<'tx> {
   type CursorRwType: CursorRwApi<'tx>;
 
   /// Cursor creates a cursor associated with the root bucket.
@@ -328,7 +328,6 @@ pub struct TxR<'tx> {
   page_size: usize,
 
   db_ref: &'tx dyn DBAccess,
-  is_managed: bool,
   is_rollback: bool,
   meta: Meta,
   p: PhantomData<&'tx u8>,
@@ -338,7 +337,6 @@ pub struct TxW<'tx> {
   pages: HashMap<'tx, PgId, MutPage<'tx>>,
   //TODO: We leak memory when this drops. Need special handling here
   commit_handlers: BVec<'tx, Box<dyn FnMut()>>,
-  is_commit: bool,
   p: PhantomData<&'tx u8>,
 }
 
@@ -465,7 +463,6 @@ impl<'tx, T: TxIAPI<'tx>> TxSelfRef<'tx, T> {
           b: &o.b,
           page_size,
           db_ref: db,
-          is_managed: false,
           is_rollback: false,
           meta,
           p: Default::default(),
@@ -500,7 +497,6 @@ impl<'tx, T: TxIAPI<'tx>> TxSelfRef<'tx, T> {
             b: &o.b,
             page_size,
             db_ref: db,
-            is_managed: false,
             is_rollback: false,
             meta,
             p: Default::default(),
@@ -508,7 +504,6 @@ impl<'tx, T: TxIAPI<'tx>> TxSelfRef<'tx, T> {
           w: TxW {
             pages: HashMap::with_capacity_in(0, &o.b),
             commit_handlers: BVec::with_capacity_in(0, &o.b),
-            is_commit: false,
             p: Default::default(),
           },
         };
@@ -556,9 +551,29 @@ impl<'tx, D: Deref<Target = DBShared> + Unpin, T: TxIAPI<'tx>> TxHolder<'tx, D, 
   }
 }
 
-pub struct TxImpl {}
+pub struct TxImpl<'tx> {
+  bump: Pin<Box<Bump>>,
+  lock: RwLockReadGuard<'tx, DBShared>,
+  tx: Pin<Rc<TxCell<'tx>>>,
+}
 
-pub struct TxRwImpl {}
+impl<'tx> TxImpl<'tx> {
+  pub(crate) fn get_ref(&self) -> TxRef<'tx> {
+    TxRef{tx: TxCell{cell: self.tx.cell}}
+  }
+}
+
+pub struct TxRwImpl<'tx> {
+  bump: Pin<Box<Bump>>,
+  lock: RwLockWriteGuard<'tx, DBShared>,
+  tx: Pin<Rc<TxRwCell<'tx>>>,
+}
+
+impl<'tx> TxRwImpl<'tx> {
+  pub(crate) fn get_ref(&self) -> TxRwRef<'tx> {
+    TxRwRef{tx: TxRwCell{cell: self.tx.cell}}
+  }
+}
 
 pub struct TxRef<'tx> {
   tx: TxCell<'tx>
