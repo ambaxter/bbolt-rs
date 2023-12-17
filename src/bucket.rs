@@ -2,7 +2,7 @@ use crate::common::bucket::{InBucket, IN_BUCKET_SIZE};
 use crate::common::memory::{IsAligned, SCell};
 use crate::common::meta::MetaPage;
 use crate::common::page::{CoerciblePage, Page, RefPage, BUCKET_LEAF_FLAG, PAGE_HEADER_SIZE};
-use crate::common::tree::{MappedBranchPage, TreePage, LEAF_PAGE_ELEMENT_SIZE};
+use crate::common::tree::{MappedBranchPage, TreePage, LEAF_PAGE_ELEMENT_SIZE, MappedLeafPage, BRANCH_PAGE_ELEMENT_SIZE};
 use crate::common::{BVec, HashMap, PgId, SplitRef, ZERO_PGID};
 use crate::cursor::{
   CursorApi, CursorIAPI, CursorImpl, CursorRwIAPI, CursorRwImpl, ElemRef, InnerCursor,
@@ -236,7 +236,7 @@ impl<'tx> BucketRwApi<'tx> for BucketRwImpl<'tx> {
 }
 
 /// BucketStats records statistics about resources used by a bucket.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Default)]
 pub struct BucketStats {
   // Page count statistics.
   /// number of logical branch pages
@@ -427,7 +427,7 @@ pub(crate) trait BucketIAPI<'tx, T: TxIAPI<'tx>>:
     Ok(())
   }
 
-  fn for_each_page<F: FnMut(&RefPage, usize, &[PgId]) + Copy>(self, mut f: F) {
+  fn for_each_page<F: FnMut(&RefPage, usize, &[PgId])>(self, mut f: F) {
     let root = {
       let (r, _, _) = self.split_ref();
       let root = r.bucket_header.root();
@@ -513,8 +513,57 @@ pub(crate) trait BucketIAPI<'tx, T: TxIAPI<'tx>>:
     self.split_ref().0.bucket_header.sequence()
   }
 
-  fn max_inline_bucket_size(&self) -> usize {
+  fn max_inline_bucket_size(self) -> usize {
     self.api_tx().page_size() / 4
+  }
+
+  fn api_stats(self) -> BucketStats {
+    let mut s = BucketStats::default();
+    let mut sub_stats = BucketStats::default();
+    let page_size = self.api_tx().page_size();
+    s.bucket_n += 1;
+    if self.root() == ZERO_PGID {
+      s.inline_bucket_n += 1;
+    }
+    self.for_each_page(|p, depth, stack| {
+      if let Some(leaf_page) = MappedLeafPage::coerce_ref(p) {
+        s.key_n += p.count as i64;
+
+        let mut used = PAGE_HEADER_SIZE;
+        if let Some(last_element) = leaf_page.elements().last() {
+          used += LEAF_PAGE_ELEMENT_SIZE * (p.count - 1) as usize;
+          used += last_element.pos() as usize + last_element.key_size() as usize + last_element.value_size() as usize;
+        }
+
+        if self.root() == ZERO_PGID {
+          s.inline_bucket_in_use += used as i64;
+        } else {
+          s.leaf_page_n += 1;
+          s.leaf_in_use += used as i64;
+          s.leaf_overflow_n += leaf_page.overflow as i64;
+
+          for leaf_elem in leaf_page.elements() {
+            if leaf_elem.is_bucket_entry() {
+              sub_stats += self.open_bucket(leaf_elem.as_ref().value()).api_stats();
+            }
+          }
+        }
+      } else if let Some(branch_page) = MappedBranchPage::coerce_ref(p) {
+        s.branch_page_n += 1;
+        if let Some(last_element) = branch_page.elements().last() {
+          let mut used = PAGE_HEADER_SIZE + (BRANCH_PAGE_ELEMENT_SIZE * (branch_page.count - 1) as usize);
+          used += last_element.pos() as usize + last_element.key_size() as usize;
+          s.branch_in_use += used as i64;
+          s.branch_overflow_n += branch_page.overflow as i64;
+        }
+      }
+
+    });
+    s.branch_alloc = (s.branch_page_n + s.branch_overflow_n) * page_size as i64;
+    s.leaf_alloc = (s.leaf_page_n + s.leaf_overflow_n) * page_size as i64;
+    s.depth += sub_stats.depth;
+    s += sub_stats;
+    s
   }
 }
 
