@@ -78,6 +78,8 @@ pub enum Error {
 
   #[error("mmap too large")]
   MMapTooLarge,
+  #[error("file size too small")]
+  MMapFileSizeTooSmall,
   // Chained errors from other sources
   #[error(transparent)]
   IO(#[from] io::Error),
@@ -107,6 +109,7 @@ impl PartialEq for Error {
       (Error::ValueTooLarge, Error::ValueTooLarge) => true,
       (Error::IncompatibleValue, Error::IncompatibleValue) => true,
       (Error::MMapTooLarge, Error::MMapTooLarge) => true,
+      (Error::MMapFileSizeTooSmall, Error::MMapFileSizeTooSmall) => true,
       _ => false,
     }
   }

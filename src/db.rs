@@ -23,6 +23,7 @@ use std::ops::{Deref, Sub};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::{fs, io, mem};
+use crate::bucket::BucketRwIAPI;
 
 pub trait DbApi: Clone
 where
@@ -266,7 +267,7 @@ impl DBBackend {
     self.meta().free_list() != PGID_NO_FREE_LIST
   }
 
-  fn mmap_size(page_size: usize, size: u64) -> crate::Result<usize> {
+  fn mmap_size(page_size: usize, size: u64) -> crate::Result<u64> {
     for i in 15..=30usize {
       if size <= 1 << i {
         return Ok(1 << i);
@@ -291,7 +292,7 @@ impl DBBackend {
       sz = MAX_MAP_SIZE.bytes() as u64;
     }
 
-    Ok(sz as usize)
+    Ok(sz)
   }
 
   fn mmap_unlock(&mut self) -> crate::Result<()> {
@@ -391,6 +392,36 @@ impl DBBackend {
     }
     Err(Error::InvalidDatabase(meta_can_read))
   }
+
+  /// mmap opens the underlying memory-mapped file and initializes the meta references.
+  /// min_size is the minimum size that the new mmap can be.
+  fn mmap<'tx>(&mut self, min_size: u64, tx: TxRwCell<'tx>) -> crate::Result<()> {
+    let info = self.file.metadata()?;
+    if info.len() < (self.page_size * 2) as u64 {
+      return Err(Error::MMapFileSizeTooSmall);
+    }
+    let file_size = info.len();
+    let mut size = file_size;
+    if size < min_size {
+      size = min_size;
+    }
+    size = DBBackend::mmap_size(self.page_size, size)?;
+    if self.use_mlock {
+      self.mmap.unwrap().unlock()?;
+    }
+    tx.cell.borrow().1.own_in();
+
+    self.mmap = None;
+
+    // why have 2 functions named mmap
+    let mmap = MmapRaw::map_raw(&self.file)?;
+    mmap.advise(Advice::Random)?;
+    if self.use_mlock {
+      mmap.lock()?;
+    }
+    self.mmap = Some(mmap);
+    Ok(())
+  }
 }
 
 impl Drop for DBBackend {
@@ -415,23 +446,6 @@ pub struct DBShared {
 
 impl DBShared {
 
-  // TODO: We are probably violating something here in &self
-  fn page(&self, pgid: PgId) -> RefPage {
-    let r = self.records.lock();
-    // Disallow returning free pages
-    if r.freelist.freed(pgid) {
-      panic!("db.page: Page {} in the free list", pgid);
-    }
-    let addr =  pgid.0 as usize * self.backend.page_size;
-    // Disallow returning anything beyond the existing file boundaries
-    if (addr + self.backend.page_size) as u64 > self.backend.data_size {
-      panic!("db.page: Page {} beyond data_size", pgid);
-    }
-    let mmap = self.backend.mmap.as_ref().unwrap();
-    let page_ptr = unsafe {mmap.as_ptr().add(pgid.0 as usize * self.backend.page_size) };
-    RefPage::new(page_ptr)
-  }
-
   fn allocate<'tx>(&mut self, tx_id: TxId, count: u64, tx: TxRwCell<'tx>) -> crate::Result<SelfOwned<AlignedBytes<alignment::Page>, MutPage<'tx>>> {
     let r = self.records.lock();
     let bytes = if count == 1 && !r.page_pool.is_empty() {
@@ -453,6 +467,34 @@ impl DBShared {
     // I think we can just pass in the tx when we grow the db size
     Ok(mut_page)
   }
+
+  fn grow(&mut self, mut size: u64) -> crate::Result<()> {
+    if size <= self.backend.file_size {
+      return Ok(());
+    }
+    if self.backend.data_size <= self.backend.alloc_size {
+      size = self.backend.data_size;
+    } else {
+      size += self.backend.alloc_size;
+    }
+    if self.backend.use_mlock {
+      //TODO: Not sure if this is necessary
+      self.backend.mmap.unwrap().unlock()?;
+    }
+    self.backend.mmap = None;
+    self.backend.file.set_len(size)?;
+    self.backend.file.sync_all()?;
+    //TODO: We need to make sure we dereference here
+    self.backend.mmap = Some(MmapRaw::map_raw(&self.backend.file)?);
+    if self.backend.use_mlock {
+      //TODO: Not sure if this is necessary
+      self.backend.mmap.unwrap().lock()?;
+    }
+    self.backend.file_size = size;
+    Ok(())
+  }
+
+
 
 }
 
