@@ -2,13 +2,15 @@ use crate::common::bucket::{InBucket, IN_BUCKET_SIZE};
 use crate::common::memory::{IsAligned, SCell};
 use crate::common::meta::MetaPage;
 use crate::common::page::{CoerciblePage, Page, RefPage, BUCKET_LEAF_FLAG, PAGE_HEADER_SIZE};
-use crate::common::tree::{MappedBranchPage, TreePage, LEAF_PAGE_ELEMENT_SIZE, MappedLeafPage, BRANCH_PAGE_ELEMENT_SIZE};
+use crate::common::tree::{
+  MappedBranchPage, MappedLeafPage, TreePage, BRANCH_PAGE_ELEMENT_SIZE, LEAF_PAGE_ELEMENT_SIZE,
+};
 use crate::common::{BVec, HashMap, PgId, SplitRef, ZERO_PGID};
 use crate::cursor::{
   CursorApi, CursorIAPI, CursorImpl, CursorRwIAPI, CursorRwImpl, ElemRef, InnerCursor,
 };
 use crate::node::{NodeRwCell, NodeW};
-use crate::tx::{TxApi, TxCell, TxIAPI, TxImplTODORenameMe, TxRwIAPI, TxR, TxRwCell, TxW};
+use crate::tx::{TxApi, TxCell, TxIAPI, TxImplTODORenameMe, TxR, TxRwCell, TxRwIAPI, TxW};
 use crate::Error::{
   BucketExists, BucketNameRequired, BucketNotFound, IncompatibleValue, KeyRequired, KeyTooLarge,
   ValueTooLarge,
@@ -532,7 +534,9 @@ pub(crate) trait BucketIAPI<'tx, T: TxIAPI<'tx>>:
         let mut used = PAGE_HEADER_SIZE;
         if let Some(last_element) = leaf_page.elements().last() {
           used += LEAF_PAGE_ELEMENT_SIZE * (p.count - 1) as usize;
-          used += last_element.pos() as usize + last_element.key_size() as usize + last_element.value_size() as usize;
+          used += last_element.pos() as usize
+            + last_element.key_size() as usize
+            + last_element.value_size() as usize;
         }
 
         if self.root() == ZERO_PGID {
@@ -551,13 +555,13 @@ pub(crate) trait BucketIAPI<'tx, T: TxIAPI<'tx>>:
       } else if let Some(branch_page) = MappedBranchPage::coerce_ref(p) {
         s.branch_page_n += 1;
         if let Some(last_element) = branch_page.elements().last() {
-          let mut used = PAGE_HEADER_SIZE + (BRANCH_PAGE_ELEMENT_SIZE * (branch_page.count - 1) as usize);
+          let mut used =
+            PAGE_HEADER_SIZE + (BRANCH_PAGE_ELEMENT_SIZE * (branch_page.count - 1) as usize);
           used += last_element.pos() as usize + last_element.key_size() as usize;
           s.branch_in_use += used as i64;
           s.branch_overflow_n += branch_page.overflow as i64;
         }
       }
-
     });
     s.branch_alloc = (s.branch_page_n + s.branch_overflow_n) * page_size as i64;
     s.leaf_alloc = (s.leaf_page_n + s.leaf_overflow_n) * page_size as i64;

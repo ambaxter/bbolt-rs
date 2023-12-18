@@ -23,7 +23,7 @@ use std::ptr::{addr_of, addr_of_mut};
 use std::rc::Rc;
 use std::time::Duration;
 
-pub trait TxApi<'tx>: {
+pub trait TxApi<'tx> {
   type CursorType: CursorApi<'tx>;
   type BucketType: BucketApi<'tx>;
 
@@ -219,7 +219,7 @@ pub(crate) trait TxIAPI<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
   }
 
   fn api_cursor(self) -> InnerCursor<'tx, Self, Self::BucketType> {
-    let(_, root_bucket, _) = self.split_ref();
+    let (_, root_bucket, _) = self.split_ref();
     root_bucket.i_cursor()
   }
 
@@ -228,12 +228,12 @@ pub(crate) trait TxIAPI<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
   }
 
   fn api_bucket(self, name: &[u8]) -> Option<Self::BucketType> {
-    let(_, root_bucket, _) = self.split_ref();
+    let (_, root_bucket, _) = self.split_ref();
     root_bucket.api_bucket(name)
   }
 
   fn api_for_each<F: FnMut(&[u8], Self::BucketType)>(&self, mut f: F) -> crate::Result<()> {
-    let(_, root_bucket, _) = self.split_ref();
+    let (_, root_bucket, _) = self.split_ref();
     // TODO: Are we calling the right function?
     root_bucket.api_for_each_bucket(|k| {
       let bucket = root_bucket.api_bucket(k).unwrap();
@@ -559,7 +559,9 @@ pub struct TxImpl<'tx> {
 
 impl<'tx> TxImpl<'tx> {
   pub(crate) fn get_ref(&self) -> TxRef<'tx> {
-    TxRef{tx: TxCell{cell: self.tx.cell}}
+    TxRef {
+      tx: TxCell { cell: self.tx.cell },
+    }
   }
 }
 
@@ -571,14 +573,16 @@ pub struct TxRwImpl<'tx> {
 
 impl<'tx> TxRwImpl<'tx> {
   pub(crate) fn get_ref(&self) -> TxRwRef<'tx> {
-    TxRwRef{tx: TxRwCell{cell: self.tx.cell}}
+    TxRwRef {
+      tx: TxRwCell { cell: self.tx.cell },
+    }
   }
 }
 
 pub struct TxRef<'tx> {
-  tx: TxCell<'tx>
+  tx: TxCell<'tx>,
 }
 
 pub struct TxRwRef<'tx> {
-  tx: TxRwCell<'tx>
+  tx: TxRwCell<'tx>,
 }

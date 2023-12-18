@@ -27,7 +27,6 @@ pub type HashMap<'tx, K, V> = hashbrown::HashMap<K, V, DefaultHashBuilder, &'tx 
 
 pub type HashSet<'tx, K> = hashbrown::HashSet<K, DefaultHashBuilder, &'tx Bump>;
 
-
 //TODO: Refactor this. We don't need all 3 each and every time.
 //Once we're done figure out exactly what we need
 pub(crate) trait SplitRef<R, T, W>: Copy + Clone {
