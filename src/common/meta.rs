@@ -9,6 +9,7 @@ use getset::{CopyGetters, Setters};
 use std::hash::Hasher;
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
+use std::slice::from_raw_parts;
 use std::{io, mem};
 
 pub const META_HEADER_SIZE: usize = mem::size_of::<Meta>();
@@ -106,7 +107,7 @@ impl Deref for MappedMetaPage {
   type Target = MetaPage;
 
   fn deref(&self) -> &Self::Target {
-    unsafe { &*(self.bytes.cast_const() as *const MetaPage) }
+    unsafe { &*(self.bytes as *const MetaPage) }
   }
 }
 
@@ -120,6 +121,7 @@ impl DerefMut for MappedMetaPage {
 mod test {
   use super::*;
   use crate::common::defaults::DEFAULT_PAGE_SIZE;
+  use crate::common::page::RefPage;
   use crate::test_support::mapped_page;
 
   #[test]
@@ -137,6 +139,7 @@ mod test {
       checksum: 0,
     };
     meta.write(meta_page.deref_mut());
+    assert!(meta_page.meta.validate().is_ok());
     assert!(meta_page.meta.validate().is_ok());
     assert_eq!(10, meta_page.meta.pgid.0);
   }

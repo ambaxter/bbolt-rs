@@ -6,7 +6,7 @@ use crate::common::defaults::{
 };
 use crate::common::memory::SCell;
 use crate::common::meta::{MappedMetaPage, Meta};
-use crate::common::page::{CoerciblePage, MutPage, RefPage};
+use crate::common::page::{CoerciblePage, MutPage, Page, RefPage, FREE_LIST_PAGE_FLAG};
 use crate::common::selfowned::SelfOwned;
 use crate::common::tree::MappedLeafPage;
 use crate::common::{PgId, TxId};
@@ -367,19 +367,18 @@ impl DBBackend {
   fn get_page_size_from_first_meta(file: &mut File) -> crate::Result<usize> {
     // we need this aligned to Page so we don't hit any runtime issues
     let mut buffer = AlignedBytes::<alignment::Page>::new_zeroed(4096);
+    let refpage = RefPage::new(buffer.as_ptr());
     let mut meta_can_read = false;
-    if let Ok(Some(meta_page)) = file
-      .seek(SeekFrom::Start(0))
-      .and_then(|_| file.read(&mut buffer))
-      .map(|_| {
-        meta_can_read = true;
-        MappedMetaPage::coerce_ref(&RefPage::new(buffer.as_ptr()))
-      })
-    {
+    file.seek(SeekFrom::Start(0))?;
+    file.read(&mut buffer)?;
+    meta_can_read = true;
+    if let Some(meta_page) = MappedMetaPage::coerce_ref(&refpage) {
       if meta_page.meta.validate().is_ok() {
-        return Ok(meta_page.meta.page_size() as usize);
+        let page_size = meta_page.meta.page_size();
+        return Ok(page_size as usize);
       }
     }
+
     Err(Error::InvalidDatabase(meta_can_read))
   }
 
@@ -448,14 +447,8 @@ impl DBBackend {
   }
 
   fn page<'tx>(&self, pg_id: PgId) -> RefPage<'tx> {
-    let page_ptr = unsafe {
-      self
-        .mmap
-        .as_ref()
-        .unwrap()
-        .as_ptr()
-        .add(pg_id.0 as usize * self.page_size)
-    };
+    let page_addr = pg_id.0 as usize * self.page_size;
+    let page_ptr = unsafe { self.mmap.as_ref().unwrap().as_ptr().add(page_addr) };
     RefPage::new(page_ptr)
   }
 }
@@ -554,9 +547,7 @@ impl DB {
   pub fn new<T: Into<PathBuf>>(path: T) -> crate::Result<Self> {
     let path = path.into();
 
-    if !path.exists()
-    /*|| path.metadata()?.len() == 0 */
-    {
+    if !path.exists() || path.metadata()?.len() == 0 {
       let page_size = DEFAULT_PAGE_SIZE.bytes() as usize;
       DB::init(&path, page_size)?;
     }
@@ -568,6 +559,8 @@ impl DB {
     file.lock_exclusive()?;
 
     let page_size = DBBackend::get_page_size(&mut file)?;
+    assert!(page_size > 0, "invalid page size");
+
     let file_size = file.metadata()?.len();
     let options = MmapOptions::new();
     let open_options = options.clone();
@@ -594,9 +587,9 @@ impl DB {
       read_only: false,
     };
     let freelist_pgid = backend.meta().free_list();
-    let freelist = MappedFreeListPage::coerce_ref(&backend.page(freelist_pgid))
-      .unwrap()
-      .read();
+    let refpage = backend.page(freelist_pgid);
+    let freelist_page = MappedFreeListPage::coerce_ref(&refpage).unwrap();
+    let freelist = freelist_page.read();
     let free_count = freelist.free_count();
     let mut records = DBRecords::new(freelist);
     records.stats.free_page_n = free_count as i64;
@@ -626,7 +619,7 @@ impl DB {
         meta.set_root(InBucket::new(PgId(3), 0));
         meta.set_pgid(PgId(4));
         meta.set_txid(TxId(i as u64));
-        meta.set_checksum(meta.checksum());
+        meta.set_checksum(meta.sum64());
       } else if i == 2 {
         let free_list = MappedFreeListPage::mut_into(&mut page);
         free_list.id = PgId(2);

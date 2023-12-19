@@ -29,7 +29,7 @@ pub trait CoerciblePage {
   fn own(bytes: *mut u8) -> Self;
 
   #[inline]
-  unsafe fn unchecked_ref<'tx>(mapped_page: &RefPage<'tx>) -> &'tx Self
+  unsafe fn unchecked_ref<'tx, 'a>(mapped_page: &'a RefPage<'tx>) -> &'a Self
   where
     Self: Sized,
   {
@@ -37,7 +37,7 @@ pub trait CoerciblePage {
   }
 
   #[inline]
-  unsafe fn unchecked_mut<'tx>(mapped_page: &mut MutPage<'tx>) -> &'tx mut Self
+  unsafe fn unchecked_mut<'tx, 'a>(mapped_page: &'a mut MutPage<'tx>) -> &'a mut Self
   where
     Self: Sized,
   {
@@ -45,7 +45,7 @@ pub trait CoerciblePage {
   }
 
   #[inline]
-  fn mut_into<'tx>(mapped_page: &mut MutPage<'tx>) -> &'tx mut Self
+  fn mut_into<'tx, 'a>(mapped_page: &'a mut MutPage<'tx>) -> &'a mut Self
   where
     Self: Sized,
   {
@@ -54,9 +54,9 @@ pub trait CoerciblePage {
   }
 
   #[inline]
-  fn coerce_ref<'tx>(mapped_page: &RefPage<'tx>) -> Option<&'tx Self>
+  fn coerce_ref<'tx, 'a>(mapped_page: &'a RefPage<'tx>) -> Option<&'a Self>
   where
-    Self: Sized,
+    Self: Sized + 'tx,
   {
     if mapped_page.flags == Self::page_flag() {
       Some(unsafe { Self::unchecked_ref(mapped_page) })
@@ -66,9 +66,9 @@ pub trait CoerciblePage {
   }
 
   #[inline]
-  fn coerce_mut<'a>(mapped_page: &mut MutPage<'a>) -> Option<&'a mut Self>
+  fn coerce_mut<'tx, 'a>(mapped_page: &'a mut MutPage<'tx>) -> Option<&'a mut Self>
   where
-    Self: Sized,
+    Self: Sized + 'tx,
   {
     if mapped_page.flags == Self::page_flag() {
       Some(unsafe { Self::unchecked_mut(mapped_page) })
