@@ -2,6 +2,7 @@ use crate::common::page::Page;
 use crate::common::page::{CoerciblePage, FREE_LIST_PAGE_FLAG, PAGE_HEADER_SIZE};
 use crate::common::utility::is_sorted;
 use crate::common::{PgId, TxId};
+use crate::freelist;
 use bytemuck::{bytes_of, Contiguous};
 use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
@@ -59,6 +60,13 @@ impl CoerciblePage for MappedFreeListPage {
 }
 
 impl MappedFreeListPage {
+  pub(crate) fn read(&self) -> Freelist {
+    let mut ids = self.page_ids().to_owned();
+    ids.sort();
+    let mut freelist = Freelist::new();
+    freelist.read_ids(&ids);
+    freelist
+  }
   pub(crate) fn page_count(&self) -> (u32, u32) {
     let mut idx = 0;
     let count = {

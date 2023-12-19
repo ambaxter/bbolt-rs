@@ -90,7 +90,7 @@ pub trait TxRwApi<'tx>: TxApi<'tx> {
   fn commit(self) -> crate::Result<()>;
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Default)]
 pub struct TxStats {
   // Page statistics.
   //
@@ -407,6 +407,14 @@ impl<'tx> SplitRef<TxR<'tx>, BucketRwCell<'tx>, TxW<'tx>> for TxRwCell<'tx> {
 
 impl<'tx> TxIAPI<'tx> for TxRwCell<'tx> {
   type BucketType = BucketRwCell<'tx>;
+
+  fn non_physical_rollback(self) -> crate::Result<()> {
+    todo!()
+  }
+
+  fn close(self) -> crate::Result<()> {
+    todo!()
+  }
 }
 
 impl<'tx> TxRwIAPI<'tx> for TxRwCell<'tx> {

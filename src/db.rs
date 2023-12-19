@@ -1,7 +1,9 @@
 use crate::arch::size::MAX_MAP_SIZE;
 use crate::bucket::BucketRwIAPI;
 use crate::common::bucket::InBucket;
-use crate::common::defaults::{DEFAULT_PAGE_SIZE, MAGIC, MAX_MMAP_STEP, PGID_NO_FREE_LIST};
+use crate::common::defaults::{
+  DEFAULT_ALLOC_SIZE, DEFAULT_PAGE_SIZE, MAGIC, MAX_MMAP_STEP, PGID_NO_FREE_LIST, VERSION,
+};
 use crate::common::memory::SCell;
 use crate::common::meta::{MappedMetaPage, Meta};
 use crate::common::page::{CoerciblePage, MutPage, RefPage};
@@ -17,6 +19,7 @@ use fs4::FileExt;
 use itertools::{min, Itertools};
 use memmap2::{Advice, MmapOptions, MmapRaw};
 use parking_lot::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use size::consts::MEGABYTE;
 use std::cell::{RefCell, RefMut};
 use std::fs::File;
 use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
@@ -115,7 +118,7 @@ pub trait DbRwAPI: DbApi {
   fn sync(&mut self) -> crate::Result<()>;
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Default)]
 /// Stats represents statistics about the database.
 pub struct DbStats {
   /// global, ongoing stats.
@@ -166,6 +169,17 @@ pub struct DBRecords {
 }
 
 impl DBRecords {
+  fn new(freelist: Freelist) -> DBRecords {
+    DBRecords {
+      bump_pool: vec![],
+      txs: vec![],
+      rwtx: None,
+      freelist,
+      stats: Default::default(),
+      page_pool: vec![],
+    }
+  }
+
   /// freePages releases any pages associated with closed read-only transactions.
   fn free_pages(&mut self) {
     self.txs.sort();
@@ -398,7 +412,7 @@ impl DBBackend {
 
   /// mmap opens the underlying memory-mapped file and initializes the meta references.
   /// min_size is the minimum size that the new mmap can be.
-  fn mmap<'tx>(&mut self, min_size: u64, tx: TxRwCell<'tx>) -> crate::Result<()> {
+  fn mmap(&mut self, min_size: u64, tx: TxRwCell) -> crate::Result<()> {
     let info = self.file.metadata()?;
     if info.len() < (self.page_size * 2) as u64 {
       return Err(Error::MMapFileSizeTooSmall);
@@ -432,6 +446,18 @@ impl DBBackend {
     self.mmap = Some(mmap);
     Ok(())
   }
+
+  fn page<'tx>(&self, pg_id: PgId) -> RefPage<'tx> {
+    let page_ptr = unsafe {
+      self
+        .mmap
+        .as_ref()
+        .unwrap()
+        .as_ptr()
+        .add(pg_id.0 as usize * self.page_size)
+    };
+    RefPage::new(page_ptr)
+  }
 }
 
 impl Drop for DBBackend {
@@ -458,7 +484,7 @@ impl DBShared {
   fn allocate<'tx>(
     &mut self, tx_id: TxId, count: u64,
   ) -> crate::Result<SelfOwned<AlignedBytes<alignment::Page>, MutPage<'tx>>> {
-    let r = self.records.lock();
+    let mut r = self.records.lock();
     let bytes = if count == 1 && !r.page_pool.is_empty() {
       r.page_pool.pop().unwrap()
     } else {
@@ -512,73 +538,9 @@ impl DBShared {
     self.backend.mmap = Some(mmap);
     Ok(())
   }
-
-  fn page<'tx>(&self, pg_id: PgId) -> RefPage<'tx> {
-    let page_ptr = unsafe {
-      self
-        .backend
-        .mmap
-        .unwrap()
-        .as_ptr()
-        .add(pg_id.0 as usize * self.backend.page_size)
-    };
-    RefPage::new(page_ptr)
-  }
 }
 
 pub(crate) trait DbIAPI<'tx>: 'tx {}
-
-struct Lest<'tx, T>
-where
-  T: Deref<Target = DBShared>,
-{
-  s: SCell<'tx, T>,
-}
-
-impl<'tx, T> Lest<'tx, T>
-where
-  T: Deref<Target = DBShared>,
-{
-  fn ll(&self) {
-    self.s.borrow().backend.meta0.meta.page_size() > 3;
-  }
-}
-
-struct TxOwned<T: Deref<Target = DBShared>> {
-  b: Bump,
-  l: RefCell<T>,
-}
-
-#[derive(Clone, Copy)]
-struct DBRef<'tx, T: Deref<Target = DBShared>> {
-  b: &'tx Bump,
-  l: &'tx RefCell<T>,
-}
-
-struct RORsrc<'tx, T: Deref<Target = DBShared> + Unpin> {
-  l: SelfOwned<TxOwned<T>, DBRef<'tx, T>>,
-}
-
-impl<'tx, T: Deref<Target = DBShared> + Unpin> RORsrc<'tx, T> {
-  fn new(lock: T) -> Self {
-    let shared = TxOwned {
-      b: Default::default(),
-      l: RefCell::new(lock),
-    };
-    let so = SelfOwned::new_with_map(shared, |o| DBRef { b: &o.b, l: &o.l });
-    RORsrc { l: so }
-  }
-
-  fn test(lock: RwLockReadGuard<'tx, DBShared>) -> RORsrc<'tx, RwLockReadGuard<'tx, DBShared>> {
-    RORsrc::new(lock)
-  }
-
-  fn release(self) {
-    let TxOwned { mut b, l } = self.l.into_owner();
-    b.reset();
-    let mut lock = l.into_inner();
-  }
-}
 
 pub(crate) trait DbMutIAPI<'tx>: DbIAPI<'tx> {}
 
@@ -589,21 +551,64 @@ pub struct DB {
 }
 
 impl DB {
-  pub fn new<T: Into<PathBuf>>(path: T) -> io::Result<Self> {
+  pub fn new<T: Into<PathBuf>>(path: T) -> crate::Result<Self> {
     let path = path.into();
-    let page_size = DEFAULT_PAGE_SIZE.bytes() as usize;
-    if !path.exists() || path.metadata()?.len() == 0 {
+
+    if !path.exists()
+    /*|| path.metadata()?.len() == 0 */
+    {
+      let page_size = DEFAULT_PAGE_SIZE.bytes() as usize;
       DB::init(&path, page_size)?;
     }
-    let db = fs::OpenOptions::new()
+    let mut file = fs::OpenOptions::new()
       .write(true)
       .create(true)
       .read(true)
       .open(&path)?;
-    db.lock_exclusive()?;
-    let mut mmap = MmapOptions::new().map_raw(&db)?;
+    file.lock_exclusive()?;
+
+    let page_size = DBBackend::get_page_size(&mut file)?;
+    let file_size = file.metadata()?.len();
+    let options = MmapOptions::new();
+    let open_options = options.clone();
+    let mut mmap = open_options.map_raw(&file)?;
     mmap.advise(Advice::Random)?;
-    todo!()
+    let (meta0, meta1) = unsafe {
+      (
+        MappedMetaPage::new(mmap.as_mut_ptr()),
+        MappedMetaPage::new(mmap.as_mut_ptr().add(page_size)),
+      )
+    };
+    let backend = DBBackend {
+      path,
+      file,
+      page_size,
+      mmap: Some(mmap),
+      meta0,
+      meta1,
+      alloc_size: DEFAULT_ALLOC_SIZE.bytes() as u64,
+      file_size,
+      data_size: 0,
+      use_mlock: false,
+      grow_async: false,
+      read_only: false,
+    };
+    let freelist_pgid = backend.meta().free_list();
+    let freelist = MappedFreeListPage::coerce_ref(&backend.page(freelist_pgid))
+      .unwrap()
+      .read();
+    let free_count = freelist.free_count();
+    let mut records = DBRecords::new(freelist);
+    records.stats.free_page_n = free_count as i64;
+    Ok(DB {
+      db: Arc::new(
+        (RwLock::new(DBShared {
+          records: Mutex::new(records),
+          backend,
+        })),
+      ),
+      read_only: false,
+    })
   }
 
   fn init(path: &Path, page_size: usize) -> io::Result<usize> {
@@ -615,7 +620,7 @@ impl DB {
         meta_page.page.id = PgId(i as u64);
         let meta = &mut meta_page.meta;
         meta.set_magic(MAGIC);
-        meta.set_version(1);
+        meta.set_version(VERSION);
         meta.set_page_size(page_size as u32);
         meta.set_free_list(PgId(2));
         meta.set_root(InBucket::new(PgId(3), 0));
@@ -641,6 +646,4 @@ impl DB {
     db.flush()?;
     Ok(buffer.len())
   }
-
-  fn load_free_list(&mut self) {}
 }

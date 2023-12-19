@@ -1,5 +1,9 @@
 #![cfg_attr(debug_assertions, allow(dead_code, unused_imports))]
 
-fn main() {
+use bbolt_rs::DB;
+
+fn main() -> bbolt_rs::Result<()> {
   println!("Hello, world!");
+  let db = DB::new("test.db")?;
+  Ok(())
 }
