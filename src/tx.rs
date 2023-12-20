@@ -448,7 +448,7 @@ impl<'tx> TxRwIAPI<'tx> for TxRwCell<'tx> {
   }
 
   fn api_commit(self) -> crate::Result<()> {
-    Ok(())
+    todo!("api_commit")
   }
 }
 
