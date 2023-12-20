@@ -1,6 +1,6 @@
 #![cfg_attr(debug_assertions, allow(dead_code, unused_imports))]
 
-use bbolt_rs::{DbApi, DbRwAPI, DB, TxApi};
+use bbolt_rs::{DbApi, DbRwAPI, TxApi, DB, TxRwApi};
 
 fn main() -> bbolt_rs::Result<()> {
   println!("Hello, world!");
@@ -13,7 +13,10 @@ fn main() -> bbolt_rs::Result<()> {
     }
     Ok(())
   })?;
-  db.update(|tx| {
+  db.update(|mut tx| {
+    if let Ok(b) = tx.create_bucket_if_not_exists("test".as_bytes()) {
+      println!("found bucket");
+    }
     Ok(())
   })?;
   println!("Goodbye, world!");

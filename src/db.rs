@@ -36,11 +36,6 @@ where
   where
     Self: 'tx;
 
-  /// Open creates and opens a database at the given path.
-  /// If the file does not exist then it will be created automatically.
-  /// Passing in nil options will cause Bolt to open the database with the default options.
-  fn open<T: Into<PathBuf>>(path: T) -> crate::Result<Self>;
-
   /// Close releases all database resources.
   /// It will block waiting for any open transactions to finish
   /// before closing the database and returning.
@@ -107,8 +102,9 @@ pub trait DbRwAPI: DbApi {
   /// returned from the Update() method.
   ///
   /// Attempting to manually commit or rollback within the function will cause a panic.
-  fn update<'tx, F: FnMut(TxRwRef<'tx>) -> crate::Result<()>>(&'tx mut self, f: F)
-    -> crate::Result<()>;
+  fn update<'tx, F: FnMut(TxRwRef<'tx>) -> crate::Result<()>>(
+    &'tx mut self, f: F,
+  ) -> crate::Result<()>;
 
   /// Sync executes fdatasync() against the database file handle.
   ///
@@ -366,8 +362,10 @@ impl DBBackend {
     let mut buffer = AlignedBytes::<alignment::Page>::new_zeroed(4096);
     let refpage = RefPage::new(buffer.as_ptr());
     let mut meta_can_read = false;
-    file.seek(SeekFrom::Start(0))?;
-    file.read(&mut buffer)?;
+    file
+      .seek(SeekFrom::Start(0))
+      .and_then(|_| file.read(&mut buffer))
+      .map_err(|_| Error::InvalidDatabase(meta_can_read))?;
     meta_can_read = true;
     if let Some(meta_page) = MappedMetaPage::coerce_ref(&refpage) {
       if meta_page.meta.validate().is_ok() {
@@ -390,8 +388,10 @@ impl DBBackend {
       if pos >= file_size - 1024 {
         break;
       }
-      file.seek(SeekFrom::Start(pos))?;
-      let bw = file.read(&mut buffer)? as u64;
+      let bw = file
+        .seek(SeekFrom::Start(0))
+        .and_then(|_| file.read(&mut buffer))
+        .map_err(|_| Error::InvalidDatabase(meta_can_read))? as u64;
       if bw == buffer.len() as u64 || bw == file_size - pos {
         meta_can_read = true;
         if let Some(meta_page) = MappedMetaPage::coerce_ref(&RefPage::new(buffer.as_ptr())) {
@@ -532,17 +532,27 @@ impl DBShared {
 
 pub(crate) trait Pager {
   fn page(&self, pg_id: PgId) -> RefPage;
+
+  fn page_is_free(&self, pg_id: PgId) -> bool;
 }
 
 impl<'tx> Pager for RwLockReadGuard<'tx, DBShared> {
   fn page(&self, pg_id: PgId) -> RefPage {
     self.backend.page(pg_id)
   }
+
+  fn page_is_free(&self, pg_id: PgId) -> bool {
+    self.records.lock().freelist.freed(pg_id)
+  }
 }
 
 impl<'tx> Pager for RwLockWriteGuard<'tx, DBShared> {
   fn page(&self, pg_id: PgId) -> RefPage {
     self.backend.page(pg_id)
+  }
+
+  fn page_is_free(&self, pg_id: PgId) -> bool {
+    self.records.lock().freelist.freed(pg_id)
   }
 }
 
@@ -558,6 +568,10 @@ unsafe impl Send for DB {}
 unsafe impl Sync for DB {}
 
 impl DB {
+
+  /// Open creates and opens a database at the given path.
+  /// If the file does not exist then it will be created automatically.
+  /// Passing in nil options will cause Bolt to open the database with the default options.
   pub fn new<T: Into<PathBuf>>(path: T) -> crate::Result<Self> {
     let path = path.into();
 
@@ -608,12 +622,10 @@ impl DB {
     let mut records = DBRecords::new(freelist);
     records.stats.free_page_n = free_count as i64;
     Ok(DB {
-      db: Arc::new(
-        (RwLock::new(DBShared {
-          records: Mutex::new(records),
-          backend,
-        })),
-      ),
+      db: Arc::new(RwLock::new(DBShared {
+        records: Mutex::new(records),
+        backend,
+      })),
     })
   }
 
@@ -657,10 +669,6 @@ impl DB {
 impl DbApi for DB {
   type TxType<'tx> =  TxImpl<'tx> where Self: 'tx ;
 
-  fn open<T: Into<PathBuf>>(path: T) -> crate::Result<Self> {
-    todo!()
-  }
-
   fn close(self) {
     todo!()
   }
@@ -669,16 +677,18 @@ impl DbApi for DB {
     todo!()
   }
 
-  fn view<'tx, F: FnMut(TxRef<'tx>) -> crate::Result<()>>(&'tx self, mut f: F) -> crate::Result<()> {
+  fn view<'tx, F: FnMut(TxRef<'tx>) -> crate::Result<()>>(
+    &'tx self, mut f: F,
+  ) -> crate::Result<()> {
     let tx = TxImpl::new(self.db.read());
     let tx_ref = tx.get_ref();
     let r = f(tx_ref);
-    let _  = tx.rollback();
+    let _ = tx.rollback();
     r
   }
 
   fn stats(&self) -> DbStats {
-    todo!()
+    self.db.read().records.lock().stats
   }
 }
 
@@ -689,7 +699,9 @@ impl DbRwAPI for DB {
     todo!()
   }
 
-  fn update<'tx, F: FnMut(TxRwRef<'tx>) -> crate::Result<()>>(&'tx mut self, mut f: F) -> crate::Result<()> {
+  fn update<'tx, F: FnMut(TxRwRef<'tx>) -> crate::Result<()>>(
+    &'tx mut self, mut f: F,
+  ) -> crate::Result<()> {
     let txrw = TxRwImpl::new(self.db.write());
     let tx_ref = txrw.get_ref();
     match f(tx_ref) {
@@ -702,6 +714,7 @@ impl DbRwAPI for DB {
   }
 
   fn sync(&mut self) -> crate::Result<()> {
-    todo!()
+    self.db.write().backend.file.sync_all()?;
+    Ok(())
   }
 }

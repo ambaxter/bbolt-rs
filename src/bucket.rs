@@ -21,6 +21,7 @@ use bytemuck::{Pod, Zeroable};
 use either::Either;
 use std::alloc::Layout;
 use std::cell::{Ref, RefCell, RefMut};
+use std::io::BufRead;
 use std::marker::PhantomData;
 use std::mem;
 use std::ops::{AddAssign, Deref, DerefMut};
@@ -363,8 +364,9 @@ pub(crate) trait BucketIAPI<'tx, T: TxIAPI<'tx>>:
     }
 
     let child = self.open_bucket(v);
-    if let Some(mut w) = self.split_ref_mut().2 {
-      let bump = self.api_tx().bump();
+
+    if let (_, tx , Some(mut w)) = self.split_ref_mut() {
+      let bump = tx.upgrade().unwrap().bump();
       let name = bump.alloc_slice_copy(name);
       w.buckets.insert(name, child);
     }
@@ -387,7 +389,8 @@ pub(crate) trait BucketIAPI<'tx, T: TxIAPI<'tx>>:
       new_value.copy_from_slice(value);
       value = new_value;
     }
-    let bucket_header = *bytemuck::from_bytes::<InBucket>(value);
+    let inbucket_size = mem::size_of::<InBucket>();
+    let bucket_header = *bytemuck::from_bytes::<InBucket>(value.split_at(inbucket_size).0);
     let ref_page = if bucket_header.root() == ZERO_PGID {
       assert!(
         value.len() >= INLINE_PAGE_SIZE,

@@ -84,7 +84,7 @@ impl<'tx> NodeW<'tx> {
       CodSlice::Mapped(&[])
     };
     NodeW {
-      is_leaf: false,
+      is_leaf: page.is_leaf(),
       key,
       pgid: page.id,
       inodes,
@@ -304,7 +304,7 @@ impl<'tx> NodeRwCell<'tx> {
       flags,
       pgid,
       new_key,
-      old_key,
+      value,
       self_borrow.bucket.api_tx().bump(),
     );
     if new_node.key().is_empty() {

@@ -1,4 +1,6 @@
-use crate::bucket::{BucketCell, BucketIAPI, BucketImpl, BucketRW, BucketRwCell, BucketRwIAPI, BucketRwImpl};
+use crate::bucket::{
+  BucketCell, BucketIAPI, BucketImpl, BucketRW, BucketRwCell, BucketRwIAPI, BucketRwImpl,
+};
 use crate::common::defaults::DEFAULT_PAGE_SIZE;
 use crate::common::memory::SCell;
 use crate::common::meta::Meta;
@@ -58,7 +60,7 @@ pub trait TxApi<'tx> {
 
   /// Page returns page information for a given page number.
   /// This is only safe for concurrent use when used by a writable transaction.
-  fn page(id: PgId) -> crate::Result<PageInfo>;
+  fn page(&self, id: PgId) -> crate::Result<PageInfo>;
 }
 
 pub trait TxRwApi<'tx>: TxApi<'tx> {
@@ -251,8 +253,31 @@ pub(crate) trait TxIAPI<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
     Ok(())
   }
 
-  fn api_page(id: PgId) -> crate::Result<PageInfo> {
-    todo!()
+  fn api_page(&self, id: PgId) -> crate::Result<Option<PageInfo>> {
+    let (r, _, _) = self.split_ref();
+    if id >= r.meta.pgid() {
+      return Ok(None);
+    }
+    //TODO: Check if freelist loaded
+    //WHEN: Freelists can be unloaded
+
+    let p = r.pager.page(id);
+    let id = p.id;
+    let count = p.count as u64;
+    let overflow_count = p.overflow as u64;
+
+    let t = if r.pager.page_is_free(id) {
+      Cow::Borrowed("free")
+    } else {
+      p.page_type()
+    };
+    let info = PageInfo {
+      id: id.0,
+      t,
+      count,
+      overflow_count,
+    };
+    Ok(Some(info))
   }
 
   fn close(self) -> crate::Result<()>;
@@ -278,10 +303,6 @@ pub(crate) trait TxRwIAPI<'tx>: TxIAPI<'tx> {
 pub(crate) struct TxImplTODORenameMe {}
 
 impl TxImplTODORenameMe {
-  pub fn page<'tx, T: TxIAPI<'tx>>(cell: &T, id: PgId) -> RefPage<'tx> {
-    todo!()
-  }
-
   pub(crate) fn for_each_page<'tx, T: TxIAPI<'tx>, F: FnMut(&RefPage, usize, &[PgId])>(
     cell: &T, root: PgId, f: F,
   ) {
@@ -403,7 +424,11 @@ impl<'tx> TxRwIAPI<'tx> for TxRwCell<'tx> {
   }
 
   fn api_create_bucket_if_not_exist(self, name: &[u8]) -> crate::Result<Self::BucketType> {
-    todo!()
+    let root = {
+      let (_, root, _) = self.split_ref_mut();
+      *root
+    };
+    root.api_create_bucket_if_not_exists(name)
   }
 
   fn api_delete_bucket(self, name: &[u8]) -> crate::Result<()> {
@@ -411,7 +436,7 @@ impl<'tx> TxRwIAPI<'tx> for TxRwCell<'tx> {
   }
 
   fn api_commit(self) -> crate::Result<()> {
-    todo!()
+    Ok(())
   }
 }
 
@@ -510,7 +535,7 @@ impl<'tx> TxApi<'tx> for TxImpl<'tx> {
     Ok(())
   }
 
-  fn page(id: PgId) -> crate::Result<PageInfo> {
+  fn page(&self, id: PgId) -> crate::Result<PageInfo> {
     todo!()
   }
 }
@@ -555,11 +580,10 @@ impl<'tx> TxApi<'tx> for TxRef<'tx> {
     self.tx.rollback()
   }
 
-  fn page(id: PgId) -> crate::Result<PageInfo> {
+  fn page(&self, id: PgId) -> crate::Result<PageInfo> {
     todo!()
   }
 }
-
 
 pub struct TxRwImpl<'tx> {
   bump: Pin<Box<Bump>>,
@@ -603,7 +627,7 @@ impl<'tx> TxRwImpl<'tx> {
         };
         let bucket = BucketRwCell::new_in(bump, inline_bucket, weak.clone(), None);
         TxRwCell {
-          cell: SCell::new_in((TxRW{r, w}, bucket), bump),
+          cell: SCell::new_in((TxRW { r, w }, bucket), bump),
         }
       });
       addr_of_mut!((*ptr).tx).write(Pin::new(tx));
@@ -654,14 +678,16 @@ impl<'tx> TxApi<'tx> for TxRwImpl<'tx> {
   }
 
   fn for_each<F: FnMut(&[u8], Self::BucketType)>(&self, f: F) -> crate::Result<()> {
+    //self.tx.api_for_each(f)
+    // TODO: mismatching bucket types
     todo!()
   }
 
   fn rollback(self) -> crate::Result<()> {
-    todo!()
+    self.tx.rollback()
   }
 
-  fn page(id: PgId) -> crate::Result<PageInfo> {
+  fn page(&self, id: PgId) -> crate::Result<PageInfo> {
     todo!()
   }
 }
@@ -678,7 +704,10 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
   }
 
   fn create_bucket_if_not_exists(&mut self, name: &[u8]) -> crate::Result<Self::BucketType> {
-    self.tx.api_create_bucket_if_not_exist(name).map(|b| b.into())
+    self
+      .tx
+      .api_create_bucket_if_not_exist(name)
+      .map(|b| b.into())
   }
 
   fn delete_bucket(&mut self, name: &[u8]) -> crate::Result<()> {
@@ -730,12 +759,10 @@ impl<'tx> TxApi<'tx> for TxRwRef<'tx> {
     self.tx.rollback()
   }
 
-  fn page(id: PgId) -> crate::Result<PageInfo> {
+  fn page(&self, id: PgId) -> crate::Result<PageInfo> {
     todo!()
   }
 }
-
-
 
 impl<'tx> TxRwApi<'tx> for TxRwRef<'tx> {
   type CursorRwType = CursorRwImpl<'tx, InnerCursor<'tx, TxRwCell<'tx>, BucketRwCell<'tx>>>;
@@ -749,7 +776,10 @@ impl<'tx> TxRwApi<'tx> for TxRwRef<'tx> {
   }
 
   fn create_bucket_if_not_exists(&mut self, name: &[u8]) -> crate::Result<Self::BucketType> {
-    self.tx.api_create_bucket_if_not_exist(name).map(|b| b.into())
+    self
+      .tx
+      .api_create_bucket_if_not_exist(name)
+      .map(|b| b.into())
   }
 
   fn delete_bucket(&mut self, name: &[u8]) -> crate::Result<()> {
