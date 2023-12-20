@@ -50,6 +50,12 @@ pub struct CursorImpl<'tx, C: CursorIAPI<'tx>> {
   p: PhantomData<&'tx u64>,
 }
 
+impl<'tx, C: CursorIAPI<'tx>> From<C> for CursorImpl<'tx, C> {
+  fn from(value: C) -> Self {
+    CursorImpl::new(value)
+  }
+}
+
 impl<'tx, C: CursorIAPI<'tx>> CursorImpl<'tx, C> {
   pub(crate) fn new(c: C) -> Self {
     CursorImpl {
@@ -92,6 +98,12 @@ impl<'tx, C: CursorRwIAPI<'tx>> CursorRwImpl<'tx, C> {
       c,
       p: Default::default(),
     }
+  }
+}
+
+impl<'tx, C: CursorRwIAPI<'tx>> From<C> for CursorRwImpl<'tx, C> {
+  fn from(value: C) -> Self {
+    CursorRwImpl::new(value)
   }
 }
 

@@ -56,7 +56,7 @@ pub trait CoerciblePage {
   #[inline]
   fn coerce_ref<'tx, 'a>(mapped_page: &'a RefPage<'tx>) -> Option<&'a Self>
   where
-    Self: Sized + 'tx,
+    Self: Sized,
   {
     if mapped_page.flags == Self::page_flag() {
       Some(unsafe { Self::unchecked_ref(mapped_page) })
@@ -68,7 +68,7 @@ pub trait CoerciblePage {
   #[inline]
   fn coerce_mut<'tx, 'a>(mapped_page: &'a mut MutPage<'tx>) -> Option<&'a mut Self>
   where
-    Self: Sized + 'tx,
+    Self: Sized,
   {
     if mapped_page.flags == Self::page_flag() {
       Some(unsafe { Self::unchecked_mut(mapped_page) })

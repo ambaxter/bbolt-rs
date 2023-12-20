@@ -1,19 +1,18 @@
-use crate::bucket::{BucketCell, BucketIAPI, BucketRW, BucketRwCell};
+use crate::bucket::{BucketCell, BucketIAPI, BucketImpl, BucketRW, BucketRwCell, BucketRwIAPI, BucketRwImpl};
 use crate::common::defaults::DEFAULT_PAGE_SIZE;
 use crate::common::memory::SCell;
 use crate::common::meta::Meta;
 use crate::common::page::{MutPage, PageInfo, RefPage};
 use crate::common::selfowned::SelfOwned;
 use crate::common::{BVec, HashMap, PgId, SplitRef, TxId};
-use crate::cursor::{CursorRwIAPI, InnerCursor};
-use crate::db::DBShared;
+use crate::cursor::{CursorImpl, CursorRwIAPI, CursorRwImpl, InnerCursor};
+use crate::db::{DBShared, Pager};
 use crate::freelist::Freelist;
 use crate::node::NodeRwCell;
 use crate::{BucketApi, CursorApi, CursorRwApi};
 use bumpalo::Bump;
 use parking_lot::{RwLockReadGuard, RwLockWriteGuard};
 use std::borrow::Cow;
-use std::cell;
 use std::cell::{Ref, RefCell, RefMut};
 use std::marker::{PhantomData, PhantomPinned};
 use std::mem::MaybeUninit;
@@ -22,6 +21,7 @@ use std::pin::Pin;
 use std::ptr::{addr_of, addr_of_mut};
 use std::rc::Rc;
 use std::time::Duration;
+use std::{cell, mem};
 
 pub trait TxApi<'tx> {
   type CursorType: CursorApi<'tx>;
@@ -196,11 +196,8 @@ pub(crate) trait TxIAPI<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
   }
 
   fn page(self, id: PgId) -> RefPage<'tx> {
-    todo!()
-  }
-
-  fn page_mut(self, id: PgId) -> MutPage<'tx> {
-    todo!()
+    let (r, _, _) = self.split_ref();
+    r.pager.page(id)
   }
 
   fn api_id(self) -> TxId {
@@ -224,7 +221,8 @@ pub(crate) trait TxIAPI<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
   }
 
   fn api_stats(self) -> TxStats {
-    todo!()
+    let (r, _, _) = self.split_ref();
+    r.stats
   }
 
   fn api_bucket(self, name: &[u8]) -> Option<Self::BucketType> {
@@ -248,7 +246,9 @@ pub(crate) trait TxIAPI<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
   fn non_physical_rollback(self) -> crate::Result<()>;
 
   fn rollback(self) -> crate::Result<()> {
-    todo!()
+    let (mut r, _, _) = self.split_ref_mut();
+    r.is_rollback = true;
+    Ok(())
   }
 
   fn api_page(id: PgId) -> crate::Result<PageInfo> {
@@ -289,47 +289,13 @@ impl TxImplTODORenameMe {
   }
 }
 
-struct TxOwned<D: Deref<Target = DBShared> + Unpin> {
-  b: Bump,
-  db: RefCell<D>,
-}
-
-struct DBHider<'tx, D: Deref<Target = DBShared> + 'tx + Unpin> {
-  db: &'tx RefCell<D>,
-}
-
-trait DBAccess {
-  fn get(&self) -> Ref<DBShared>;
-  fn get_mut(&self) -> Option<RefMut<DBShared>>;
-}
-
-impl<'tx> DBAccess for DBHider<'tx, RwLockReadGuard<'tx, DBShared>> {
-  fn get(&self) -> Ref<DBShared> {
-    Ref::map(self.db.borrow(), |r| r.deref())
-  }
-
-  fn get_mut(&self) -> Option<RefMut<DBShared>> {
-    None
-  }
-}
-
-impl<'tx> DBAccess for DBHider<'tx, RwLockWriteGuard<'tx, DBShared>> {
-  fn get(&self) -> Ref<DBShared> {
-    Ref::map(self.db.borrow(), |r| r.deref())
-  }
-
-  fn get_mut(&self) -> Option<RefMut<DBShared>> {
-    Some(RefMut::map(self.db.borrow_mut(), |w| w.deref_mut()))
-  }
-}
-
 pub struct TxR<'tx> {
   b: &'tx Bump,
   page_size: usize,
-
-  db_ref: &'tx dyn DBAccess,
-  is_rollback: bool,
+  pager: &'tx dyn Pager,
+  stats: TxStats,
   meta: Meta,
+  is_rollback: bool,
   p: PhantomData<&'tx u8>,
 }
 
@@ -449,123 +415,45 @@ impl<'tx> TxRwIAPI<'tx> for TxRwCell<'tx> {
   }
 }
 
-struct TxSelfRef<'tx, T: TxIAPI<'tx>> {
-  h: Pin<Box<dyn DBAccess + 'tx>>,
-  tx: Pin<Rc<T>>,
-  marker: PhantomPinned,
-}
-
-impl<'tx, T: TxIAPI<'tx>> TxSelfRef<'tx, T> {
-  fn new_tx(o: &'tx mut TxOwned<RwLockReadGuard<'tx, DBShared>>) -> TxSelfRef<'tx, TxCell<'tx>> {
-    let bump = &o.b;
-    let meta = o.db.borrow().backend.meta();
-    let page_size = meta.page_size() as usize;
-    let inline_bucket = meta.root();
-    let mut uninit: MaybeUninit<TxSelfRef<'tx, TxCell<'tx>>> = MaybeUninit::uninit();
-    let ptr = uninit.as_mut_ptr();
-    unsafe {
-      addr_of_mut!((*ptr).h).write(Box::pin(DBHider { db: &o.db }));
-      let db = &(**(addr_of_mut!((*ptr).h)));
-      let tx = Rc::new_cyclic(|weak_tx| {
-        let r = TxR {
-          b: &o.b,
-          page_size,
-          db_ref: db,
-          is_rollback: false,
-          meta,
-          p: Default::default(),
-        };
-        let bucket = BucketCell::new_in(bump, inline_bucket, weak_tx.clone(), None);
-        TxCell {
-          cell: SCell::new_in((r, bucket), bump),
-        }
-      });
-
-      addr_of_mut!((*ptr).tx).write(Pin::new(tx));
-      addr_of_mut!((*ptr).marker).write(PhantomPinned);
-      uninit.assume_init()
-    }
-  }
-
-  fn new_tx_mut(
-    o: &'tx mut TxOwned<RwLockWriteGuard<'tx, DBShared>>,
-  ) -> TxSelfRef<'tx, TxRwCell<'tx>> {
-    let bump = &o.b;
-    let meta = o.db.borrow().backend.meta();
-    let page_size = meta.page_size() as usize;
-    let inline_bucket = meta.root();
-    let mut uninit: MaybeUninit<TxSelfRef<'tx, TxRwCell<'tx>>> = MaybeUninit::uninit();
-    let ptr = uninit.as_mut_ptr();
-    unsafe {
-      addr_of_mut!((*ptr).h).write(Box::pin(DBHider { db: &o.db }));
-      let db = &(**(addr_of_mut!((*ptr).h)));
-      let tx = Rc::new_cyclic(|weak_tx| {
-        let rw = TxRW {
-          r: TxR {
-            b: &o.b,
-            page_size,
-            db_ref: db,
-            is_rollback: false,
-            meta,
-            p: Default::default(),
-          },
-          w: TxW {
-            pages: HashMap::with_capacity_in(0, &o.b),
-            commit_handlers: BVec::with_capacity_in(0, &o.b),
-            p: Default::default(),
-          },
-        };
-        let bucket = BucketRwCell::new_in(bump, inline_bucket, weak_tx.clone(), None);
-        TxRwCell {
-          cell: SCell::new_in((rw, bucket), bump),
-        }
-      });
-      addr_of_mut!((*ptr).tx).write(Pin::new(tx));
-      addr_of_mut!((*ptr).marker).write(PhantomPinned);
-      uninit.assume_init()
-    }
-  }
-}
-
-struct TxHolder<'tx, D: Deref<Target = DBShared> + Unpin, T: TxIAPI<'tx>> {
-  s: SelfOwned<TxOwned<D>, TxSelfRef<'tx, T>>,
-}
-
-impl<'tx, D: Deref<Target = DBShared> + Unpin, T: TxIAPI<'tx>> TxHolder<'tx, D, T> {
-  fn new_tx(
-    lock: RwLockReadGuard<'tx, DBShared>,
-  ) -> TxHolder<'tx, RwLockReadGuard<'tx, DBShared>, TxCell<'tx>> {
-    let bump = Bump::new();
-    let tx_owned = TxOwned {
-      b: bump,
-      db: RefCell::new(lock),
-    };
-    TxHolder {
-      s: SelfOwned::new_with_map(tx_owned, |t| TxSelfRef::<TxCell<'tx>>::new_tx(t)),
-    }
-  }
-
-  fn new_rwtx(
-    lock: RwLockWriteGuard<'tx, DBShared>,
-  ) -> TxHolder<'tx, RwLockWriteGuard<'tx, DBShared>, TxRwCell<'tx>> {
-    let bump = Bump::new();
-    let tx_owned = TxOwned {
-      b: bump,
-      db: RefCell::new(lock),
-    };
-    TxHolder {
-      s: SelfOwned::new_with_map(tx_owned, |t| TxSelfRef::<TxRwCell<'tx>>::new_tx_mut(t)),
-    }
-  }
-}
-
 pub struct TxImpl<'tx> {
   bump: Pin<Box<Bump>>,
-  lock: RwLockReadGuard<'tx, DBShared>,
+  lock: Pin<Box<RwLockReadGuard<'tx, DBShared>>>,
   tx: Pin<Rc<TxCell<'tx>>>,
 }
 
 impl<'tx> TxImpl<'tx> {
+  pub(crate) fn new(lock: RwLockReadGuard<'tx, DBShared>) -> TxImpl<'tx> {
+    let bump = lock.records.lock().pop_read_bump();
+    let meta = lock.backend.meta();
+    let page_size = meta.page_size() as usize;
+    let inline_bucket = meta.root();
+    let mut uninit: MaybeUninit<TxImpl<'tx>> = MaybeUninit::uninit();
+    let ptr = uninit.as_mut_ptr();
+    unsafe {
+      addr_of_mut!((*ptr).bump).write(Box::pin(bump));
+      let bump = &(**addr_of!((*ptr).bump));
+      addr_of_mut!((*ptr).lock).write(Box::pin(lock));
+      let pager: &dyn Pager = &(**addr_of!((*ptr).lock));
+      let tx = Rc::new_cyclic(|weak| {
+        let r = TxR {
+          b: bump,
+          page_size,
+          pager,
+          meta,
+          stats: Default::default(),
+          is_rollback: false,
+          p: Default::default(),
+        };
+        let bucket = BucketCell::new_in(bump, inline_bucket, weak.clone(), None);
+        TxCell {
+          cell: SCell::new_in((r, bucket), bump),
+        }
+      });
+      addr_of_mut!((*ptr).tx).write(Pin::new(tx));
+      uninit.assume_init()
+    }
+  }
+
   pub(crate) fn get_ref(&self) -> TxRef<'tx> {
     TxRef {
       tx: TxCell { cell: self.tx.cell },
@@ -573,9 +461,109 @@ impl<'tx> TxImpl<'tx> {
   }
 }
 
+impl<'tx> Drop for TxImpl<'tx> {
+  fn drop(&mut self) {
+    let tx_id = self.id();
+    let stats = self.stats();
+    let mut swap_bump = Bump::with_capacity(0);
+    mem::swap(&mut swap_bump, &mut self.bump);
+    let mut records = self.lock.records.lock();
+    records.remove_tx(tx_id, stats, swap_bump);
+  }
+}
+
+impl<'tx> TxApi<'tx> for TxImpl<'tx> {
+  type CursorType = CursorImpl<'tx, InnerCursor<'tx, TxCell<'tx>, BucketCell<'tx>>>;
+  type BucketType = BucketImpl<'tx>;
+
+  fn id(&self) -> TxId {
+    self.tx.api_id()
+  }
+
+  fn size(&self) -> u64 {
+    self.tx.api_size()
+  }
+
+  fn writeable(&self) -> bool {
+    false
+  }
+
+  fn cursor(&self) -> Self::CursorType {
+    self.tx.api_cursor().into()
+  }
+
+  fn stats(&self) -> TxStats {
+    self.tx.api_stats()
+  }
+
+  fn bucket(&self, name: &[u8]) -> Option<Self::BucketType> {
+    self.tx.api_bucket(name).map(|b| b.into())
+  }
+
+  fn for_each<F: FnMut(&[u8], Self::BucketType)>(&self, f: F) -> crate::Result<()> {
+    todo!()
+  }
+
+  fn rollback(self) -> crate::Result<()> {
+    let _ = self.tx.rollback();
+
+    Ok(())
+  }
+
+  fn page(id: PgId) -> crate::Result<PageInfo> {
+    todo!()
+  }
+}
+
+pub struct TxRef<'tx> {
+  tx: TxCell<'tx>,
+}
+
+impl<'tx> TxApi<'tx> for TxRef<'tx> {
+  type CursorType = CursorImpl<'tx, InnerCursor<'tx, TxCell<'tx>, BucketCell<'tx>>>;
+  type BucketType = BucketImpl<'tx>;
+
+  fn id(&self) -> TxId {
+    self.tx.api_id()
+  }
+
+  fn size(&self) -> u64 {
+    self.tx.api_size()
+  }
+
+  fn writeable(&self) -> bool {
+    false
+  }
+
+  fn cursor(&self) -> Self::CursorType {
+    self.tx.api_cursor().into()
+  }
+
+  fn stats(&self) -> TxStats {
+    self.tx.api_stats()
+  }
+
+  fn bucket(&self, name: &[u8]) -> Option<Self::BucketType> {
+    self.tx.api_bucket(name).map(|b| b.into())
+  }
+
+  fn for_each<F: FnMut(&[u8], Self::BucketType)>(&self, f: F) -> crate::Result<()> {
+    todo!()
+  }
+
+  fn rollback(self) -> crate::Result<()> {
+    self.tx.rollback()
+  }
+
+  fn page(id: PgId) -> crate::Result<PageInfo> {
+    todo!()
+  }
+}
+
+
 pub struct TxRwImpl<'tx> {
   bump: Pin<Box<Bump>>,
-  lock: RwLockWriteGuard<'tx, DBShared>,
+  lock: Pin<Box<RwLockWriteGuard<'tx, DBShared>>>,
   tx: Pin<Rc<TxRwCell<'tx>>>,
 }
 
@@ -585,12 +573,190 @@ impl<'tx> TxRwImpl<'tx> {
       tx: TxRwCell { cell: self.tx.cell },
     }
   }
+
+  pub(crate) fn new(lock: RwLockWriteGuard<'tx, DBShared>) -> TxRwImpl<'tx> {
+    let bump = lock.records.lock().pop_read_bump();
+    let meta = lock.backend.meta();
+    let page_size = meta.page_size() as usize;
+    let inline_bucket = meta.root();
+    let mut uninit: MaybeUninit<TxRwImpl<'tx>> = MaybeUninit::uninit();
+    let ptr = uninit.as_mut_ptr();
+    unsafe {
+      addr_of_mut!((*ptr).bump).write(Box::pin(bump));
+      let bump = &(**addr_of!((*ptr).bump));
+      addr_of_mut!((*ptr).lock).write(Box::pin(lock));
+      let pager: &dyn Pager = &(**addr_of!((*ptr).lock));
+      let tx = Rc::new_cyclic(|weak| {
+        let r = TxR {
+          b: bump,
+          page_size,
+          pager,
+          meta,
+          stats: Default::default(),
+          is_rollback: false,
+          p: Default::default(),
+        };
+        let w = TxW {
+          pages: HashMap::new_in(bump),
+          commit_handlers: BVec::new_in(bump),
+          p: Default::default(),
+        };
+        let bucket = BucketRwCell::new_in(bump, inline_bucket, weak.clone(), None);
+        TxRwCell {
+          cell: SCell::new_in((TxRW{r, w}, bucket), bump),
+        }
+      });
+      addr_of_mut!((*ptr).tx).write(Pin::new(tx));
+      uninit.assume_init()
+    }
+  }
 }
 
-pub struct TxRef<'tx> {
-  tx: TxCell<'tx>,
+impl<'tx> Drop for TxRwImpl<'tx> {
+  fn drop(&mut self) {
+    let tx_id = self.id();
+    let stats = self.stats();
+    let mut swap_bump = Bump::with_capacity(0);
+    mem::swap(&mut swap_bump, &mut self.bump);
+    let mut records = self.lock.records.lock();
+
+    // TODO: Reload freelist
+    records.remove_tx(tx_id, stats, swap_bump);
+  }
+}
+
+impl<'tx> TxApi<'tx> for TxRwImpl<'tx> {
+  type CursorType = CursorImpl<'tx, InnerCursor<'tx, TxRwCell<'tx>, BucketRwCell<'tx>>>;
+  type BucketType = BucketRwImpl<'tx>;
+
+  fn id(&self) -> TxId {
+    self.tx.api_id()
+  }
+
+  fn size(&self) -> u64 {
+    self.tx.api_size()
+  }
+
+  fn writeable(&self) -> bool {
+    true
+  }
+
+  fn cursor(&self) -> Self::CursorType {
+    self.tx.api_cursor().into()
+  }
+
+  fn stats(&self) -> TxStats {
+    self.tx.api_stats()
+  }
+
+  fn bucket(&self, name: &[u8]) -> Option<Self::BucketType> {
+    self.tx.api_bucket(name).map(|b| b.into())
+  }
+
+  fn for_each<F: FnMut(&[u8], Self::BucketType)>(&self, f: F) -> crate::Result<()> {
+    todo!()
+  }
+
+  fn rollback(self) -> crate::Result<()> {
+    todo!()
+  }
+
+  fn page(id: PgId) -> crate::Result<PageInfo> {
+    todo!()
+  }
+}
+
+impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
+  type CursorRwType = CursorRwImpl<'tx, InnerCursor<'tx, TxRwCell<'tx>, BucketRwCell<'tx>>>;
+
+  fn cursor_mut(&mut self) -> Self::CursorRwType {
+    self.tx.api_cursor_mut().into()
+  }
+
+  fn create_bucket(&mut self, name: &[u8]) -> crate::Result<Self::BucketType> {
+    self.tx.api_create_bucket(name).map(|b| b.into())
+  }
+
+  fn create_bucket_if_not_exists(&mut self, name: &[u8]) -> crate::Result<Self::BucketType> {
+    self.tx.api_create_bucket_if_not_exist(name).map(|b| b.into())
+  }
+
+  fn delete_bucket(&mut self, name: &[u8]) -> crate::Result<()> {
+    self.tx.api_delete_bucket(name)
+  }
+
+  fn commit(self) -> crate::Result<()> {
+    self.tx.api_commit()
+  }
 }
 
 pub struct TxRwRef<'tx> {
   tx: TxRwCell<'tx>,
+}
+
+impl<'tx> TxApi<'tx> for TxRwRef<'tx> {
+  type CursorType = CursorImpl<'tx, InnerCursor<'tx, TxRwCell<'tx>, BucketRwCell<'tx>>>;
+  type BucketType = BucketRwImpl<'tx>;
+
+  fn id(&self) -> TxId {
+    self.tx.api_id()
+  }
+
+  fn size(&self) -> u64 {
+    self.tx.api_size()
+  }
+
+  fn writeable(&self) -> bool {
+    true
+  }
+
+  fn cursor(&self) -> Self::CursorType {
+    self.tx.api_cursor().into()
+  }
+
+  fn stats(&self) -> TxStats {
+    self.tx.api_stats()
+  }
+
+  fn bucket(&self, name: &[u8]) -> Option<Self::BucketType> {
+    self.tx.api_bucket(name).map(|b| b.into())
+  }
+
+  fn for_each<F: FnMut(&[u8], Self::BucketType)>(&self, f: F) -> crate::Result<()> {
+    todo!()
+  }
+
+  fn rollback(self) -> crate::Result<()> {
+    self.tx.rollback()
+  }
+
+  fn page(id: PgId) -> crate::Result<PageInfo> {
+    todo!()
+  }
+}
+
+
+
+impl<'tx> TxRwApi<'tx> for TxRwRef<'tx> {
+  type CursorRwType = CursorRwImpl<'tx, InnerCursor<'tx, TxRwCell<'tx>, BucketRwCell<'tx>>>;
+
+  fn cursor_mut(&mut self) -> Self::CursorRwType {
+    self.tx.api_cursor_mut().into()
+  }
+
+  fn create_bucket(&mut self, name: &[u8]) -> crate::Result<Self::BucketType> {
+    self.tx.api_create_bucket(name).map(|b| b.into())
+  }
+
+  fn create_bucket_if_not_exists(&mut self, name: &[u8]) -> crate::Result<Self::BucketType> {
+    self.tx.api_create_bucket_if_not_exist(name).map(|b| b.into())
+  }
+
+  fn delete_bucket(&mut self, name: &[u8]) -> crate::Result<()> {
+    self.tx.api_delete_bucket(name)
+  }
+
+  fn commit(self) -> crate::Result<()> {
+    self.tx.api_commit()
+  }
 }

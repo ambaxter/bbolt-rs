@@ -11,7 +11,7 @@ use crate::common::selfowned::SelfOwned;
 use crate::common::tree::MappedLeafPage;
 use crate::common::{PgId, TxId};
 use crate::freelist::{Freelist, MappedFreeListPage};
-use crate::tx::{TxCell, TxRwCell, TxStats};
+use crate::tx::{TxCell, TxImpl, TxRef, TxRwCell, TxRwImpl, TxRwRef, TxStats};
 use crate::{Error, TxApi, TxRwApi};
 use aligners::{alignment, Aligned, AlignedBytes};
 use bumpalo::Bump;
@@ -28,7 +28,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::{fs, io, mem};
 
-pub trait DbApi: Clone
+pub trait DbApi: Clone + Send + Sync
 where
   Self: Sized,
 {
@@ -69,7 +69,7 @@ where
   /// Any error that is returned from the function is returned from the View() method.
   ///
   /// Attempting to manually rollback within the function will cause a panic.
-  fn view<'tx, F: FnMut(TxCell<'tx>) -> crate::Result<()>>(&mut self, f: F) -> crate::Result<()>;
+  fn view<'tx, F: FnMut(TxRef<'tx>) -> crate::Result<()>>(&'tx self, f: F) -> crate::Result<()>;
 
   /// Stats retrieves ongoing performance stats for the database.
   /// This is only updated when a transaction closes.
@@ -107,9 +107,8 @@ pub trait DbRwAPI: DbApi {
   /// returned from the Update() method.
   ///
   /// Attempting to manually commit or rollback within the function will cause a panic.
-  fn update<'tx, F: FnMut(TxRwCell<'tx>) -> crate::Result<()>>(
-    &mut self, f: F,
-  ) -> crate::Result<()>;
+  fn update<'tx, F: FnMut(TxRwRef<'tx>) -> crate::Result<()>>(&'tx mut self, f: F)
+    -> crate::Result<()>;
 
   /// Sync executes fdatasync() against the database file handle.
   ///
@@ -200,7 +199,6 @@ impl DBRecords {
 
   pub(crate) fn remove_rw_tx<'tx>(
     &mut self, page_size: usize, rem_tx: TxId, tx_stats: TxStats, mut bump: Bump,
-    db_lock: RwLockWriteGuard<'tx, DBShared>,
   ) {
     let free_list_free_n = self.freelist.free_count();
     let free_list_pending_n = self.freelist.pending_count();
@@ -210,7 +208,6 @@ impl DBRecords {
     self.bump_pool.push(bump);
 
     self.rwtx = None;
-    drop(db_lock);
 
     self.stats.free_page_n = free_list_free_n as i64;
     self.stats.pending_page_n = free_list_pending_n as i64;
@@ -219,21 +216,21 @@ impl DBRecords {
     self.stats.tx_stats += tx_stats;
   }
 
-  pub(crate) fn remove_tx<'tx>(
-    &mut self, rem_tx: TxId, tx_stats: TxStats, mut bump: Bump,
-    db_lock: RwLockReadGuard<'tx, DBShared>,
-  ) {
+  pub(crate) fn remove_tx<'tx>(&mut self, rem_tx: TxId, tx_stats: TxStats, mut bump: Bump) {
     if let Some(pos) = self.txs.iter().position(|tx| *tx == rem_tx) {
       self.txs.swap_remove(pos);
     }
 
     bump.reset();
     self.bump_pool.push(bump);
-    drop(db_lock);
 
     let n = self.txs.len();
     self.stats.open_tx_n = n as i64;
     self.stats.tx_stats += tx_stats;
+  }
+
+  pub(crate) fn pop_read_bump(&mut self) -> Bump {
+    self.bump_pool.pop().unwrap_or_default()
   }
 }
 
@@ -446,7 +443,7 @@ impl DBBackend {
     Ok(())
   }
 
-  fn page<'tx>(&self, pg_id: PgId) -> RefPage<'tx> {
+  pub(crate) fn page<'tx>(&self, pg_id: PgId) -> RefPage<'tx> {
     let page_addr = pg_id.0 as usize * self.page_size;
     let page_ptr = unsafe { self.mmap.as_ref().unwrap().as_ptr().add(page_addr) };
     RefPage::new(page_ptr)
@@ -533,6 +530,22 @@ impl DBShared {
   }
 }
 
+pub(crate) trait Pager {
+  fn page(&self, pg_id: PgId) -> RefPage;
+}
+
+impl<'tx> Pager for RwLockReadGuard<'tx, DBShared> {
+  fn page(&self, pg_id: PgId) -> RefPage {
+    self.backend.page(pg_id)
+  }
+}
+
+impl<'tx> Pager for RwLockWriteGuard<'tx, DBShared> {
+  fn page(&self, pg_id: PgId) -> RefPage {
+    self.backend.page(pg_id)
+  }
+}
+
 pub(crate) trait DbIAPI<'tx>: 'tx {}
 
 pub(crate) trait DbMutIAPI<'tx>: DbIAPI<'tx> {}
@@ -540,8 +553,9 @@ pub(crate) trait DbMutIAPI<'tx>: DbIAPI<'tx> {}
 #[derive(Clone)]
 pub struct DB {
   db: Arc<RwLock<DBShared>>,
-  read_only: bool,
 }
+unsafe impl Send for DB {}
+unsafe impl Sync for DB {}
 
 impl DB {
   pub fn new<T: Into<PathBuf>>(path: T) -> crate::Result<Self> {
@@ -600,7 +614,6 @@ impl DB {
           backend,
         })),
       ),
-      read_only: false,
     })
   }
 
@@ -638,5 +651,57 @@ impl DB {
     db.write_all(&buffer)?;
     db.flush()?;
     Ok(buffer.len())
+  }
+}
+
+impl DbApi for DB {
+  type TxType<'tx> =  TxImpl<'tx> where Self: 'tx ;
+
+  fn open<T: Into<PathBuf>>(path: T) -> crate::Result<Self> {
+    todo!()
+  }
+
+  fn close(self) {
+    todo!()
+  }
+
+  fn begin<'tx>(&'tx self) -> Self::TxType<'tx> {
+    todo!()
+  }
+
+  fn view<'tx, F: FnMut(TxRef<'tx>) -> crate::Result<()>>(&'tx self, mut f: F) -> crate::Result<()> {
+    let tx = TxImpl::new(self.db.read());
+    let tx_ref = tx.get_ref();
+    let r = f(tx_ref);
+    let _  = tx.rollback();
+    r
+  }
+
+  fn stats(&self) -> DbStats {
+    todo!()
+  }
+}
+
+impl DbRwAPI for DB {
+  type TxRwType<'tx> = TxRwImpl<'tx> where Self: 'tx;
+
+  fn begin_mut<'tx>(&'tx mut self) -> Self::TxRwType<'tx> {
+    todo!()
+  }
+
+  fn update<'tx, F: FnMut(TxRwRef<'tx>) -> crate::Result<()>>(&'tx mut self, mut f: F) -> crate::Result<()> {
+    let txrw = TxRwImpl::new(self.db.write());
+    let tx_ref = txrw.get_ref();
+    match f(tx_ref) {
+      Ok(_) => txrw.commit(),
+      Err(e) => {
+        let _ = txrw.rollback();
+        Err(e)
+      }
+    }
+  }
+
+  fn sync(&mut self) -> crate::Result<()> {
+    todo!()
   }
 }

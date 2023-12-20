@@ -114,6 +114,12 @@ pub struct BucketImpl<'tx> {
   b: BucketCell<'tx>,
 }
 
+impl<'tx> From<BucketCell<'tx>> for BucketImpl<'tx> {
+  fn from(value: BucketCell<'tx>) -> Self {
+    BucketImpl { b: value }
+  }
+}
+
 impl<'tx> BucketApi<'tx> for BucketImpl<'tx> {
   type CursorType = CursorImpl<'tx, InnerCursor<'tx, TxCell<'tx>, BucketCell<'tx>>>;
 
@@ -156,6 +162,12 @@ impl<'tx> BucketApi<'tx> for BucketImpl<'tx> {
 
 pub struct BucketRwImpl<'tx> {
   b: BucketRwCell<'tx>,
+}
+
+impl<'tx> From<BucketRwCell<'tx>> for BucketRwImpl<'tx> {
+  fn from(value: BucketRwCell<'tx>) -> Self {
+    BucketRwImpl { b: value }
+  }
 }
 
 impl<'tx> BucketApi<'tx> for BucketRwImpl<'tx> {
@@ -508,7 +520,7 @@ pub(crate) trait BucketIAPI<'tx, T: TxIAPI<'tx>>:
         }
       }
     }
-    Either::Left(TxImplTODORenameMe::page(self.api_tx().deref(), id))
+    Either::Left(self.api_tx().page(id))
   }
 
   fn api_sequence(self) -> u64 {
