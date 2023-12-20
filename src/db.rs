@@ -568,7 +568,6 @@ unsafe impl Send for DB {}
 unsafe impl Sync for DB {}
 
 impl DB {
-
   /// Open creates and opens a database at the given path.
   /// If the file does not exist then it will be created automatically.
   /// Passing in nil options will cause Bolt to open the database with the default options.

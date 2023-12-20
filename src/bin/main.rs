@@ -1,6 +1,6 @@
 #![cfg_attr(debug_assertions, allow(dead_code, unused_imports))]
 
-use bbolt_rs::{DbApi, DbRwAPI, TxApi, DB, TxRwApi};
+use bbolt_rs::{DbApi, DbRwAPI, TxApi, TxRwApi, DB};
 
 fn main() -> bbolt_rs::Result<()> {
   println!("Hello, world!");

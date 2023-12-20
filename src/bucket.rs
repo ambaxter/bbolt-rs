@@ -365,7 +365,7 @@ pub(crate) trait BucketIAPI<'tx, T: TxIAPI<'tx>>:
 
     let child = self.open_bucket(v);
 
-    if let (_, tx , Some(mut w)) = self.split_ref_mut() {
+    if let (_, tx, Some(mut w)) = self.split_ref_mut() {
       let bump = tx.upgrade().unwrap().bump();
       let name = bump.alloc_slice_copy(name);
       w.buckets.insert(name, child);

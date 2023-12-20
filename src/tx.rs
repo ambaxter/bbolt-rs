@@ -60,7 +60,7 @@ pub trait TxApi<'tx> {
 
   /// Page returns page information for a given page number.
   /// This is only safe for concurrent use when used by a writable transaction.
-  fn page(&self, id: PgId) -> crate::Result<PageInfo>;
+  fn page(&self, id: PgId) -> crate::Result<Option<PageInfo>>;
 }
 
 pub trait TxRwApi<'tx>: TxApi<'tx> {
@@ -416,11 +416,19 @@ impl<'tx> TxRwIAPI<'tx> for TxRwCell<'tx> {
   }
 
   fn api_cursor_mut(self) -> Self::CursorRwType {
-    todo!()
+    let root = {
+      let (_, root, _) = self.split_ref_mut();
+      *root
+    };
+    root.i_cursor()
   }
 
   fn api_create_bucket(self, name: &[u8]) -> crate::Result<Self::BucketType> {
-    todo!()
+    let root = {
+      let (_, root, _) = self.split_ref_mut();
+      *root
+    };
+    root.api_create_bucket(name)
   }
 
   fn api_create_bucket_if_not_exist(self, name: &[u8]) -> crate::Result<Self::BucketType> {
@@ -432,7 +440,11 @@ impl<'tx> TxRwIAPI<'tx> for TxRwCell<'tx> {
   }
 
   fn api_delete_bucket(self, name: &[u8]) -> crate::Result<()> {
-    todo!()
+    let root = {
+      let (_, root, _) = self.split_ref_mut();
+      *root
+    };
+    root.api_delete_bucket(name)
   }
 
   fn api_commit(self) -> crate::Result<()> {
@@ -535,8 +547,8 @@ impl<'tx> TxApi<'tx> for TxImpl<'tx> {
     Ok(())
   }
 
-  fn page(&self, id: PgId) -> crate::Result<PageInfo> {
-    todo!()
+  fn page(&self, id: PgId) -> crate::Result<Option<PageInfo>> {
+    self.tx.api_page(id)
   }
 }
 
@@ -580,8 +592,8 @@ impl<'tx> TxApi<'tx> for TxRef<'tx> {
     self.tx.rollback()
   }
 
-  fn page(&self, id: PgId) -> crate::Result<PageInfo> {
-    todo!()
+  fn page(&self, id: PgId) -> crate::Result<Option<PageInfo>> {
+    self.tx.api_page(id)
   }
 }
 
@@ -687,8 +699,8 @@ impl<'tx> TxApi<'tx> for TxRwImpl<'tx> {
     self.tx.rollback()
   }
 
-  fn page(&self, id: PgId) -> crate::Result<PageInfo> {
-    todo!()
+  fn page(&self, id: PgId) -> crate::Result<Option<PageInfo>> {
+    self.tx.api_page(id)
   }
 }
 
@@ -759,8 +771,8 @@ impl<'tx> TxApi<'tx> for TxRwRef<'tx> {
     self.tx.rollback()
   }
 
-  fn page(&self, id: PgId) -> crate::Result<PageInfo> {
-    todo!()
+  fn page(&self, id: PgId) -> crate::Result<Option<PageInfo>> {
+    self.tx.api_page(id)
   }
 }
 
