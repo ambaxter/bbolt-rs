@@ -218,7 +218,7 @@ pub(crate) trait TxIAPI<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
   }
 
   fn api_cursor(self) -> InnerCursor<'tx, Self, Self::BucketType> {
-    let (_, root_bucket, _) = self.split_ref();
+    let root_bucket = self.root_bucket();
     root_bucket.i_cursor()
   }
 
@@ -227,13 +227,17 @@ pub(crate) trait TxIAPI<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
     r.stats
   }
 
+  fn root_bucket(self) -> Self::BucketType {
+    *self.split_ref().1
+  }
+
   fn api_bucket(self, name: &[u8]) -> Option<Self::BucketType> {
-    let (_, root_bucket, _) = self.split_ref();
+    let root_bucket = self.root_bucket();
     root_bucket.api_bucket(name)
   }
 
   fn api_for_each<F: FnMut(&[u8], Self::BucketType)>(&self, mut f: F) -> crate::Result<()> {
-    let (_, root_bucket, _) = self.split_ref();
+    let root_bucket = self.root_bucket();
     // TODO: Are we calling the right function?
     root_bucket.api_for_each_bucket(|k| {
       let bucket = root_bucket.api_bucket(k).unwrap();
@@ -416,35 +420,23 @@ impl<'tx> TxRwIAPI<'tx> for TxRwCell<'tx> {
   }
 
   fn api_cursor_mut(self) -> Self::CursorRwType {
-    let root = {
-      let (_, root, _) = self.split_ref_mut();
-      *root
-    };
-    root.i_cursor()
+    let root_bucket = self.root_bucket();
+    root_bucket.i_cursor()
   }
 
   fn api_create_bucket(self, name: &[u8]) -> crate::Result<Self::BucketType> {
-    let root = {
-      let (_, root, _) = self.split_ref_mut();
-      *root
-    };
-    root.api_create_bucket(name)
+    let root_bucket = self.root_bucket();
+    root_bucket.api_create_bucket(name)
   }
 
   fn api_create_bucket_if_not_exist(self, name: &[u8]) -> crate::Result<Self::BucketType> {
-    let root = {
-      let (_, root, _) = self.split_ref_mut();
-      *root
-    };
-    root.api_create_bucket_if_not_exists(name)
+    let root_bucket = self.root_bucket();
+    root_bucket.api_create_bucket_if_not_exists(name)
   }
 
   fn api_delete_bucket(self, name: &[u8]) -> crate::Result<()> {
-    let root = {
-      let (_, root, _) = self.split_ref_mut();
-      *root
-    };
-    root.api_delete_bucket(name)
+    let root_bucket = self.root_bucket();
+    root_bucket.api_delete_bucket(name)
   }
 
   fn api_commit(self) -> crate::Result<()> {
