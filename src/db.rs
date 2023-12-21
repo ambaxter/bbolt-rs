@@ -673,7 +673,7 @@ impl DbApi for DB {
   }
 
   fn begin<'tx>(&'tx self) -> Self::TxType<'tx> {
-    todo!()
+    TxImpl::new(self.db.read())
   }
 
   fn view<'tx, F: FnMut(TxRef<'tx>) -> crate::Result<()>>(
@@ -695,7 +695,7 @@ impl DbRwAPI for DB {
   type TxRwType<'tx> = TxRwImpl<'tx> where Self: 'tx;
 
   fn begin_mut<'tx>(&'tx mut self) -> Self::TxRwType<'tx> {
-    todo!()
+    TxRwImpl::new(self.db.write())
   }
 
   fn update<'tx, F: FnMut(TxRwRef<'tx>) -> crate::Result<()>>(

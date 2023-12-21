@@ -629,7 +629,7 @@ impl<'tx> BucketR<'tx> {
 }
 
 pub struct InnerBucketW<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> {
-  root_node: Option<NodeRwCell<'tx>>,
+  pub(crate) root_node: Option<NodeRwCell<'tx>>,
   buckets: HashMap<'tx, &'tx [u8], B>,
   pub(crate) nodes: HashMap<'tx, PgId, NodeRwCell<'tx>>,
   pub(crate) fill_percent: f64,
@@ -1015,25 +1015,35 @@ impl<'tx> BucketRwIAPI<'tx> for BucketRwCell<'tx> {
     }
   }
 
+  /// node creates a node from a page and associates it with a given parent.
   fn node(self, pgid: PgId, parent: Option<NodeRwCell<'tx>>) -> NodeRwCell<'tx> {
     let inline_page = {
       let (r, _, w) = self.split_ref_mut();
       let wb = w.unwrap();
 
+      // Retrieve node if it's already been created.
       if let Some(n) = wb.nodes.get(&pgid) {
         return *n;
       }
       r.inline_page
     };
 
+    // Otherwise create a node and cache it.
+    // Use the inline page if this is an inline bucket.
     let page = match inline_page {
       None => self.api_tx().page(pgid),
       Some(page) => page,
     };
 
+    // Read the page into the node and cache it.
     let n = NodeRwCell::read_in(self, parent, &page);
     let (r, _, w) = self.split_ref_mut();
     let mut wb = w.unwrap();
+    match parent {
+      None => wb.root_node = Some(n),
+      Some(parent_node) => parent_node.cell.borrow_mut().children.push(n),
+    }
+
     wb.nodes.insert(pgid, n);
     n
   }

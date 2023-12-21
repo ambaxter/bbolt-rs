@@ -592,7 +592,7 @@ impl<'tx> TxApi<'tx> for TxRef<'tx> {
 pub struct TxRwImpl<'tx> {
   bump: Pin<Box<Bump>>,
   lock: Pin<Box<RwLockWriteGuard<'tx, DBShared>>>,
-  tx: Pin<Rc<TxRwCell<'tx>>>,
+  pub(crate) tx: Pin<Rc<TxRwCell<'tx>>>,
 }
 
 impl<'tx> TxRwImpl<'tx> {

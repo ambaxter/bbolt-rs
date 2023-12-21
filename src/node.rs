@@ -27,7 +27,7 @@ pub struct NodeW<'tx> {
   parent: Option<NodeRwCell<'tx>>,
   is_unbalanced: bool,
   is_spilled: bool,
-  children: BVec<'tx, NodeRwCell<'tx>>,
+  pub(crate) children: BVec<'tx, NodeRwCell<'tx>>,
 }
 
 impl<'tx> PartialEq for NodeW<'tx> {
@@ -247,10 +247,7 @@ impl<'tx> NodeRwCell<'tx> {
         .inodes
         .binary_search_by(|probe| probe.key().cmp(&child_key))
     };
-    match result {
-      Ok(index) => index,
-      Err(next_closest) => next_closest,
-    }
+    result.unwrap_or_else(|next_closest| next_closest)
   }
 
   pub(crate) fn num_children(self: NodeRwCell<'tx>) -> usize {
@@ -340,12 +337,13 @@ impl<'tx> NodeRwCell<'tx> {
   }
 
   pub(crate) fn split(
-    self: NodeRwCell<'tx>, tx: &TxRwCell<'tx>, parent_children: &mut BVec<NodeRwCell<'tx>>,
+    self: NodeRwCell<'tx>, page_size: usize, bump: &'tx Bump,
+    parent_children: &mut BVec<NodeRwCell<'tx>>,
   ) -> BVec<'tx, NodeRwCell<'tx>> {
-    let mut nodes = { BVec::new_in(tx.bump()) };
+    let mut nodes = { BVec::new_in(bump) };
     let mut node = self;
     loop {
-      let (a, b) = node.split_two(tx.page_size(), parent_children);
+      let (a, b) = node.split_two(page_size, parent_children);
       nodes.push(a);
       if b.is_none() {
         break;
@@ -408,8 +406,10 @@ impl<'tx> NodeRwCell<'tx> {
         break;
       }
     }
+    let bump = tx.bump();
+    let page_size = tx.page_size();
 
-    let nodes = self.split(tx.deref(), parent_children);
+    let nodes = self.split(page_size, bump, parent_children);
     for node in nodes {
       let mut node_borrow = node.cell.borrow_mut();
       if node_borrow.pgid > ZERO_PGID {
@@ -597,5 +597,121 @@ impl<'tx> NodeRwCell<'tx> {
     let page = api_tx.page(pgid);
     let txid = api_tx.meta().txid();
     api_tx.freelist().free(txid, &page);
+  }
+}
+
+#[cfg(test)]
+mod test {
+  use crate::bucket::{BucketRwCell, BucketRwIAPI};
+  use crate::common::memory::CodSlice;
+  use crate::common::page::LEAF_PAGE_FLAG;
+  use crate::common::{BVec, SplitRef, ZERO_PGID};
+  use crate::node::NodeW;
+  use crate::test_support::{TestDb, Unseal};
+  use crate::tx::TxIAPI;
+  use crate::DbRwAPI;
+  use bumpalo::Bump;
+  use std::ops::DerefMut;
+
+  #[test]
+  fn test_node_put() -> crate::Result<()> {
+    let mut test_db = TestDb::new()?;
+    let tx = test_db.begin_mut();
+    let txrw = tx.unseal();
+    let root_bucket = txrw.root_bucket();
+    root_bucket.materialize_root();
+    let n = root_bucket.split_ref().2.unwrap().root_node.unwrap();
+    n.put(b"baz", b"baz", b"2", ZERO_PGID, 0);
+    n.put(b"foo", b"foo", b"0", ZERO_PGID, 0);
+    n.put(b"bar", b"bar", b"1", ZERO_PGID, 0);
+    n.put(b"foo", b"foo", b"3", ZERO_PGID, LEAF_PAGE_FLAG as u32);
+
+    assert_eq!(3, n.cell.borrow().inodes.len());
+    let inode = &n.cell.borrow().inodes[0];
+    assert_eq!(b"bar1".split_at(3), (inode.key(), inode.value()));
+    let inode = &n.cell.borrow().inodes[1];
+    assert_eq!(b"baz2".split_at(3), (inode.key(), inode.value()));
+    let inode = &n.cell.borrow().inodes[2];
+    assert_eq!(b"foo3".split_at(3), (inode.key(), inode.value()));
+    assert_eq!(LEAF_PAGE_FLAG as u32, n.cell.borrow().inodes[2].flags());
+    Ok(())
+  }
+
+  #[test]
+  fn test_node_read_leaf_page() -> crate::Result<()> {
+    let mut test_db = TestDb::new()?;
+    let tx = test_db.begin_mut();
+    let txrw = tx.unseal();
+    let root_bucket = txrw.root_bucket();
+    root_bucket.materialize_root();
+    let n = root_bucket.split_ref().2.unwrap().root_node.unwrap();
+    todo!()
+  }
+
+  #[test]
+  fn test_node_write_leaf_page() -> crate::Result<()> {
+    let mut test_db = TestDb::new()?;
+    let tx = test_db.begin_mut();
+    let txrw = tx.unseal();
+    let root_bucket = txrw.root_bucket();
+    root_bucket.materialize_root();
+    let n = root_bucket.split_ref().2.unwrap().root_node.unwrap();
+    todo!()
+  }
+
+  #[test]
+  fn test_node_split() -> crate::Result<()> {
+    let mut test_db = TestDb::new()?;
+    let tx = test_db.begin_mut();
+    let txrw = tx.unseal();
+    let root_bucket = txrw.root_bucket();
+    root_bucket.materialize_root();
+    let n = root_bucket.split_ref().2.unwrap().root_node.unwrap();
+    n.put(b"00000001", b"00000001", b"0123456701234567", ZERO_PGID, 0);
+    n.put(b"00000002", b"00000002", b"0123456701234567", ZERO_PGID, 0);
+    n.put(b"00000003", b"00000003", b"0123456701234567", ZERO_PGID, 0);
+    n.put(b"00000004", b"00000004", b"0123456701234567", ZERO_PGID, 0);
+    n.put(b"00000005", b"00000005", b"0123456701234567", ZERO_PGID, 0);
+    let mut parent_children = BVec::new_in(txrw.bump());
+    let split_nodes = n.split(100, txrw.bump(), &mut parent_children);
+    assert_eq!(2, parent_children.len());
+    assert_eq!(2, parent_children[0].cell.borrow().inodes.len());
+    assert_eq!(3, parent_children[1].cell.borrow().inodes.len());
+    Ok(())
+  }
+
+  #[test]
+  fn test_node_split_min_keys() -> crate::Result<()> {
+    let mut test_db = TestDb::new()?;
+    let tx = test_db.begin_mut();
+    let txrw = tx.unseal();
+    let root_bucket = txrw.root_bucket();
+    root_bucket.materialize_root();
+    let n = root_bucket.split_ref().2.unwrap().root_node.unwrap();
+    n.put(b"00000001", b"00000001", b"0123456701234567", ZERO_PGID, 0);
+    n.put(b"00000002", b"00000002", b"0123456701234567", ZERO_PGID, 0);
+    let mut parent_children = BVec::new_in(txrw.bump());
+    let split_nodes = n.split(20, txrw.bump(), &mut parent_children);
+    assert!(n.cell.borrow().parent.is_none(), "expected none parent");
+    Ok(())
+  }
+
+  #[test]
+  fn test_node_split_single_page() -> crate::Result<()> {
+    let mut test_db = TestDb::new()?;
+    let tx = test_db.begin_mut();
+    let txrw = tx.unseal();
+    let root_bucket = txrw.root_bucket();
+    root_bucket.materialize_root();
+    let n = root_bucket.split_ref().2.unwrap().root_node.unwrap();
+    n.put(b"00000001", b"00000001", b"0123456701234567", ZERO_PGID, 0);
+    n.put(b"00000002", b"00000002", b"0123456701234567", ZERO_PGID, 0);
+    n.put(b"00000003", b"00000003", b"0123456701234567", ZERO_PGID, 0);
+    n.put(b"00000004", b"00000004", b"0123456701234567", ZERO_PGID, 0);
+    n.put(b"00000005", b"00000005", b"0123456701234567", ZERO_PGID, 0);
+    let mut parent_children = BVec::new_in(txrw.bump());
+    let split_nodes = n.split(4096, txrw.bump(), &mut parent_children);
+    assert!(n.cell.borrow().parent.is_none(), "expected none parent");
+    Ok(())
   }
 }
