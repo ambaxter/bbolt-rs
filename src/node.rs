@@ -619,8 +619,7 @@ mod test {
     let tx = test_db.begin_mut();
     let txrw = tx.unseal();
     let root_bucket = txrw.root_bucket();
-    root_bucket.materialize_root();
-    let n = root_bucket.split_ref().2.unwrap().root_node.unwrap();
+    let n = root_bucket.materialize_root();;
     n.put(b"baz", b"baz", b"2", ZERO_PGID, 0);
     n.put(b"foo", b"foo", b"0", ZERO_PGID, 0);
     n.put(b"bar", b"bar", b"1", ZERO_PGID, 0);
@@ -665,8 +664,7 @@ mod test {
     let tx = test_db.begin_mut();
     let txrw = tx.unseal();
     let root_bucket = txrw.root_bucket();
-    root_bucket.materialize_root();
-    let n = root_bucket.split_ref().2.unwrap().root_node.unwrap();
+    let n = root_bucket.materialize_root();;
     n.put(b"00000001", b"00000001", b"0123456701234567", ZERO_PGID, 0);
     n.put(b"00000002", b"00000002", b"0123456701234567", ZERO_PGID, 0);
     n.put(b"00000003", b"00000003", b"0123456701234567", ZERO_PGID, 0);
@@ -686,8 +684,7 @@ mod test {
     let tx = test_db.begin_mut();
     let txrw = tx.unseal();
     let root_bucket = txrw.root_bucket();
-    root_bucket.materialize_root();
-    let n = root_bucket.split_ref().2.unwrap().root_node.unwrap();
+    let n = root_bucket.materialize_root();;
     n.put(b"00000001", b"00000001", b"0123456701234567", ZERO_PGID, 0);
     n.put(b"00000002", b"00000002", b"0123456701234567", ZERO_PGID, 0);
     let mut parent_children = BVec::new_in(txrw.bump());
@@ -702,8 +699,7 @@ mod test {
     let tx = test_db.begin_mut();
     let txrw = tx.unseal();
     let root_bucket = txrw.root_bucket();
-    root_bucket.materialize_root();
-    let n = root_bucket.split_ref().2.unwrap().root_node.unwrap();
+    let n = root_bucket.materialize_root();;
     n.put(b"00000001", b"00000001", b"0123456701234567", ZERO_PGID, 0);
     n.put(b"00000002", b"00000002", b"0123456701234567", ZERO_PGID, 0);
     n.put(b"00000003", b"00000003", b"0123456701234567", ZERO_PGID, 0);
