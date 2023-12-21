@@ -791,14 +791,14 @@ impl<'tx> BucketIAPI<'tx, TxRwCell<'tx>> for BucketRwCell<'tx> {
 
 impl<'tx> BucketRwIAPI<'tx> for BucketRwCell<'tx> {
   fn materialize_root(self) -> NodeRwCell<'tx> {
-    let mut materialize_root = None;
+    let mut root_id = ZERO_PGID;
     if let (r, _, Some(w)) = self.split_ref() {
-      materialize_root = match w.root_node {
-        None => Some(r.bucket_header.root()),
+      match w.root_node {
+        None => root_id = r.bucket_header.root(),
         Some(root_node) => return root_node,
       }
     }
-    materialize_root.and_then(|root| Some(self.node(root, None))).unwrap()
+    self.node(root_id, None)
   }
 
   fn api_create_bucket(self, key: &[u8]) -> crate::Result<Self> {
