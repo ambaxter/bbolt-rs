@@ -252,6 +252,7 @@ impl Page {
   }
 }
 
+#[derive(Debug, Eq, PartialEq)]
 pub struct PageInfo {
   pub id: u64,
   pub t: Cow<'static, str>,
