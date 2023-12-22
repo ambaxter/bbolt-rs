@@ -15,7 +15,7 @@ use crate::Error::{
   BucketExists, BucketNameRequired, BucketNotFound, IncompatibleValue, KeyRequired, KeyTooLarge,
   ValueTooLarge,
 };
-use crate::{CursorRwApi, Error};
+use crate::{CursorRwApi, Error, TxRwApi};
 use bumpalo::Bump;
 use bytemuck::{Pod, Zeroable};
 use either::Either;
@@ -363,7 +363,7 @@ pub(crate) trait BucketIAPI<'tx, T: TxIAPI<'tx>>:
     InnerCursor::new(self, tx.bump())
   }
 
-  /// The private implementation for the public API
+  /// See [BucketApi::bucket]
   fn api_bucket(self, name: &[u8]) -> Option<Self> {
     if let Some(w) = self.split_ow() {
       if let Some(child) = w.buckets.get(name) {
@@ -427,6 +427,7 @@ pub(crate) trait BucketIAPI<'tx, T: TxIAPI<'tx>>:
     Self::new_in(bump, bucket_header, Rc::downgrade(&tx), ref_page)
   }
 
+  /// See [BucketApi::get]
   fn api_get(self, key: &[u8]) -> Option<&'tx [u8]> {
     let (k, v, flags) = self.i_cursor().i_seek(key).unwrap();
     // Return None if this is a bucket.
@@ -440,6 +441,7 @@ pub(crate) trait BucketIAPI<'tx, T: TxIAPI<'tx>>:
     Some(v)
   }
 
+  /// See [BucketApi::for_each]
   fn api_for_each<F: Fn(&[u8]) -> crate::Result<()>>(self, f: F) -> crate::Result<()> {
     let mut c = self.i_cursor();
     let mut inode = c.i_first();
@@ -450,6 +452,7 @@ pub(crate) trait BucketIAPI<'tx, T: TxIAPI<'tx>>:
     Ok(())
   }
 
+  /// See [BucketApi::for_each_bucket]
   fn api_for_each_bucket<F: FnMut(&[u8]) -> crate::Result<()>>(
     self, mut f: F,
   ) -> crate::Result<()> {
@@ -554,6 +557,7 @@ pub(crate) trait BucketIAPI<'tx, T: TxIAPI<'tx>>:
     Either::Left(self.api_tx().page(id))
   }
 
+  /// See [BucketApi::sequence]
   fn api_sequence(self) -> u64 {
     self.split_ref().0.bucket_header.sequence()
   }
@@ -563,6 +567,7 @@ pub(crate) trait BucketIAPI<'tx, T: TxIAPI<'tx>>:
     self.api_tx().page_size() / 4
   }
 
+  /// See [BucketApi::stats]
   fn api_stats(self) -> BucketStats {
     let mut s = BucketStats::default();
     let mut sub_stats = BucketStats::default();
@@ -643,16 +648,25 @@ pub(crate) trait BucketRwIAPI<'tx>: BucketIAPI<'tx, TxRwCell<'tx>> {
   /// Explicitly materialize the root node
   fn materialize_root(self) -> NodeRwCell<'tx>;
 
+  /// See [BucketRwApi::create_bucket]
   fn api_create_bucket(self, key: &[u8]) -> crate::Result<Self>;
+
+  /// See [BucketRwApi::create_bucket_if_not_exists]
   fn api_create_bucket_if_not_exists(self, key: &[u8]) -> crate::Result<Self>;
+
+  /// See [BucketRwApi::delete_bucket]
   fn api_delete_bucket(self, key: &[u8]) -> crate::Result<()>;
 
+  /// See [BucketRwApi::put]
   fn api_put(self, key: &[u8], value: &[u8]) -> crate::Result<()>;
 
+  /// See [BucketRwApi::delete]
   fn api_delete(self, key: &[u8]) -> crate::Result<()>;
 
+  /// See [BucketRwApi::set_sequence]
   fn api_set_sequence(cell: BucketRwCell<'tx>, v: u64) -> crate::Result<()>;
 
+  /// See [BucketRwApi::next_sequence]
   fn api_next_sequence(cell: BucketRwCell<'tx>) -> crate::Result<u64>;
 
   /// free recursively frees all pages in the bucket.

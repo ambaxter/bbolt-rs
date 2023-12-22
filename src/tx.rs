@@ -199,24 +199,29 @@ pub(crate) trait TxIAPI<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
     self.split_r().pager.page(id)
   }
 
+  /// See [TxApi::id]
   fn api_id(self) -> TxId {
     self.split_r().meta.txid()
   }
 
+  /// See [TxApi::size]
   fn api_size(self) -> u64 {
     let r = self.split_r();
     r.meta.pgid().0 * r.meta.page_size() as u64
   }
 
+  /// See [TxApi::writeable]
   fn api_writeable(self) -> bool {
     self.split_ow().is_some()
   }
 
+  /// See [TxApi::cursor]
   fn api_cursor(self) -> InnerCursor<'tx, Self, Self::BucketType> {
     let root_bucket = self.root_bucket();
     root_bucket.i_cursor()
   }
 
+  /// See [TxApi::stats]
   fn api_stats(self) -> TxStats {
     self.split_r().stats
   }
@@ -225,11 +230,13 @@ pub(crate) trait TxIAPI<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
     self.split_bound()
   }
 
+  /// See [TxApi::bucket]
   fn api_bucket(self, name: &[u8]) -> Option<Self::BucketType> {
     let root_bucket = self.root_bucket();
     root_bucket.api_bucket(name)
   }
 
+  /// See [TxApi::for_each]
   fn api_for_each<F: FnMut(&[u8], Self::BucketType)>(&self, mut f: F) -> crate::Result<()> {
     let root_bucket = self.root_bucket();
     // TODO: Are we calling the right function?
@@ -239,6 +246,7 @@ pub(crate) trait TxIAPI<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
     })
   }
 
+  /// See [TxApi::rollback]
   fn api_rollback(self) -> crate::Result<()> {
     todo!()
   }
@@ -250,6 +258,7 @@ pub(crate) trait TxIAPI<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
     Ok(())
   }
 
+  /// See [TxApi::page]
   fn api_page(&self, id: PgId) -> crate::Result<Option<PageInfo>> {
     let r = self.split_r();
     if id >= r.meta.pgid() {
@@ -286,14 +295,19 @@ pub(crate) trait TxRwIAPI<'tx>: TxIAPI<'tx> {
 
   fn allocate(self, count: usize) -> crate::Result<MutPage<'tx>>;
 
+  /// See [TxRwApi::cursor_mut]
   fn api_cursor_mut(self) -> Self::CursorRwType;
 
+  /// See [TxRwApi::create_bucket]
   fn api_create_bucket(self, name: &[u8]) -> crate::Result<Self::BucketType>;
 
+  /// See [TxRwApi::create_bucket_if_not_exists]
   fn api_create_bucket_if_not_exist(self, name: &[u8]) -> crate::Result<Self::BucketType>;
 
+  /// See [TxRwApi::delete_bucket]
   fn api_delete_bucket(self, name: &[u8]) -> crate::Result<()>;
 
+  /// See [TxRwApi::commit]
   fn api_commit(self) -> crate::Result<()>;
 }
 
