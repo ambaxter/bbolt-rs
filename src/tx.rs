@@ -181,41 +181,35 @@ pub(crate) trait TxIAPI<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
   type BucketType: BucketIAPI<'tx, Self>;
 
   fn bump(self) -> &'tx Bump {
-    let (r, _, _) = self.split_ref();
-    r.b
+    self.split_r().b
   }
 
   fn page_size(self) -> usize {
-    let (r, _, _) = self.split_ref();
-    r.page_size
+    self.split_r().page_size
   }
 
   fn meta<'a>(&'a self) -> Ref<'a, Meta>
   where
     'tx: 'a,
   {
-    let (r, _, _) = self.split_ref();
-    Ref::map(r, |tx| &tx.meta)
+    Ref::map(self.split_r(), |tx| &tx.meta)
   }
 
   fn page(self, id: PgId) -> RefPage<'tx> {
-    let (r, _, _) = self.split_ref();
-    r.pager.page(id)
+    self.split_r().pager.page(id)
   }
 
   fn api_id(self) -> TxId {
-    let (r, _, _) = self.split_ref();
-    r.meta.txid()
+    self.split_r().meta.txid()
   }
 
   fn api_size(self) -> u64 {
-    let (r, _, _) = self.split_ref();
+    let r = self.split_r();
     r.meta.pgid().0 * r.meta.page_size() as u64
   }
 
   fn api_writeable(self) -> bool {
-    let (_, _, w) = self.split_ref();
-    w.is_some()
+    self.split_ow().is_some()
   }
 
   fn api_cursor(self) -> InnerCursor<'tx, Self, Self::BucketType> {
@@ -224,12 +218,11 @@ pub(crate) trait TxIAPI<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
   }
 
   fn api_stats(self) -> TxStats {
-    let (r, _, _) = self.split_ref();
-    r.stats
+    self.split_r().stats
   }
 
   fn root_bucket(self) -> Self::BucketType {
-    self.split_ref().1
+    self.split_bound()
   }
 
   fn api_bucket(self, name: &[u8]) -> Option<Self::BucketType> {
@@ -253,13 +246,12 @@ pub(crate) trait TxIAPI<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
   fn non_physical_rollback(self) -> crate::Result<()>;
 
   fn rollback(self) -> crate::Result<()> {
-    let (mut r, _, _) = self.split_ref_mut();
-    r.is_rollback = true;
+    self.split_r_mut().is_rollback = true;
     Ok(())
   }
 
   fn api_page(&self, id: PgId) -> crate::Result<Option<PageInfo>> {
-    let (r, _, _) = self.split_ref();
+    let r = self.split_r();
     if id >= r.meta.pgid() {
       return Ok(None);
     }
@@ -344,18 +336,18 @@ pub struct TxCell<'tx> {
 
 impl<'tx> SplitRef<TxR<'tx>, BucketCell<'tx>, TxW<'tx>> for TxCell<'tx> {
   fn split_r(&self) -> Ref<TxR<'tx>> {
-    Ref::map(self.cell.borrow(), | c | &c.0)
+    Ref::map(self.cell.borrow(), |c| &c.0)
   }
 
   fn split_r_ow(&self) -> (Ref<TxR<'tx>>, Option<Ref<TxW<'tx>>>) {
-    (Ref::map(self.cell.borrow(), | c | &c.0), None)
+    (Ref::map(self.cell.borrow(), |c| &c.0), None)
   }
 
   fn split_ow(&self) -> Option<Ref<TxW<'tx>>> {
     None
   }
 
-  fn split_b(&self) -> BucketCell<'tx> {
+  fn split_bound(&self) -> BucketCell<'tx> {
     self.cell.borrow().1
   }
 
@@ -365,11 +357,11 @@ impl<'tx> SplitRef<TxR<'tx>, BucketCell<'tx>, TxW<'tx>> for TxCell<'tx> {
   }
 
   fn split_r_mut(&self) -> RefMut<TxR<'tx>> {
-    RefMut::map(self.cell.borrow_mut(), | c | &mut c.0)
+    RefMut::map(self.cell.borrow_mut(), |c| &mut c.0)
   }
 
   fn split_r_ow_mut(&self) -> (RefMut<TxR<'tx>>, Option<RefMut<TxW<'tx>>>) {
-    (RefMut::map(self.cell.borrow_mut(), | c | &mut c.0), None)
+    (RefMut::map(self.cell.borrow_mut(), |c| &mut c.0), None)
   }
 
   fn split_ow_mut(&self) -> Option<RefMut<TxW<'tx>>> {
@@ -413,7 +405,7 @@ impl<'tx> SplitRef<TxR<'tx>, BucketRwCell<'tx>, TxW<'tx>> for TxRwCell<'tx> {
     Some(Ref::map(self.cell.borrow(), |c| &c.0.w))
   }
 
-  fn split_b(&self) -> BucketRwCell<'tx> {
+  fn split_bound(&self) -> BucketRwCell<'tx> {
     self.cell.borrow().1
   }
 
@@ -845,5 +837,52 @@ impl<'tx> TxRwApi<'tx> for TxRwRef<'tx> {
 
   fn commit(self) -> crate::Result<()> {
     self.tx.api_commit()
+  }
+}
+
+pub(crate) struct TypeA<'a> {
+  pub b: &'a RefCell<TypeB<'a>>,
+  pub i: usize,
+}
+
+pub(crate) struct TypeB<'a> {
+  pub a: &'a RefCell<TypeA<'a>>,
+  pub i: usize,
+}
+
+pub(crate) fn create_cycle<'a>(bump: &'a Bump) -> (&RefCell<TypeA<'a>>, &RefCell<TypeB<'a>>) {
+  let mut uninit_a: MaybeUninit<TypeA<'a>> = MaybeUninit::uninit();
+  println!("uninit: {}", mem::size_of::<MaybeUninit<TypeA<'a>>>());
+  let mut uninit_b: MaybeUninit<TypeB<'a>> = MaybeUninit::uninit();
+  let cell_a = bump.alloc(RefCell::new(uninit_a));
+  let ptr_a = cell_a.borrow_mut().as_mut_ptr();
+  let cell_b = bump.alloc(RefCell::new(uninit_b));
+  let ptr_b = cell_b.borrow_mut().as_mut_ptr();
+  unsafe {
+    let cell_a_t = mem::transmute::<&mut RefCell<MaybeUninit<TypeA>>, &RefCell<TypeA>>(cell_a);
+    println!("uninit: {}", mem::size_of::<TypeA>());
+    let cell_b_t = mem::transmute::<&mut RefCell<MaybeUninit<TypeB>>, &RefCell<TypeB>>(cell_b);
+    addr_of_mut!((*ptr_a).b).write(cell_b_t);
+    addr_of_mut!((*ptr_a).i).write(1);
+    addr_of_mut!((*ptr_b).a).write(cell_a_t);
+    addr_of_mut!((*ptr_b).i).write(100);
+    cell_a.borrow_mut().assume_init_mut();
+    cell_b.borrow_mut().assume_init_mut();
+    (cell_a_t, cell_b_t)
+  }
+}
+
+#[cfg(test)]
+mod test {
+  use crate::tx::create_cycle;
+  use bumpalo::Bump;
+
+  #[test]
+  fn create_cycle_test() -> crate::Result<()> {
+    let bump = Bump::new();
+    let (a, b) = create_cycle(&bump);
+    assert_eq!(100, a.borrow().b.borrow().i);
+    assert_eq!(1, b.borrow().a.borrow().i);
+    Ok(())
   }
 }
