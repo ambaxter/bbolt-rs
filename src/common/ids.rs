@@ -66,4 +66,5 @@ macro_rules! id {
 }
 
 id!(PgId);
+
 id!(TxId);

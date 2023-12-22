@@ -688,6 +688,7 @@ pub(crate) trait BucketRwIAPI<'tx>: BucketIAPI<'tx, TxRwCell<'tx>> {
 
 pub struct BucketR<'tx> {
   pub(crate) bucket_header: InBucket,
+  /// inline page reference
   pub(crate) inline_page: Option<RefPage<'tx>>,
   p: PhantomData<&'tx u8>,
 }
@@ -703,9 +704,19 @@ impl<'tx> BucketR<'tx> {
 }
 
 pub struct InnerBucketW<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> {
+  /// materialized node for the root page.
   pub(crate) root_node: Option<NodeRwCell<'tx>>,
+  /// subbucket cache
   buckets: HashMap<'tx, &'tx [u8], B>,
+  /// node cache
   pub(crate) nodes: HashMap<'tx, PgId, NodeRwCell<'tx>>,
+
+
+  /// Sets the threshold for filling nodes when they split. By default,
+  /// the bucket will fill to 50% but it can be useful to increase this
+  /// amount if you know that your write workloads are mostly append-only.
+  ///
+  /// This is non-persisted across transactions so it must be set in every Tx.
   pub(crate) fill_percent: f64,
   phantom_t: PhantomData<T>,
 }

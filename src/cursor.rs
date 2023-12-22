@@ -136,29 +136,45 @@ impl<'tx, C: CursorRwIAPI<'tx>> CursorRwApi<'tx> for CursorRwImpl<'tx, C> {
 }
 
 pub(crate) trait CursorIAPI<'tx>: Clone {
+  /// See [CursorApi::first]
   fn api_first(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)>;
+
   fn i_first(&mut self) -> Option<(&'tx [u8], &'tx [u8], u32)>;
 
+  /// See [CursorApi::next]
   fn api_next(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)>;
 
+  /// i_next moves to the next leaf element and returns the key and value.
+  /// If the cursor is at the last leaf element then it stays there and returns nil.
   fn i_next(&mut self) -> Option<(&'tx [u8], &'tx [u8], u32)>;
 
+  /// See [CursorApi::prev]
   fn api_prev(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)>;
 
+  /// i_prev moves the cursor to the previous item in the bucket and returns its key and value.
+  /// If the cursor is at the beginning of the bucket then a nil key and value are returned.
   fn i_prev(&mut self) -> Option<(&'tx [u8], &'tx [u8], u32)>;
 
+  /// See [CursorApi::last]
   fn api_last(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)>;
 
+  /// i_last moves the cursor to the last leaf element under the last page in the stack.
   fn i_last(&mut self);
 
+  /// key_value returns the key and value of the current leaf element.
   fn key_value(&self) -> Option<(&'tx [u8], &'tx [u8], u32)>;
 
+  /// See [CursorApi::seek]
   fn api_seek(&mut self, seek: &[u8]) -> Option<(&'tx [u8], Option<&'tx [u8]>)>;
 
+  /// i_seek moves the cursor to a given key and returns it.
+  /// If the key does not exist then the next key is used.
   fn i_seek(&mut self, seek: &[u8]) -> Option<(&'tx [u8], &'tx [u8], u32)>;
 
+  /// first moves the cursor to the first leaf element under the last page in the stack.
   fn go_to_first_element_on_the_stack(&mut self);
 
+  /// search recursively performs a binary search against a given page/node until it finds a given key.
   fn search(&mut self, key: &[u8], pgid: PgId);
 
   fn search_inodes(&mut self, key: &[u8]);
@@ -169,8 +185,10 @@ pub(crate) trait CursorIAPI<'tx>: Clone {
 }
 
 pub(crate) trait CursorRwIAPI<'tx>: CursorIAPI<'tx> {
+  /// node returns the node that the cursor is currently positioned on.
   fn node(&mut self) -> NodeRwCell<'tx>;
 
+  /// See [CursorRwApi::delete]
   fn api_delete(&mut self, key: &[u8]) -> crate::Result<()>;
 }
 
@@ -181,6 +199,8 @@ pub struct ElemRef<'tx> {
 }
 
 impl<'tx> ElemRef<'tx> {
+
+  /// count returns the number of inodes or page elements.
   fn count(&self) -> u32 {
     match &self.pn {
       Either::Left(r) => r.count as u32,
@@ -188,6 +208,7 @@ impl<'tx> ElemRef<'tx> {
     }
   }
 
+  /// is_leaf returns whether the ref is pointing at a leaf page/node.
   fn is_leaf(&self) -> bool {
     match &self.pn {
       Either::Left(r) => r.is_leaf(),
@@ -384,16 +405,21 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for InnerCursor
   fn key_value(&self) -> Option<(&'tx [u8], &'tx [u8], u32)> {
     let elem_ref = self.stack.last().unwrap();
     let pn_count = elem_ref.count();
+
+    // If the cursor is pointing to the end of page/node then return nil.
     if pn_count == 0 || elem_ref.index > pn_count {
       return None;
     }
 
+
     match &elem_ref.pn {
+      // Retrieve value from page.
       Either::Left(r) => {
         let l = MappedLeafPage::coerce_ref(r).unwrap();
         let inode = l.get_elem(elem_ref.index as u16).unwrap();
         Some((inode.key(), inode.value(), inode.flags()))
       }
+      // Retrieve value from node.
       Either::Right(n) => {
         let ref_node = n.cell.borrow();
         let inode = &ref_node.inodes[elem_ref.index as usize];
@@ -437,6 +463,7 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for InnerCursor
           break;
         }
 
+        // Keep adding pages pointing to the first element to the stack.
         match r.pn {
           Either::Left(page) => {
             let branch_page = MappedBranchPage::coerce_ref(&page).unwrap();
@@ -464,6 +491,8 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for InnerCursor
     }
 
     let elem = ElemRef { pn, index: 0 };
+
+    // If we're on a leaf page/node then find the specific node.
     let elem_is_leaf = elem.is_leaf();
 
     self.stack.push(elem);
@@ -483,12 +512,14 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for InnerCursor
   fn search_inodes(&mut self, key: &[u8]) {
     if let Some(elem) = self.stack.last_mut() {
       let index = match &elem.pn {
+        // If we have a page then search its leaf elements.
         Either::Left(page) => {
           let leaf_page = MappedLeafPage::coerce_ref(page).unwrap();
           leaf_page
             .elements()
             .partition_point(|elem| elem.as_ref().key() < key)
         }
+        // If we have a node then search its inodes.
         Either::Right(node) => node
           .cell
           .borrow()
@@ -502,17 +533,15 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for InnerCursor
   fn search_node(&mut self, key: &[u8], node: NodeRwCell<'tx>) {
     let (index, pgid) = {
       let w = node.cell.borrow();
+
       let r = w.inodes.binary_search_by_key(&key, |inode| inode.key());
-      let index = match r {
-        Ok(index) => index,
-        Err(index) => {
-          if index > 0 {
-            index - 1
-          } else {
-            index
-          }
+      let index = r.unwrap_or_else(|index| {
+        if index > 0 {
+          index - 1
+        } else {
+          index
         }
-      };
+      });
       (index as u32, w.inodes[index].pgid())
     };
 
@@ -529,16 +558,13 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for InnerCursor
     let r = branch_page
       .elements()
       .binary_search_by_key(&key, |elem| elem.as_ref().key());
-    let index = match r {
-      Ok(index) => index,
-      Err(index) => {
-        if index > 0 {
-          index - 1
-        } else {
-          index
-        }
+    let index = r.unwrap_or_else(|index| {
+      if index > 0 {
+        index - 1
+      } else {
+        index
       }
-    };
+    });
 
     if let Some(elem) = self.stack.last_mut() {
       elem.index = index as u32;
@@ -557,6 +583,7 @@ impl<'tx, B: BucketRwIAPI<'tx>> CursorRwIAPI<'tx> for InnerCursor<'tx, TxRwCell<
       "accessing a node with a zero-length cursor stack"
     );
 
+    // If the top of the stack is a leaf node then just return it.
     if let Some(elem_ref) = self.stack.last() {
       if let Either::Right(node) = elem_ref.pn {
         if node.cell.borrow().is_leaf {
@@ -565,6 +592,7 @@ impl<'tx, B: BucketRwIAPI<'tx>> CursorRwIAPI<'tx> for InnerCursor<'tx, TxRwCell<
       }
     }
 
+    // Start from root and traverse down the hierarchy.
     let mut n = {
       let first = self.stack.first().unwrap();
       match &self.stack.first().unwrap().pn {
