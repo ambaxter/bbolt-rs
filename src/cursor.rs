@@ -1,5 +1,5 @@
 use crate::bucket::{BucketApi, BucketCell, BucketIAPI, BucketR, BucketRwCell, BucketRwIAPI};
-use crate::common::memory::SCell;
+use crate::common::memory::BCell;
 use crate::common::page::{CoerciblePage, RefPage, BUCKET_LEAF_FLAG};
 use crate::common::tree::{MappedBranchPage, MappedLeafPage, TreePage};
 use crate::common::{BVec, PgId, SplitRef};

@@ -2,7 +2,7 @@ use crate::bucket::{
   BucketCell, BucketIAPI, BucketImpl, BucketRW, BucketRwCell, BucketRwIAPI, BucketRwImpl,
 };
 use crate::common::defaults::DEFAULT_PAGE_SIZE;
-use crate::common::memory::SCell;
+use crate::common::memory::BCell;
 use crate::common::meta::Meta;
 use crate::common::page::{MutPage, PageInfo, RefPage};
 use crate::common::selfowned::SelfOwned;
@@ -92,49 +92,50 @@ pub trait TxRwApi<'tx>: TxApi<'tx> {
   fn commit(self) -> crate::Result<()>;
 }
 
+// TODO: Add functions to simplify access
 #[derive(Copy, Clone, Default)]
 pub struct TxStats {
   // Page statistics.
   //
   /// number of page allocations
-  page_count: i64,
+  pub(crate) page_count: i64,
   /// total bytes allocated
-  page_alloc: i64,
+  pub(crate) page_alloc: i64,
 
   // Cursor statistics.
   //
   /// number of cursors created
-  cursor_count: i64,
+  pub(crate) cursor_count: i64,
 
   // Node statistics
   //
   /// number of node allocations
-  node_count: i64,
+  pub(crate) node_count: i64,
   /// number of node dereferences
-  node_deref: i64,
+  pub(crate) node_deref: i64,
 
   // Rebalance statistics.
   //
   /// number of node rebalances
-  rebalance: i64,
+  pub(crate) rebalance: i64,
   /// total time spent rebalancing
-  rebalance_time: Duration,
+  pub(crate) rebalance_time: Duration,
 
   // Split/Spill statistics.
   //
   /// number of nodes split
-  split: i64,
+  pub(crate) split: i64,
   /// number of nodes spilled
-  spill: i64,
+  pub(crate) spill: i64,
   /// total time spent spilling
-  spill_time: Duration,
+  pub(crate) spill_time: Duration,
 
   // Write statistics.
   //
   /// number of writes performed
-  write: i64,
+  pub(crate) write: i64,
   /// total time spent writing to disk
-  write_time: Duration,
+  pub(crate) write_time: Duration,
 }
 
 impl AddAssign<TxStats> for TxStats {
@@ -318,7 +319,7 @@ pub struct TxR<'tx> {
   b: &'tx Bump,
   page_size: usize,
   pager: &'tx dyn Pager,
-  stats: TxStats,
+  pub(crate) stats: TxStats,
   meta: Meta,
   is_rollback: bool,
   p: PhantomData<&'tx u8>,
@@ -338,7 +339,7 @@ pub struct TxRW<'tx> {
 
 #[derive(Copy, Clone)]
 pub struct TxCell<'tx> {
-  pub(crate) cell: SCell<'tx, (TxR<'tx>, BucketCell<'tx>)>,
+  pub(crate) cell: BCell<'tx, (TxR<'tx>, BucketCell<'tx>)>,
 }
 
 impl<'tx> SplitRef<TxR<'tx>, BucketCell<'tx>, TxW<'tx>> for TxCell<'tx> {
@@ -373,7 +374,7 @@ impl<'tx> TxIAPI<'tx> for TxCell<'tx> {
 
 #[derive(Copy, Clone)]
 pub struct TxRwCell<'tx> {
-  pub(crate) cell: SCell<'tx, (TxRW<'tx>, BucketRwCell<'tx>)>,
+  pub(crate) cell: BCell<'tx, (TxRW<'tx>, BucketRwCell<'tx>)>,
 }
 
 impl<'tx> SplitRef<TxR<'tx>, BucketRwCell<'tx>, TxW<'tx>> for TxRwCell<'tx> {
@@ -475,7 +476,7 @@ impl<'tx> TxImpl<'tx> {
         };
         let bucket = BucketCell::new_in(bump, inline_bucket, weak.clone(), None);
         TxCell {
-          cell: SCell::new_in((r, bucket), bump),
+          cell: BCell::new_in((r, bucket), bump),
         }
       });
       addr_of_mut!((*ptr).tx).write(Pin::new(tx));
@@ -631,7 +632,7 @@ impl<'tx> TxRwImpl<'tx> {
         };
         let bucket = BucketRwCell::new_in(bump, inline_bucket, weak.clone(), None);
         TxRwCell {
-          cell: SCell::new_in((TxRW { r, w }, bucket), bump),
+          cell: BCell::new_in((TxRW { r, w }, bucket), bump),
         }
       });
       addr_of_mut!((*ptr).tx).write(Pin::new(tx));

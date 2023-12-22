@@ -30,6 +30,7 @@ pub struct Meta {
 }
 
 impl Meta {
+  /// validate checks the marker bytes and version of the meta page to ensure it matches this binary.
   pub fn validate(&self) -> Result<(), crate::Error> {
     if self.magic != MAGIC {
       return Err(InvalidDatabase(true));
@@ -41,6 +42,7 @@ impl Meta {
     Ok(())
   }
 
+  /// write writes the meta onto a page.
   pub fn write(&mut self, mp: &mut MetaPage) {
     if self.root.root() >= self.pgid {
       panic!(
@@ -54,12 +56,15 @@ impl Meta {
         self.free_list, self.pgid
       );
     }
+    // Page id is either going to be 0 or 1 which we can determine by the transaction ID.
     mp.page.id = PgId(self.txid.0 % 2);
     mp.page.set_meta();
+    // Calculate the checksum.
     self.checksum = self.sum64();
     mp.meta = *self;
   }
 
+  /// generates the checksum for the meta.
   pub fn sum64(&self) -> u64 {
     let mut h = Fnv64::new();
     let (left, _) =

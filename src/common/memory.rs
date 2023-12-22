@@ -9,23 +9,25 @@ use std::ops::{Deref, DerefMut};
 use std::slice::{from_raw_parts, from_raw_parts_mut};
 use std::{fmt, mem};
 
-pub struct SCell<'a, T: ?Sized>(&'a RefCell<T>);
+/// A borrowed cell backed by `RefCell`
+pub struct BCell<'a, T: ?Sized>(&'a RefCell<T>);
 
-impl<'a, T> Clone for SCell<'a, T> {
+impl<'a, T> Clone for BCell<'a, T> {
   fn clone(&self) -> Self {
     *self
   }
 }
 
-impl<'a, T> Copy for SCell<'a, T> {}
+impl<'a, T> Copy for BCell<'a, T> {}
 
-impl<'a, T> SCell<'a, T> {
-  pub fn new_in(x: T, a: &'a Bump) -> SCell<'a, T> {
-    SCell(a.alloc(RefCell::new(x)))
+impl<'a, T> BCell<'a, T> {
+  /// Allocates a BCell in a Bumpalo arena
+  pub fn new_in(x: T, a: &'a Bump) -> BCell<'a, T> {
+    BCell(a.alloc(RefCell::new(x)))
   }
 }
 
-impl<'a, T> Deref for SCell<'a, T> {
+impl<'a, T> Deref for BCell<'a, T> {
   type Target = RefCell<T>;
 
   fn deref(&self) -> &Self::Target {
@@ -33,7 +35,7 @@ impl<'a, T> Deref for SCell<'a, T> {
   }
 }
 
-impl<'a, T> PartialEq for SCell<'a, T>
+impl<'a, T> PartialEq for BCell<'a, T>
 where
   T: PartialEq,
 {
@@ -42,7 +44,7 @@ where
   }
 }
 
-impl<'a, T> Eq for SCell<'a, T> where T: Eq {}
+impl<'a, T> Eq for BCell<'a, T> where T: Eq {}
 
 /// Copy on Demand handling the case where we need to either point to a memory mapped slice or an Bump owned slice.
 #[derive(Copy, Clone)]
@@ -138,6 +140,8 @@ where
 }
 
 /// Read-write slice to a piece of memory that's either memory mapped or Bump owned
+//TODO: Probably not useful. Might want to retire this after we finish
+// complete the code
 pub struct RWSlice<'tx, T: Pod> {
   ptr: *mut T,
   size: u32,
@@ -180,6 +184,7 @@ impl<'tx, T: Pod> DerefMut for RWSlice<'tx, T> {
   }
 }
 
+//TODO: use std is_aligned_to when it comes out
 pub(crate) trait IsAligned: Copy {
   fn is_aligned_to<U>(self) -> bool;
 }

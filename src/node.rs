@@ -3,7 +3,7 @@ use crate::bucket::{
   MIN_FILL_PERCENT,
 };
 use crate::common::inode::INode;
-use crate::common::memory::{CodSlice, SCell};
+use crate::common::memory::{CodSlice, BCell};
 use crate::common::page::{CoerciblePage, MutPage, RefPage, MIN_KEYS_PER_PAGE, PAGE_HEADER_SIZE};
 use crate::common::tree::{
   MappedBranchPage, MappedLeafPage, TreePage, BRANCH_PAGE_ELEMENT_SIZE, LEAF_PAGE_ELEMENT_SIZE,
@@ -188,13 +188,13 @@ impl<'tx> NodeW<'tx> {
 
 #[derive(Copy, Clone, Eq, PartialEq)]
 pub struct NodeRwCell<'tx> {
-  pub(crate) cell: SCell<'tx, NodeW<'tx>>,
+  pub(crate) cell: BCell<'tx, NodeW<'tx>>,
 }
 
 impl<'tx> NodeRwCell<'tx> {
   fn new_parent_in(bucket: BucketRwCell<'tx>) -> NodeRwCell<'tx> {
     NodeRwCell {
-      cell: SCell::new_in(NodeW::new_parent_in(bucket), bucket.api_tx().bump()),
+      cell: BCell::new_in(NodeW::new_parent_in(bucket), bucket.api_tx().bump()),
     }
   }
 
@@ -202,7 +202,7 @@ impl<'tx> NodeRwCell<'tx> {
     bucket: BucketRwCell<'tx>, is_leaf: bool, parent: NodeRwCell<'tx>,
   ) -> NodeRwCell<'tx> {
     NodeRwCell {
-      cell: SCell::new_in(
+      cell: BCell::new_in(
         NodeW::new_child_in(bucket, is_leaf, parent),
         bucket.api_tx().bump(),
       ),
@@ -213,7 +213,7 @@ impl<'tx> NodeRwCell<'tx> {
     bucket: BucketRwCell<'tx>, parent: Option<NodeRwCell<'tx>>, page: &RefPage<'tx>,
   ) -> NodeRwCell<'tx> {
     NodeRwCell {
-      cell: SCell::new_in(NodeW::read_in(bucket, parent, page), bucket.api_tx().bump()),
+      cell: BCell::new_in(NodeW::read_in(bucket, parent, page), bucket.api_tx().bump()),
     }
   }
 

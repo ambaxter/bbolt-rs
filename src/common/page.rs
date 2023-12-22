@@ -18,16 +18,24 @@ pub const FREE_LIST_PAGE_FLAG: u16 = 0x10;
 pub const BUCKET_LEAF_FLAG: u32 = 0x01;
 
 //TODO: This needs to be cleaned up.
+/// Represents a page type that can be coerced or mutated from a `RefPage` or `MutPage`
 pub trait CoerciblePage {
+
+  /// The page flag discriminator
   fn page_flag() -> u16;
 
+  /// Set the page flag
   #[inline]
   fn set_flag(page: &mut Page) {
     page.flags = Self::page_flag();
   }
 
+  /// Take "ownership" of page pointer.
+  // TODO: Rename because we're not owning the pointer in the memory sense,
+  // but rather as a type
   fn own(bytes: *mut u8) -> Self;
 
+  /// Const cast a `RefPage` into a specific page type
   #[inline]
   unsafe fn unchecked_ref<'tx, 'a>(mapped_page: &'a RefPage<'tx>) -> &'a Self
   where
@@ -36,6 +44,7 @@ pub trait CoerciblePage {
     &*(mapped_page as *const RefPage as *const Self)
   }
 
+  /// Mut cast a `MutPage` into a specific page type
   #[inline]
   unsafe fn unchecked_mut<'tx, 'a>(mapped_page: &'a mut MutPage<'tx>) -> &'a mut Self
   where
@@ -44,6 +53,7 @@ pub trait CoerciblePage {
     &mut *(mapped_page as *mut MutPage<'tx> as *mut Self)
   }
 
+  /// Mutate a `MutPage` into a specific page type.
   #[inline]
   fn mut_into<'tx, 'a>(mapped_page: &'a mut MutPage<'tx>) -> &'a mut Self
   where
@@ -53,6 +63,7 @@ pub trait CoerciblePage {
     unsafe { Self::unchecked_mut(mapped_page) }
   }
 
+  /// Const cast a `RefPage` into a specific page type if the type matches
   #[inline]
   fn coerce_ref<'tx, 'a>(mapped_page: &'a RefPage<'tx>) -> Option<&'a Self>
   where
@@ -65,6 +76,7 @@ pub trait CoerciblePage {
     }
   }
 
+  /// Mut cast a `MutPage` into a specific page type if the type matches
   #[inline]
   fn coerce_mut<'tx, 'a>(mapped_page: &'a mut MutPage<'tx>) -> Option<&'a mut Self>
   where
@@ -237,6 +249,7 @@ impl Page {
     self.flags == 0
   }
 
+  /// page_type returns a human readable page type string used for debugging.
   pub fn page_type(&self) -> Cow<'static, str> {
     if self.is_branch() {
       Cow::Borrowed("branch")
@@ -252,6 +265,7 @@ impl Page {
   }
 }
 
+/// PageInfo represents human readable information about a page.
 #[derive(Debug, Eq, PartialEq)]
 pub struct PageInfo {
   pub id: u64,

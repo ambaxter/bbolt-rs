@@ -4,7 +4,7 @@ use crate::common::bucket::InBucket;
 use crate::common::defaults::{
   DEFAULT_ALLOC_SIZE, DEFAULT_PAGE_SIZE, MAGIC, MAX_MMAP_STEP, PGID_NO_FREE_LIST, VERSION,
 };
-use crate::common::memory::SCell;
+use crate::common::memory::BCell;
 use crate::common::meta::{MappedMetaPage, Meta};
 use crate::common::page::{CoerciblePage, MutPage, Page, RefPage, FREE_LIST_PAGE_FLAG};
 use crate::common::selfowned::SelfOwned;

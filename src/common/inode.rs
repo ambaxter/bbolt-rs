@@ -104,6 +104,11 @@ impl<'tx> INode<'tx> {
     } else if let Some(branch_page) = MappedBranchPage::coerce_ref(page) {
       let i = branch_page.iter().map(|elem| INode::from_branch_in(elem));
       inodes.extend(i);
+    } else {
+      panic!(
+        "INodes::read_inodes - Unexpected page type: {:?}",
+        page.flags
+      );
     }
   }
 

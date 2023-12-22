@@ -1,5 +1,5 @@
 use crate::common::bucket::{InBucket, IN_BUCKET_SIZE};
-use crate::common::memory::{IsAligned, SCell};
+use crate::common::memory::{IsAligned, BCell};
 use crate::common::meta::MetaPage;
 use crate::common::page::{CoerciblePage, Page, RefPage, BUCKET_LEAF_FLAG, PAGE_HEADER_SIZE};
 use crate::common::tree::{
@@ -311,8 +311,14 @@ impl AddAssign<BucketStats> for BucketStats {
   }
 }
 
+/// DefaultFillPercent is the percentage that split pages are filled.
+/// This value can be changed by setting Bucket.FillPercent.
 const DEFAULT_FILL_PERCENT: f64 = 0.5;
+
+/// MAX_KEY_SIZE is the maximum length of a key, in bytes.
 const MAX_KEY_SIZE: u32 = 32768;
+
+/// MaxValueSize is the maximum length of a value, in bytes.
 const MAX_VALUE_SIZE: u32 = (1 << 31) - 2;
 const INLINE_PAGE_ALIGNMENT: usize = mem::align_of::<InlinePage>();
 const INLINE_PAGE_SIZE: usize = mem::size_of::<InlinePage>();
@@ -320,6 +326,7 @@ const INLINE_PAGE_SIZE: usize = mem::size_of::<InlinePage>();
 pub(crate) const MIN_FILL_PERCENT: f64 = 0.1;
 pub(crate) const MAX_FILL_PERCENT: f64 = 1.0;
 
+/// A convenience struct representing an inline page header
 #[repr(C)]
 #[derive(Copy, Clone, Default, Pod, Zeroable)]
 struct InlinePage {
@@ -327,6 +334,8 @@ struct InlinePage {
   page: Page,
 }
 
+
+/// The internal Bucket API
 pub(crate) trait BucketIAPI<'tx, T: TxIAPI<'tx>>:
   SplitRef<BucketR<'tx>, Weak<T>, InnerBucketW<'tx, T, Self>>
 {
@@ -334,20 +343,28 @@ pub(crate) trait BucketIAPI<'tx, T: TxIAPI<'tx>>:
     bump: &'tx Bump, bucket_header: InBucket, tx: Weak<T>, inline_page: Option<RefPage<'tx>>,
   ) -> Self;
 
+  /// Returns whether the bucket is writable.
   fn is_writeable(&self) -> bool;
 
+  /// Returns the rc ptr Tx of the bucket
   fn api_tx(self) -> Rc<T>;
 
+  /// Returns the weak ptr to the Tx of the bucket
   fn weak_tx(self) -> Weak<T>;
 
+  /// Returns the root page id of the bucket
   fn root(self) -> PgId {
     self.split_ref().0.bucket_header.root()
   }
 
+  /// Create a new cursor for this Bucket
   fn i_cursor(self) -> InnerCursor<'tx, T, Self> {
-    InnerCursor::new(self, self.api_tx().bump())
+    let tx = self.api_tx();
+    tx.split_ref_mut().0.stats.cursor_count += 1;
+    InnerCursor::new(self, tx.bump())
   }
 
+  /// The private implementation for the public API
   fn api_bucket(self, name: &[u8]) -> Option<Self> {
     if self.is_writeable() {
       let b = self.split_ref();
@@ -358,11 +375,14 @@ pub(crate) trait BucketIAPI<'tx, T: TxIAPI<'tx>>:
       }
     }
     let mut c = self.i_cursor();
+    // Move cursor to key.
     let (k, v, flags) = c.i_seek(name)?;
+    // Return None if the key doesn't exist or it is not a bucket.
     if !(name == k) || (flags & BUCKET_LEAF_FLAG) == 0 {
       return None;
     }
 
+    // Otherwise create a bucket and cache it.
     let child = self.open_bucket(v);
 
     if let (_, tx, Some(mut w)) = self.split_ref_mut() {
@@ -374,13 +394,16 @@ pub(crate) trait BucketIAPI<'tx, T: TxIAPI<'tx>>:
     Some(child)
   }
 
+  /// Helper method that re-interprets a sub-bucket value
+  /// from a parent into a Bucket
   fn open_bucket(self, mut value: &[u8]) -> Self {
+    let tx = self.api_tx();
+    let bump = tx.bump();
     // Unaligned access requires a copy to be made.
     //TODO: use std is_aligned_to when it comes out
     if !IsAligned::is_aligned_to::<InlinePage>(value.as_ptr()) {
       // TODO: Shove this into a centralized function somewhere
       let layout = Layout::from_size_align(value.len(), INLINE_PAGE_ALIGNMENT).unwrap();
-      let bump = self.api_tx().bump();
       let new_value = unsafe {
         let mut new_value = bump.alloc_layout(layout);
         let new_value_ptr = new_value.as_mut() as *mut u8;
@@ -391,6 +414,7 @@ pub(crate) trait BucketIAPI<'tx, T: TxIAPI<'tx>>:
     }
     let inbucket_size = mem::size_of::<InBucket>();
     let bucket_header = *bytemuck::from_bytes::<InBucket>(value.split_at(inbucket_size).0);
+    // Save a reference to the inline page if the bucket is inline.
     let ref_page = if bucket_header.root() == ZERO_PGID {
       assert!(
         value.len() >= INLINE_PAGE_SIZE,
@@ -405,15 +429,16 @@ pub(crate) trait BucketIAPI<'tx, T: TxIAPI<'tx>>:
     } else {
       None
     };
-    let bump = self.api_tx().bump();
-    Self::new_in(bump, bucket_header, self.weak_tx(), ref_page)
+    Self::new_in(bump, bucket_header, Rc::downgrade(&tx), ref_page)
   }
 
   fn api_get(self, key: &[u8]) -> Option<&'tx [u8]> {
     let (k, v, flags) = self.i_cursor().i_seek(key).unwrap();
+    // Return None if this is a bucket.
     if (flags & BUCKET_LEAF_FLAG) != 0 {
       return None;
     }
+    // If our target node isn't the same key as what's passed in then return None.
     if key != k {
       return None;
     }
@@ -444,23 +469,28 @@ pub(crate) trait BucketIAPI<'tx, T: TxIAPI<'tx>>:
     Ok(())
   }
 
+  /// forEachPage iterates over every page in a bucket, including inline pages.
   fn for_each_page<F: FnMut(&RefPage, usize, &[PgId])>(self, mut f: F) {
     let root = {
       let (r, _, _) = self.split_ref();
       let root = r.bucket_header.root();
+      // If we have an inline page then just use that.
       if let Some(page) = &r.inline_page {
         f(page, 0, &[root]);
         return;
       }
       root
     };
-
+    // Otherwise traverse the page hierarchy.
     TxImplTODORenameMe::for_each_page(self.api_tx().deref(), root, f);
   }
 
+  /// forEachPageNode iterates over every page (or node) in a bucket.
+  /// This also includes inline pages.
   fn for_each_page_node<F: FnMut(&Either<RefPage, NodeRwCell<'tx>>, usize) + Copy>(self, mut f: F) {
     let root = {
       let (r, _, _) = self.split_ref();
+      // If we have an inline page or root node then just use that.
       if let Some(page) = &r.inline_page {
         f(&Either::Left(*page), 0);
         return;
@@ -474,7 +504,11 @@ pub(crate) trait BucketIAPI<'tx, T: TxIAPI<'tx>>:
     self, root: PgId, depth: usize, mut f: F,
   ) {
     let pn = self.page_node(root);
+
+    // Execute function.
     f(&pn, depth);
+
+    // Recursively loop over children.
     match &pn {
       Either::Left(page) => {
         if let Some(branch_page) = MappedBranchPage::coerce_ref(page) {
@@ -530,6 +564,7 @@ pub(crate) trait BucketIAPI<'tx, T: TxIAPI<'tx>>:
     self.split_ref().0.bucket_header.sequence()
   }
 
+  /// Returns the maximum total size of a bucket to make it a candidate for inlining.
   fn max_inline_bucket_size(self) -> usize {
     self.api_tx().page_size() / 4
   }
@@ -546,23 +581,39 @@ pub(crate) trait BucketIAPI<'tx, T: TxIAPI<'tx>>:
       if let Some(leaf_page) = MappedLeafPage::coerce_ref(p) {
         s.key_n += p.count as i64;
 
+        // used totals the used bytes for the page
         let mut used = PAGE_HEADER_SIZE;
         if let Some(last_element) = leaf_page.elements().last() {
+          // If page has any elements, add all element headers.
           used += LEAF_PAGE_ELEMENT_SIZE * (p.count - 1) as usize;
+
+          // Add all element key, value sizes.
+          // The computation takes advantage of the fact that the position
+          // of the last element's key/value equals to the total of the sizes
+          // of all previous elements' keys and values.
+          // It also includes the last element's header.
           used += last_element.pos() as usize
             + last_element.key_size() as usize
             + last_element.value_size() as usize;
         }
 
+        // For inlined bucket just update the inline stats
         if self.root() == ZERO_PGID {
           s.inline_bucket_in_use += used as i64;
         } else {
+          // For non-inlined bucket update all the leaf stats
           s.leaf_page_n += 1;
           s.leaf_in_use += used as i64;
           s.leaf_overflow_n += leaf_page.overflow as i64;
 
+
+          // Collect stats from sub-buckets.
+          // Do that by iterating over all element headers
+          // looking for the ones with the bucketLeafFlag.
           for leaf_elem in leaf_page.elements() {
             if leaf_elem.is_bucket_entry() {
+              // For any bucket element, open the element value
+              // and recursively call Stats on the contained bucket.
               sub_stats += self.open_bucket(leaf_elem.as_ref().value()).api_stats();
             }
           }
@@ -570,23 +621,33 @@ pub(crate) trait BucketIAPI<'tx, T: TxIAPI<'tx>>:
       } else if let Some(branch_page) = MappedBranchPage::coerce_ref(p) {
         s.branch_page_n += 1;
         if let Some(last_element) = branch_page.elements().last() {
+          // used totals the used bytes for the page
+          // Add header and all element headers.
           let mut used =
             PAGE_HEADER_SIZE + (BRANCH_PAGE_ELEMENT_SIZE * (branch_page.count - 1) as usize);
+          // Add size of all keys and values.
+          // Again, use the fact that last element's position equals to
+          // the total of key, value sizes of all previous elements.
           used += last_element.pos() as usize + last_element.key_size() as usize;
           s.branch_in_use += used as i64;
           s.branch_overflow_n += branch_page.overflow as i64;
         }
       }
     });
+    // Alloc stats can be computed from page counts and pageSize.
     s.branch_alloc = (s.branch_page_n + s.branch_overflow_n) * page_size as i64;
     s.leaf_alloc = (s.leaf_page_n + s.leaf_overflow_n) * page_size as i64;
+
+    // Add the max depth of sub-buckets to get total nested depth.
     s.depth += sub_stats.depth;
+    // Add the stats for all sub-buckets
     s += sub_stats;
     s
   }
 }
 
 pub(crate) trait BucketRwIAPI<'tx>: BucketIAPI<'tx, TxRwCell<'tx>> {
+  /// Explicitly materialize the root node
   fn materialize_root(self) -> NodeRwCell<'tx>;
 
   fn api_create_bucket(self, key: &[u8]) -> crate::Result<Self>;
@@ -601,14 +662,20 @@ pub(crate) trait BucketRwIAPI<'tx>: BucketIAPI<'tx, TxRwCell<'tx>> {
 
   fn api_next_sequence(cell: BucketRwCell<'tx>) -> crate::Result<u64>;
 
+  /// free recursively frees all pages in the bucket.
   fn free(self);
 
+  /// spill writes all the nodes for this bucket to dirty pages.
   fn spill(self, bump: &'tx Bump) -> crate::Result<()>;
 
+  /// inlineable returns true if a bucket is small enough to be written inline
+  /// and if it contains no subbuckets. Otherwise returns false.
   fn inlineable(self) -> bool;
 
+  /// own_in removes all references to the old mmap.
   fn own_in(self);
 
+  /// node creates a node from a page and associates it with a given parent.
   fn node(self, pgid: PgId, parent: Option<NodeRwCell<'tx>>) -> NodeRwCell<'tx>;
 }
 
@@ -666,7 +733,7 @@ impl<'tx> BucketRW<'tx> {
 
 #[derive(Copy, Clone)]
 pub struct BucketCell<'tx> {
-  cell: SCell<'tx, (BucketR<'tx>, Weak<TxCell<'tx>>)>,
+  cell: BCell<'tx, (BucketR<'tx>, Weak<TxCell<'tx>>)>,
 }
 
 impl<'tx> BucketIAPI<'tx, TxCell<'tx>> for BucketCell<'tx> {
@@ -681,7 +748,7 @@ impl<'tx> BucketIAPI<'tx, TxCell<'tx>> for BucketCell<'tx> {
     };
 
     BucketCell {
-      cell: SCell::new_in((r, tx), bump),
+      cell: BCell::new_in((r, tx), bump),
     }
   }
 
@@ -728,7 +795,7 @@ impl<'tx> SplitRef<BucketR<'tx>, Weak<TxCell<'tx>>, InnerBucketW<'tx, TxCell<'tx
 
 #[derive(Copy, Clone)]
 pub struct BucketRwCell<'tx> {
-  cell: SCell<'tx, (BucketRW<'tx>, Weak<TxRwCell<'tx>>)>,
+  cell: BCell<'tx, (BucketRW<'tx>, Weak<TxRwCell<'tx>>)>,
 }
 
 impl<'tx> SplitRef<BucketR<'tx>, Weak<TxRwCell<'tx>>, BucketW<'tx>> for BucketRwCell<'tx> {
@@ -771,7 +838,7 @@ impl<'tx> BucketIAPI<'tx, TxRwCell<'tx>> for BucketRwCell<'tx> {
     let w = BucketW::new_in(bump);
 
     BucketRwCell {
-      cell: SCell::new_in((BucketRW { r, w }, tx), bump),
+      cell: BCell::new_in((BucketRW { r, w }, tx), bump),
     }
   }
 
@@ -944,6 +1011,7 @@ impl<'tx> BucketRwIAPI<'tx> for BucketRwCell<'tx> {
     });
   }
 
+  /// spill writes all the nodes for this bucket to dirty pages.
   fn spill(self, bump: &'tx Bump) -> crate::Result<()> {
     // To keep with our rules we much copy the bucket entries to temporary storage first
     // This should be unnecessary, but working first *then* optimize
@@ -961,11 +1029,9 @@ impl<'tx> BucketRwIAPI<'tx> for BucketRwCell<'tx> {
 
     for (name, child) in v.into_iter() {}
 
-    Ok(())
+    todo!()
   }
 
-  /// inlineable returns true if a bucket is small enough to be written inline
-  /// and if it contains no subbuckets. Otherwise returns false.
   fn inlineable(self) -> bool {
     let b = self.split_ref();
     let w = b.2.unwrap();
@@ -1015,7 +1081,6 @@ impl<'tx> BucketRwIAPI<'tx> for BucketRwCell<'tx> {
     }
   }
 
-  /// node creates a node from a page and associates it with a given parent.
   fn node(self, pgid: PgId, parent: Option<NodeRwCell<'tx>>) -> NodeRwCell<'tx> {
     let inline_page = {
       let (r, _, w) = self.split_ref_mut();
@@ -1037,7 +1102,7 @@ impl<'tx> BucketRwIAPI<'tx> for BucketRwCell<'tx> {
 
     // Read the page into the node and cache it.
     let n = NodeRwCell::read_in(self, parent, &page);
-    let (r, _, w) = self.split_ref_mut();
+    let (_, _, w) = self.split_ref_mut();
     let mut wb = w.unwrap();
     match parent {
       None => wb.root_node = Some(n),
