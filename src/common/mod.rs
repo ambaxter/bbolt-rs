@@ -29,8 +29,26 @@ pub type HashSet<'tx, K> = hashbrown::HashSet<K, DefaultHashBuilder, &'tx Bump>;
 
 //TODO: Refactor this. We don't need all 3 each and every time.
 //Once we're done figure out exactly what we need
-pub(crate) trait SplitRef<R, T, W>: Copy + Clone {
-  fn split_ref(&self) -> (cell::Ref<R>, cell::Ref<T>, Option<cell::Ref<W>>);
+pub(crate) trait SplitRef<R, B, W>: Copy + Clone {
+  /// Access the read section of the struct
+  fn split_r(&self) -> cell::Ref<R>;
+  /// Access the read and optional write section of the struct
+  fn split_r_ow(&self) -> (cell::Ref<R>, Option<cell::Ref<W>>);
+  /// Access the option write section of the struct
+  fn split_ow(&self) -> Option<cell::Ref<W>>;
+  /// Access the bound section of the struct
+  fn split_b(&self) -> B;
 
-  fn split_ref_mut(&self) -> (cell::RefMut<R>, cell::RefMut<T>, Option<cell::RefMut<W>>);
+  /// Access the read, bound, and optional write section of the struct
+  fn split_ref(&self) -> (cell::Ref<R>, B, Option<cell::Ref<W>>);
+
+  /// Mutably access the read section of the struct
+  fn split_r_mut(&self) -> cell::RefMut<R>;
+  /// Mutably access the read and optional write section of the struct
+  fn split_r_ow_mut(&self) -> (cell::RefMut<R>, Option<cell::RefMut<W>>);
+  /// Mutably access the option write section of the struct
+  fn split_ow_mut(&self) -> Option<cell::RefMut<W>>;
+
+  /// Mutably access the read, bound, and optional write section of the struct
+  fn split_ref_mut(&self) -> (cell::RefMut<R>, B, Option<cell::RefMut<W>>);
 }

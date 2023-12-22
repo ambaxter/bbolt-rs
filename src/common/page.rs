@@ -20,7 +20,6 @@ pub const BUCKET_LEAF_FLAG: u32 = 0x01;
 //TODO: This needs to be cleaned up.
 /// Represents a page type that can be coerced or mutated from a `RefPage` or `MutPage`
 pub trait CoerciblePage {
-
   /// The page flag discriminator
   fn page_flag() -> u16;
 

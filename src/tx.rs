@@ -229,7 +229,7 @@ pub(crate) trait TxIAPI<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
   }
 
   fn root_bucket(self) -> Self::BucketType {
-    *self.split_ref().1
+    self.split_ref().1
   }
 
   fn api_bucket(self, name: &[u8]) -> Option<Self::BucketType> {
@@ -343,20 +343,42 @@ pub struct TxCell<'tx> {
 }
 
 impl<'tx> SplitRef<TxR<'tx>, BucketCell<'tx>, TxW<'tx>> for TxCell<'tx> {
-  fn split_ref(&self) -> (Ref<TxR<'tx>>, Ref<BucketCell<'tx>>, Option<Ref<TxW<'tx>>>) {
-    let (r, bucket) = Ref::map_split(self.cell.borrow(), |c| (&c.0, &c.1));
-    (r, bucket, None)
+  fn split_r(&self) -> Ref<TxR<'tx>> {
+    Ref::map(self.cell.borrow(), | c | &c.0)
   }
 
-  fn split_ref_mut(
-    &self,
-  ) -> (
-    RefMut<TxR<'tx>>,
-    RefMut<BucketCell<'tx>>,
-    Option<RefMut<TxW<'tx>>>,
-  ) {
+  fn split_r_ow(&self) -> (Ref<TxR<'tx>>, Option<Ref<TxW<'tx>>>) {
+    (Ref::map(self.cell.borrow(), | c | &c.0), None)
+  }
+
+  fn split_ow(&self) -> Option<Ref<TxW<'tx>>> {
+    None
+  }
+
+  fn split_b(&self) -> BucketCell<'tx> {
+    self.cell.borrow().1
+  }
+
+  fn split_ref(&self) -> (Ref<TxR<'tx>>, BucketCell<'tx>, Option<Ref<TxW<'tx>>>) {
+    let (r, bucket) = Ref::map_split(self.cell.borrow(), |c| (&c.0, &c.1));
+    (r, *bucket, None)
+  }
+
+  fn split_r_mut(&self) -> RefMut<TxR<'tx>> {
+    RefMut::map(self.cell.borrow_mut(), | c | &mut c.0)
+  }
+
+  fn split_r_ow_mut(&self) -> (RefMut<TxR<'tx>>, Option<RefMut<TxW<'tx>>>) {
+    (RefMut::map(self.cell.borrow_mut(), | c | &mut c.0), None)
+  }
+
+  fn split_ow_mut(&self) -> Option<RefMut<TxW<'tx>>> {
+    None
+  }
+
+  fn split_ref_mut(&self) -> (RefMut<TxR<'tx>>, BucketCell<'tx>, Option<RefMut<TxW<'tx>>>) {
     let (r, bucket) = RefMut::map_split(self.cell.borrow_mut(), |c| (&mut c.0, &mut c.1));
-    (r, bucket, None)
+    (r, *bucket, None)
   }
 }
 
@@ -378,22 +400,52 @@ pub struct TxRwCell<'tx> {
 }
 
 impl<'tx> SplitRef<TxR<'tx>, BucketRwCell<'tx>, TxW<'tx>> for TxRwCell<'tx> {
-  fn split_ref(&self) -> (Ref<TxR<'tx>>, Ref<BucketRwCell<'tx>>, Option<Ref<TxW<'tx>>>) {
+  fn split_r(&self) -> Ref<TxR<'tx>> {
+    Ref::map(self.cell.borrow(), |c| &c.0.r)
+  }
+
+  fn split_r_ow(&self) -> (Ref<TxR<'tx>>, Option<Ref<TxW<'tx>>>) {
+    let (r, w) = Ref::map_split(self.cell.borrow(), |b| (&b.0.r, &b.0.w));
+    (r, Some(w))
+  }
+
+  fn split_ow(&self) -> Option<Ref<TxW<'tx>>> {
+    Some(Ref::map(self.cell.borrow(), |c| &c.0.w))
+  }
+
+  fn split_b(&self) -> BucketRwCell<'tx> {
+    self.cell.borrow().1
+  }
+
+  fn split_ref(&self) -> (Ref<TxR<'tx>>, BucketRwCell<'tx>, Option<Ref<TxW<'tx>>>) {
     let (bucket, rw) = Ref::map_split(self.cell.borrow(), |c| (&c.1, &c.0));
     let (r, w) = Ref::map_split(rw, |b| (&b.r, &b.w));
-    (r, bucket, Some(w))
+    (r, *bucket, Some(w))
+  }
+
+  fn split_r_mut(&self) -> RefMut<TxR<'tx>> {
+    RefMut::map(self.cell.borrow_mut(), |c| &mut c.0.r)
+  }
+
+  fn split_r_ow_mut(&self) -> (RefMut<TxR<'tx>>, Option<RefMut<TxW<'tx>>>) {
+    let (r, w) = RefMut::map_split(self.cell.borrow_mut(), |b| (&mut b.0.r, &mut b.0.w));
+    (r, Some(w))
+  }
+
+  fn split_ow_mut(&self) -> Option<RefMut<TxW<'tx>>> {
+    Some(RefMut::map(self.cell.borrow_mut(), |c| &mut c.0.w))
   }
 
   fn split_ref_mut(
     &self,
   ) -> (
     RefMut<TxR<'tx>>,
-    RefMut<BucketRwCell<'tx>>,
+    BucketRwCell<'tx>,
     Option<RefMut<TxW<'tx>>>,
   ) {
     let (bucket, rw) = RefMut::map_split(self.cell.borrow_mut(), |c| (&mut c.1, &mut c.0));
     let (r, w) = RefMut::map_split(rw, |b| (&mut b.r, &mut b.w));
-    (r, bucket, Some(w))
+    (r, *bucket, Some(w))
   }
 }
 

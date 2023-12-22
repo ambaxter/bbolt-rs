@@ -1,5 +1,5 @@
 use crate::common::bucket::{InBucket, IN_BUCKET_SIZE};
-use crate::common::memory::{IsAligned, BCell};
+use crate::common::memory::{BCell, IsAligned};
 use crate::common::meta::MetaPage;
 use crate::common::page::{CoerciblePage, Page, RefPage, BUCKET_LEAF_FLAG, PAGE_HEADER_SIZE};
 use crate::common::tree::{
@@ -334,7 +334,6 @@ struct InlinePage {
   page: Page,
 }
 
-
 /// The internal Bucket API
 pub(crate) trait BucketIAPI<'tx, T: TxIAPI<'tx>>:
   SplitRef<BucketR<'tx>, Weak<T>, InnerBucketW<'tx, T, Self>>
@@ -606,7 +605,6 @@ pub(crate) trait BucketIAPI<'tx, T: TxIAPI<'tx>>:
           s.leaf_in_use += used as i64;
           s.leaf_overflow_n += leaf_page.overflow as i64;
 
-
           // Collect stats from sub-buckets.
           // Do that by iterating over all element headers
           // looking for the ones with the bucketLeafFlag.
@@ -770,26 +768,64 @@ impl<'tx> BucketIAPI<'tx, TxCell<'tx>> for BucketCell<'tx> {
 impl<'tx> SplitRef<BucketR<'tx>, Weak<TxCell<'tx>>, InnerBucketW<'tx, TxCell<'tx>, BucketCell<'tx>>>
   for BucketCell<'tx>
 {
+  fn split_r(&self) -> Ref<BucketR<'tx>> {
+    todo!()
+  }
+
+  fn split_r_ow(
+    &self,
+  ) -> (
+    Ref<BucketR<'tx>>,
+    Option<Ref<InnerBucketW<'tx, TxCell<'tx>, BucketCell<'tx>>>>,
+  ) {
+    todo!()
+  }
+
+  fn split_ow(&self) -> Option<Ref<InnerBucketW<'tx, TxCell<'tx>, BucketCell<'tx>>>> {
+    todo!()
+  }
+
+  fn split_b(&self) -> Weak<TxCell<'tx>> {
+    todo!()
+  }
+
   fn split_ref(
     &self,
   ) -> (
     Ref<BucketR<'tx>>,
-    Ref<Weak<TxCell<'tx>>>,
+    Weak<TxCell<'tx>>,
     Option<Ref<InnerBucketW<'tx, TxCell<'tx>, BucketCell<'tx>>>>,
   ) {
     let (r, tx) = Ref::map_split(self.cell.borrow(), |c| (&c.0, &c.1));
-    (r, tx, None)
+    (r, tx.clone(), None)
+  }
+
+  fn split_r_mut(&self) -> RefMut<BucketR<'tx>> {
+    todo!()
+  }
+
+  fn split_r_ow_mut(
+    &self,
+  ) -> (
+    RefMut<BucketR<'tx>>,
+    Option<RefMut<InnerBucketW<'tx, TxCell<'tx>, BucketCell<'tx>>>>,
+  ) {
+    todo!()
+  }
+
+  fn split_ow_mut(&self) -> Option<RefMut<InnerBucketW<'tx, TxCell<'tx>, BucketCell<'tx>>>> {
+    todo!()
   }
 
   fn split_ref_mut(
     &self,
   ) -> (
     RefMut<BucketR<'tx>>,
-    RefMut<Weak<TxCell<'tx>>>,
+    Weak<TxCell<'tx>>,
     Option<RefMut<InnerBucketW<'tx, TxCell<'tx>, BucketCell<'tx>>>>,
   ) {
     let (r, tx) = RefMut::map_split(self.cell.borrow_mut(), |c| (&mut c.0, &mut c.1));
-    (r, tx, None)
+    (r, tx.clone(), None)
   }
 }
 
@@ -799,28 +835,56 @@ pub struct BucketRwCell<'tx> {
 }
 
 impl<'tx> SplitRef<BucketR<'tx>, Weak<TxRwCell<'tx>>, BucketW<'tx>> for BucketRwCell<'tx> {
+  fn split_r(&self) -> Ref<BucketR<'tx>> {
+    todo!()
+  }
+
+  fn split_r_ow(&self) -> (Ref<BucketR<'tx>>, Option<Ref<BucketW<'tx>>>) {
+    todo!()
+  }
+
+  fn split_ow(&self) -> Option<Ref<BucketW<'tx>>> {
+    todo!()
+  }
+
+  fn split_b(&self) -> Weak<TxRwCell<'tx>> {
+    todo!()
+  }
+
   fn split_ref(
     &self,
   ) -> (
     Ref<BucketR<'tx>>,
-    Ref<Weak<TxRwCell<'tx>>>,
+    Weak<TxRwCell<'tx>>,
     Option<Ref<BucketW<'tx>>>,
   ) {
     let (tx, rw) = Ref::map_split(self.cell.borrow(), |c| (&c.1, &c.0));
     let (r, w) = Ref::map_split(rw, |b| (&b.r, &b.w));
-    (r, tx, Some(w))
+    (r, tx.clone(), Some(w))
+  }
+
+  fn split_r_mut(&self) -> RefMut<BucketR<'tx>> {
+    todo!()
+  }
+
+  fn split_r_ow_mut(&self) -> (RefMut<BucketR<'tx>>, Option<RefMut<BucketW<'tx>>>) {
+    todo!()
+  }
+
+  fn split_ow_mut(&self) -> Option<RefMut<BucketW<'tx>>> {
+    todo!()
   }
 
   fn split_ref_mut(
     &self,
   ) -> (
     RefMut<BucketR<'tx>>,
-    RefMut<Weak<TxRwCell<'tx>>>,
+    Weak<TxRwCell<'tx>>,
     Option<RefMut<BucketW<'tx>>>,
   ) {
     let (tx, rw) = RefMut::map_split(self.cell.borrow_mut(), |c| (&mut c.1, &mut c.0));
     let (r, w) = RefMut::map_split(rw, |b| (&mut b.r, &mut b.w));
-    (r, tx, Some(w))
+    (r, tx.clone(), Some(w))
   }
 }
 

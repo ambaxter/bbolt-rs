@@ -3,7 +3,7 @@ use crate::bucket::{
   MIN_FILL_PERCENT,
 };
 use crate::common::inode::INode;
-use crate::common::memory::{CodSlice, BCell};
+use crate::common::memory::{BCell, CodSlice};
 use crate::common::page::{CoerciblePage, MutPage, RefPage, MIN_KEYS_PER_PAGE, PAGE_HEADER_SIZE};
 use crate::common::tree::{
   MappedBranchPage, MappedLeafPage, TreePage, BRANCH_PAGE_ELEMENT_SIZE, LEAF_PAGE_ELEMENT_SIZE,
@@ -619,7 +619,7 @@ mod test {
     let tx = test_db.begin_mut();
     let txrw = tx.unseal();
     let root_bucket = txrw.root_bucket();
-    let n = root_bucket.materialize_root();;
+    let n = root_bucket.materialize_root();
     n.put(b"baz", b"baz", b"2", ZERO_PGID, 0);
     n.put(b"foo", b"foo", b"0", ZERO_PGID, 0);
     n.put(b"bar", b"bar", b"1", ZERO_PGID, 0);
@@ -664,7 +664,7 @@ mod test {
     let tx = test_db.begin_mut();
     let txrw = tx.unseal();
     let root_bucket = txrw.root_bucket();
-    let n = root_bucket.materialize_root();;
+    let n = root_bucket.materialize_root();
     n.put(b"00000001", b"00000001", b"0123456701234567", ZERO_PGID, 0);
     n.put(b"00000002", b"00000002", b"0123456701234567", ZERO_PGID, 0);
     n.put(b"00000003", b"00000003", b"0123456701234567", ZERO_PGID, 0);
@@ -684,7 +684,7 @@ mod test {
     let tx = test_db.begin_mut();
     let txrw = tx.unseal();
     let root_bucket = txrw.root_bucket();
-    let n = root_bucket.materialize_root();;
+    let n = root_bucket.materialize_root();
     n.put(b"00000001", b"00000001", b"0123456701234567", ZERO_PGID, 0);
     n.put(b"00000002", b"00000002", b"0123456701234567", ZERO_PGID, 0);
     let mut parent_children = BVec::new_in(txrw.bump());
@@ -699,7 +699,7 @@ mod test {
     let tx = test_db.begin_mut();
     let txrw = tx.unseal();
     let root_bucket = txrw.root_bucket();
-    let n = root_bucket.materialize_root();;
+    let n = root_bucket.materialize_root();
     n.put(b"00000001", b"00000001", b"0123456701234567", ZERO_PGID, 0);
     n.put(b"00000002", b"00000002", b"0123456701234567", ZERO_PGID, 0);
     n.put(b"00000003", b"00000003", b"0123456701234567", ZERO_PGID, 0);
