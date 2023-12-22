@@ -3,7 +3,7 @@ use crate::bucket::{
   MIN_FILL_PERCENT,
 };
 use crate::common::inode::INode;
-use crate::common::memory::{LCell, CodSlice};
+use crate::common::memory::{CodSlice, LCell};
 use crate::common::page::{CoerciblePage, MutPage, RefPage, MIN_KEYS_PER_PAGE, PAGE_HEADER_SIZE};
 use crate::common::tree::{
   MappedBranchPage, MappedLeafPage, TreePage, BRANCH_PAGE_ELEMENT_SIZE, LEAF_PAGE_ELEMENT_SIZE,
@@ -18,6 +18,7 @@ use std::marker::PhantomData;
 use std::mem;
 use std::ops::Deref;
 
+/// NodeW represents an in-memory, deserialized page.
 pub struct NodeW<'tx> {
   pub(crate) is_leaf: bool,
   pub(crate) key: CodSlice<'tx, u8>,
@@ -96,6 +97,7 @@ impl<'tx> NodeW<'tx> {
     }
   }
 
+  /// page_element_size returns the size of each page element based on the type of node.
   pub(crate) fn page_element_size(&self) -> usize {
     if self.is_leaf {
       LEAF_PAGE_ELEMENT_SIZE
@@ -104,6 +106,7 @@ impl<'tx> NodeW<'tx> {
     }
   }
 
+  /// min_keys returns the minimum number of inodes this node should have.
   pub(crate) fn min_keys(&self) -> usize {
     if self.is_leaf {
       1
@@ -117,6 +120,7 @@ impl<'tx> NodeW<'tx> {
     unsafe { std::mem::transmute(self.key.deref()) }
   }
 
+  /// size returns the size of the node after serialization.
   pub(crate) fn size(&self) -> usize {
     let mut size = PAGE_HEADER_SIZE;
     let elem_size = self.page_element_size();
@@ -126,6 +130,9 @@ impl<'tx> NodeW<'tx> {
     size
   }
 
+  /// size_less_than returns true if the node is less than a given size.
+  /// This is an optimization to avoid calculating a large node when we only need
+  /// to know if it fits inside a certain page size.
   pub(crate) fn size_less_than(&self, v: usize) -> bool {
     let mut size = PAGE_HEADER_SIZE;
     let elem_size = self.page_element_size();
@@ -138,12 +145,17 @@ impl<'tx> NodeW<'tx> {
     true
   }
 
+  /// splitIndex finds the position where a page will fill a given threshold.
+  /// It returns the index as well as the size of the first page.
+  /// This is only be called from split().
   pub(crate) fn split_index(&self, threshold: usize) -> (usize, usize) {
     let mut size = PAGE_HEADER_SIZE;
     let mut index = 0;
     if self.inodes.len() <= MIN_KEYS_PER_PAGE {
       return (index, size);
     }
+
+    // Loop until we only have the minimum number of keys required for the second page.
     for (idx, inode) in self
       .inodes
       .split_at(self.inodes.len() - MIN_KEYS_PER_PAGE)
@@ -153,9 +165,14 @@ impl<'tx> NodeW<'tx> {
     {
       index = idx;
       let elsize = self.page_element_size() + inode.key().len() + inode.value().len();
+
+      // If we have at least the minimum number of keys and adding another
+      // node would put us over the threshold then exit and return.
       if index >= MIN_KEYS_PER_PAGE && size + elsize > threshold {
         break;
       }
+
+      // Add the element size to the total size.
       size += elsize;
     }
     (index, size)
@@ -172,6 +189,7 @@ impl<'tx> NodeW<'tx> {
     }
   }
 
+  /// del removes a key from the node.
   fn del(&mut self, key: &'tx [u8]) {
     if let Ok(index) = self.inodes.binary_search_by(|probe| probe.key().cmp(key)) {
       self.inodes.remove(index);
@@ -179,6 +197,8 @@ impl<'tx> NodeW<'tx> {
     }
   }
 
+  /// removes a node from the list of in-memory children.
+  /// This does not affect the inodes.
   fn remove_child(&mut self, target: NodeRwCell<'tx>) {
     if let Some(pos) = self.children.iter().position(|n| *n == target) {
       self.children.remove(pos);
@@ -217,6 +237,7 @@ impl<'tx> NodeRwCell<'tx> {
     }
   }
 
+  /// root returns the top-level node this node is attached to.
   pub(crate) fn root(self: NodeRwCell<'tx>) -> NodeRwCell<'tx> {
     let parent = self.cell.borrow().parent;
     match parent {
@@ -225,6 +246,7 @@ impl<'tx> NodeRwCell<'tx> {
     }
   }
 
+  /// childAt returns the child node at a given index.
   pub(crate) fn child_at(self: NodeRwCell<'tx>, index: u32) -> NodeRwCell<'tx> {
     let (bucket, pgid) = {
       let self_borrow = self.cell.borrow();
@@ -239,6 +261,7 @@ impl<'tx> NodeRwCell<'tx> {
     bucket.node(pgid, Some(self))
   }
 
+  /// childIndex returns the index of a given child node.
   pub(crate) fn child_index(self: NodeRwCell<'tx>, child: NodeRwCell<'tx>) -> usize {
     let child_key = child.cell.borrow().key;
     let result = {
@@ -250,10 +273,12 @@ impl<'tx> NodeRwCell<'tx> {
     result.unwrap_or_else(|next_closest| next_closest)
   }
 
+  /// num_children returns the number of children.
   pub(crate) fn num_children(self: NodeRwCell<'tx>) -> usize {
     self.cell.borrow().inodes.len()
   }
 
+  /// next_sibling returns the next node with the same parent.
   pub(crate) fn next_sibling(self: NodeRwCell<'tx>) -> Option<NodeRwCell<'tx>> {
     let parent = self.cell.borrow().parent;
     if let Some(parent_node) = parent {
@@ -266,6 +291,7 @@ impl<'tx> NodeRwCell<'tx> {
     None
   }
 
+  /// prev_sibling returns the previous node with the same parent.
   pub(crate) fn prev_sibling(self: NodeRwCell<'tx>) -> Option<NodeRwCell<'tx>> {
     let parent = self.cell.borrow().parent;
     if let Some(parent_node) = parent {
@@ -278,6 +304,7 @@ impl<'tx> NodeRwCell<'tx> {
     None
   }
 
+  /// put inserts a key/value.
   pub(crate) fn put(
     self: NodeRwCell<'tx>, old_key: &'tx [u8], new_key: &'tx [u8], value: &'tx [u8], pgid: PgId,
     flags: u32,
@@ -294,6 +321,8 @@ impl<'tx> NodeRwCell<'tx> {
     } else if new_key.is_empty() {
       panic!("put: zero-length new key");
     }
+
+    // Find insertion index.
     let index = self_borrow
       .inodes
       .binary_search_by(|probe| probe.key().cmp(old_key));
@@ -307,23 +336,34 @@ impl<'tx> NodeRwCell<'tx> {
     if new_node.key().is_empty() {
       panic!("put: zero-length new key");
     }
+
+    // Add capacity and shift nodes if we don't have an exact match and need to insert.
     match index {
       Ok(exact) => *self_borrow.inodes.get_mut(exact).unwrap() = new_node,
       Err(closest) => self_borrow.inodes.insert(closest, new_node),
     }
   }
 
+  /// del removes a key from the node.
   pub(crate) fn del(self: NodeRwCell<'tx>, key: &[u8]) {
     let mut self_borrow = self.cell.borrow_mut();
+    // Find index of key.
     let index = self_borrow
       .inodes
       .binary_search_by(|probe| probe.key().cmp(key));
-    if let Ok(exact) = index {
-      self_borrow.inodes.remove(exact);
-    }
+    match index {
+      // Delete inode from the node.
+      Ok(exact) => self_borrow.inodes.remove(exact),
+      // Exit if the key isn't found.
+      Err(_) => return,
+    };
+    // Mark the node as needing rebalancing.
     self_borrow.is_unbalanced = true;
   }
 
+  /// write writes the items onto one or more pages.
+  /// The page should have p.id (might be 0 for meta or bucket-inline page) and p.overflow set
+  /// and the rest should be zeroed.
   pub(crate) fn write(self: NodeRwCell<'tx>, page: &mut MutPage<'tx>) {
     // TODO: use INode.write_inodes
     let self_borrow = self.cell.borrow();
@@ -336,6 +376,8 @@ impl<'tx> NodeRwCell<'tx> {
     }
   }
 
+  /// split breaks up a node into multiple smaller nodes, if appropriate.
+  /// This should only be called from the spill() function.
   pub(crate) fn split(
     self: NodeRwCell<'tx>, page_size: usize, bump: &'tx Bump,
     parent_children: &mut BVec<NodeRwCell<'tx>>,
@@ -343,27 +385,42 @@ impl<'tx> NodeRwCell<'tx> {
     let mut nodes = { BVec::new_in(bump) };
     let mut node = self;
     loop {
+      // Split node into two.
       let (a, b) = node.split_two(page_size, parent_children);
       nodes.push(a);
+      // If we can't split then exit the loop.
       if b.is_none() {
         break;
       }
+
+      // Set node to b so it gets split on the next iteration.
       node = b.unwrap();
     }
     nodes
   }
 
+  /// splitTwo breaks up a node into two smaller nodes, if appropriate.
+  /// This should only be called from the split() function.
   pub(crate) fn split_two(
     self: NodeRwCell<'tx>, page_size: usize, parent_children: &mut BVec<NodeRwCell<'tx>>,
   ) -> (NodeRwCell<'tx>, Option<NodeRwCell<'tx>>) {
     let mut self_borrow = self.cell.borrow_mut();
+    // Ignore the split if the page doesn't have at least enough nodes for
+    // two pages or if the nodes can fit in a single page.
     if self_borrow.inodes.len() <= MIN_KEYS_PER_PAGE * 2 || self_borrow.size_less_than(page_size) {
       return (self, None);
     }
+
+    // Determine the threshold before starting a new node.
     let mut fill_percent = self_borrow.bucket.split_ref().2.unwrap().fill_percent;
     fill_percent = fill_percent.max(MIN_FILL_PERCENT).min(MAX_FILL_PERCENT);
     let threshold = (page_size as f64 * fill_percent) as usize;
+
+    // Determine split position and sizes of the two pages.
     let (split_index, _) = self_borrow.split_index(threshold);
+
+    // Split node into two separate nodes.
+    // If there's no parent then we'll need to create one.
     let parent = {
       if let Some(parent) = self_borrow.parent {
         parent
@@ -375,14 +432,23 @@ impl<'tx> NodeRwCell<'tx> {
       }
     };
 
+    // Create a new node and add it to the parent.
     let next = NodeRwCell::new_child_in(self_borrow.bucket, self_borrow.is_leaf, parent);
     parent_children.push(next);
 
     let mut next_borrow = next.cell.borrow_mut();
+    // Split inodes across two nodes.
     next_borrow.inodes = self_borrow.inodes.split_off(split_index);
+
+    // Update the statistics
+    self_borrow.bucket.api_tx().mut_stats().split += 1;
+
     (self, Some(next))
   }
 
+  /// spill_child writes the nodes to dirty pages and splits nodes as it goes.
+  /// Returns an error if dirty pages cannot be allocated.
+  /// The top-most spill function acts as if it is a parent
   pub(crate) fn spill_child(
     self: NodeRwCell<'tx>, parent_children: &mut BVec<NodeRwCell<'tx>>,
   ) -> crate::Result<()> {
@@ -391,32 +457,39 @@ impl<'tx> NodeRwCell<'tx> {
       if self_borrow.is_spilled {
         return Ok(());
       }
+
+      // We no longer need the child list because it's only used for spill tracking.
       let mut child_swap = BVec::with_capacity_in(0, self_borrow.bucket.api_tx().bump());
       mem::swap(&mut self_borrow.children, &mut child_swap);
       (self_borrow.bucket.api_tx(), child_swap)
     };
 
+    // Spill child nodes first. Child nodes can materialize sibling nodes in
+    // the case of split-merge so we cannot use a range loop. We have to check
+    // the children size on every loop iteration.
     children.sort_by_key(|probe| probe.cell.borrow().inodes[0].key());
     let mut i: usize = 0;
-    loop {
-      if i < children.len() {
-        children[i].spill_child(&mut children)?;
-        i += 1;
-      } else {
-        break;
-      }
+    while i < children.len() {
+      children[i].spill_child(&mut children)?;
+      i += 1;
     }
     let bump = tx.bump();
     let page_size = tx.page_size();
 
+    // Split nodes into appropriate sizes. The first node will always be n.
     let nodes = self.split(page_size, bump, parent_children);
     for node in nodes {
       let mut node_borrow = node.cell.borrow_mut();
+      // Add node's page to the freelist if it's not new.
       if node_borrow.pgid > ZERO_PGID {
         tx.freelist().free(tx.api_id(), &tx.page(node_borrow.pgid));
         node_borrow.pgid = ZERO_PGID;
       }
+
+      // Allocate contiguous space for the node.
       let mut p = tx.allocate((node_borrow.size() + tx.page_size() - 1) / tx.page_size())?;
+
+      // Write the node.
       if p.id >= tx.meta().pgid() {
         panic!("pgid {} above high water mark {}", p.id, tx.meta().pgid())
       }
@@ -424,6 +497,8 @@ impl<'tx> NodeRwCell<'tx> {
       node_borrow.pgid = p.id;
       node_borrow.write(&mut p);
       node_borrow.is_spilled = true;
+
+      // Insert into parent inodes.
       if let Some(parent) = node_borrow.parent {
         let key: &'tx [u8] = {
           if node_borrow.key.len() == 0 {
@@ -436,6 +511,8 @@ impl<'tx> NodeRwCell<'tx> {
         node_borrow.key = node_borrow.inodes[0].cod_key();
       }
     }
+
+    tx.mut_stats().spill += 1;
     Ok(())
   }
 
@@ -575,17 +652,25 @@ impl<'tx> NodeRwCell<'tx> {
 
   // Descending the tree shouldn't create runtime issues
   // We bend the rules here!
+  /// own_in causes the node to copy all its inode key/value references to heap memory.
+  /// This is required when the mmap is reallocated so inodes are not pointing to stale data.
   pub(crate) fn own_in(self: NodeRwCell<'tx>, bump: &'tx Bump) {
     let mut self_borrow = self.cell.borrow_mut();
     self_borrow.key.own_in(bump);
     for inode in &mut self_borrow.inodes {
       inode.own_in(bump);
     }
+
+    // Recursively own_in children.
     for child in &self_borrow.children {
       child.own_in(bump);
     }
+
+    // Update statistics.
+    self.cell.borrow().bucket.api_tx().mut_stats().node_deref += 1;
   }
 
+  /// free adds the node's underlying page to the freelist.
   pub(crate) fn free(self: NodeRwCell<'tx>) {
     let (pgid, api_tx) = {
       let self_borrow = self.cell.borrow();

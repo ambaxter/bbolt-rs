@@ -73,11 +73,11 @@ impl<'a, T, B> Deref for BCell<'a, T, B> {
 }
 
 impl<'a, T, B> PartialEq for BCell<'a, T, B>
-  where
-    T: PartialEq,
+where
+  T: PartialEq,
 {
   fn eq(&self, other: &Self) -> bool {
-    self.0.0 == other.0.0
+    self.0 .0 == other.0 .0
   }
 }
 

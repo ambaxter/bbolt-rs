@@ -176,7 +176,6 @@ impl Sub<TxStats> for TxStats {
   }
 }
 
-//TODO: now that the layout has been filled out these aren't needed anymore I don't think
 pub(crate) trait TxIAPI<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
   type BucketType: BucketIAPI<'tx, Self>;
 
@@ -224,6 +223,13 @@ pub(crate) trait TxIAPI<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
   /// See [TxApi::stats]
   fn api_stats(self) -> TxStats {
     self.split_r().stats
+  }
+
+  fn mut_stats<'a>(&'a self) -> RefMut<'a, TxStats>
+  where
+    'tx: 'a,
+  {
+    RefMut::map(self.split_r_mut(), |r| &mut r.stats)
   }
 
   fn root_bucket(self) -> Self::BucketType {

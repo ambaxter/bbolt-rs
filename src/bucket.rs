@@ -1,5 +1,5 @@
 use crate::common::bucket::{InBucket, IN_BUCKET_SIZE};
-use crate::common::memory::{LCell, IsAligned, BCell};
+use crate::common::memory::{BCell, IsAligned, LCell};
 use crate::common::meta::MetaPage;
 use crate::common::page::{CoerciblePage, Page, RefPage, BUCKET_LEAF_FLAG, PAGE_HEADER_SIZE};
 use crate::common::tree::{
@@ -843,7 +843,7 @@ pub struct BucketRwCell<'tx> {
 
 impl<'tx> SplitRef<BucketR<'tx>, Weak<TxRwCell<'tx>>, BucketW<'tx>> for BucketRwCell<'tx> {
   fn split_r(&self) -> Ref<BucketR<'tx>> {
-    Ref::map(self.cell.0.borrow(), |b | &b.r)
+    Ref::map(self.cell.0.borrow(), |b| &b.r)
   }
 
   fn split_r_ow(&self) -> (Ref<BucketR<'tx>>, Option<Ref<BucketW<'tx>>>) {
