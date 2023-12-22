@@ -27,6 +27,7 @@ pub type HashMap<'tx, K, V> = hashbrown::HashMap<K, V, DefaultHashBuilder, &'tx 
 
 pub type HashSet<'tx, K> = hashbrown::HashSet<K, DefaultHashBuilder, &'tx Bump>;
 
+// TODO: Bound does not need to be protected by Refcell
 pub(crate) trait SplitRef<R, B, W>: Copy + Clone {
   /// Access the read section of the struct
   fn split_r(&self) -> cell::Ref<R>;

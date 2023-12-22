@@ -10,24 +10,24 @@ use std::slice::{from_raw_parts, from_raw_parts_mut};
 use std::{fmt, mem};
 
 /// A borrowed cell backed by `RefCell`
-pub struct BCell<'a, T: ?Sized>(&'a RefCell<T>);
+pub struct LCell<'a, T: ?Sized>(&'a RefCell<T>);
 
-impl<'a, T> Clone for BCell<'a, T> {
+impl<'a, T> Clone for LCell<'a, T> {
   fn clone(&self) -> Self {
     *self
   }
 }
 
-impl<'a, T> Copy for BCell<'a, T> {}
+impl<'a, T> Copy for LCell<'a, T> {}
 
-impl<'a, T> BCell<'a, T> {
+impl<'a, T> LCell<'a, T> {
   /// Allocates a BCell in a Bumpalo arena
-  pub fn new_in(x: T, a: &'a Bump) -> BCell<'a, T> {
-    BCell(a.alloc(RefCell::new(x)))
+  pub fn new_in(x: T, a: &'a Bump) -> LCell<'a, T> {
+    LCell(a.alloc(RefCell::new(x)))
   }
 }
 
-impl<'a, T> Deref for BCell<'a, T> {
+impl<'a, T> Deref for LCell<'a, T> {
   type Target = RefCell<T>;
 
   fn deref(&self) -> &Self::Target {
@@ -35,7 +35,7 @@ impl<'a, T> Deref for BCell<'a, T> {
   }
 }
 
-impl<'a, T> PartialEq for BCell<'a, T>
+impl<'a, T> PartialEq for LCell<'a, T>
 where
   T: PartialEq,
 {
@@ -44,7 +44,44 @@ where
   }
 }
 
-impl<'a, T> Eq for BCell<'a, T> where T: Eq {}
+impl<'a, T> Eq for LCell<'a, T> where T: Eq {}
+
+/// A borrowed cell backed by `RefCell` with a bound value
+pub struct BCell<'a, T: Sized, B: Sized>(&'a (RefCell<T>, B));
+
+impl<'a, T, B> Clone for BCell<'a, T, B> {
+  fn clone(&self) -> Self {
+    *self
+  }
+}
+
+impl<'a, T, B> Copy for BCell<'a, T, B> {}
+
+impl<'a, T, B> BCell<'a, T, B> {
+  /// Allocates a BCell in a Bumpalo arena
+  pub fn new_in(t: T, b: B, a: &'a Bump) -> BCell<'a, T, B> {
+    BCell(a.alloc((RefCell::new(t), b)))
+  }
+}
+
+impl<'a, T, B> Deref for BCell<'a, T, B> {
+  type Target = (RefCell<T>, B);
+
+  fn deref(&self) -> &Self::Target {
+    self.0
+  }
+}
+
+impl<'a, T, B> PartialEq for BCell<'a, T, B>
+  where
+    T: PartialEq,
+{
+  fn eq(&self, other: &Self) -> bool {
+    self.0.0 == other.0.0
+  }
+}
+
+impl<'a, T, B> Eq for BCell<'a, T, B> where T: Eq {}
 
 /// Copy on Demand handling the case where we need to either point to a memory mapped slice or an Bump owned slice.
 #[derive(Copy, Clone)]

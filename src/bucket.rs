@@ -1,5 +1,5 @@
 use crate::common::bucket::{InBucket, IN_BUCKET_SIZE};
-use crate::common::memory::{BCell, IsAligned};
+use crate::common::memory::{LCell, IsAligned};
 use crate::common::meta::MetaPage;
 use crate::common::page::{CoerciblePage, Page, RefPage, BUCKET_LEAF_FLAG, PAGE_HEADER_SIZE};
 use crate::common::tree::{
@@ -727,7 +727,7 @@ impl<'tx> BucketRW<'tx> {
 
 #[derive(Copy, Clone)]
 pub struct BucketCell<'tx> {
-  cell: BCell<'tx, (BucketR<'tx>, Weak<TxCell<'tx>>)>,
+  cell: LCell<'tx, (BucketR<'tx>, Weak<TxCell<'tx>>)>,
 }
 
 impl<'tx> BucketIAPI<'tx, TxCell<'tx>> for BucketCell<'tx> {
@@ -742,7 +742,7 @@ impl<'tx> BucketIAPI<'tx, TxCell<'tx>> for BucketCell<'tx> {
     };
 
     BucketCell {
-      cell: BCell::new_in((r, tx), bump),
+      cell: LCell::new_in((r, tx), bump),
     }
   }
 
@@ -827,7 +827,7 @@ impl<'tx> SplitRef<BucketR<'tx>, Weak<TxCell<'tx>>, InnerBucketW<'tx, TxCell<'tx
 
 #[derive(Copy, Clone)]
 pub struct BucketRwCell<'tx> {
-  cell: BCell<'tx, (BucketRW<'tx>, Weak<TxRwCell<'tx>>)>,
+  cell: LCell<'tx, (BucketRW<'tx>, Weak<TxRwCell<'tx>>)>,
 }
 
 impl<'tx> SplitRef<BucketR<'tx>, Weak<TxRwCell<'tx>>, BucketW<'tx>> for BucketRwCell<'tx> {
@@ -900,7 +900,7 @@ impl<'tx> BucketIAPI<'tx, TxRwCell<'tx>> for BucketRwCell<'tx> {
     let w = BucketW::new_in(bump);
 
     BucketRwCell {
-      cell: BCell::new_in((BucketRW { r, w }, tx), bump),
+      cell: LCell::new_in((BucketRW { r, w }, tx), bump),
     }
   }
 
