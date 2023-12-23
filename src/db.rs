@@ -472,7 +472,7 @@ pub struct DBShared {
 
 impl DBShared {
   fn allocate<'tx>(
-    &mut self, tx_id: TxId, count: u64,
+    &self, tx_id: TxId, count: u64,
   ) -> crate::Result<SelfOwned<AlignedBytes<alignment::Page>, MutPage<'tx>>> {
     let mut r = self.records.lock();
     let bytes = if count == 1 && !r.page_pool.is_empty() {
@@ -530,13 +530,17 @@ impl DBShared {
   }
 }
 
-pub(crate) trait Pager {
+pub(crate) trait DbLock {
   fn page(&self, pg_id: PgId) -> RefPage;
 
   fn page_is_free(&self, pg_id: PgId) -> bool;
+
+  fn freelist_free_page(&self, txid: TxId, p: &Page);
+
+  fn allocate(&self, tx_id: TxId, count: u64) -> crate::Result<SelfOwned<AlignedBytes<alignment::Page>, MutPage>>;
 }
 
-impl<'tx> Pager for RwLockReadGuard<'tx, DBShared> {
+impl<'tx> DbLock for RwLockReadGuard<'tx, DBShared> {
   fn page(&self, pg_id: PgId) -> RefPage {
     self.backend.page(pg_id)
   }
@@ -544,15 +548,31 @@ impl<'tx> Pager for RwLockReadGuard<'tx, DBShared> {
   fn page_is_free(&self, pg_id: PgId) -> bool {
     self.records.lock().freelist.freed(pg_id)
   }
+
+  fn freelist_free_page(&self, txid: TxId, p: &Page) {
+    self.records.lock().freelist.free(txid, p)
+  }
+
+  fn allocate(&self, tx_id: TxId, count: u64) -> crate::Result<SelfOwned<AlignedBytes<alignment::Page>, MutPage>> {
+    DBShared::allocate(self, tx_id, count)
+  }
 }
 
-impl<'tx> Pager for RwLockWriteGuard<'tx, DBShared> {
+impl<'tx> DbLock for RwLockWriteGuard<'tx, DBShared> {
   fn page(&self, pg_id: PgId) -> RefPage {
     self.backend.page(pg_id)
   }
 
   fn page_is_free(&self, pg_id: PgId) -> bool {
     self.records.lock().freelist.freed(pg_id)
+  }
+
+  fn freelist_free_page(&self, txid: TxId, p: &Page) {
+    self.records.lock().freelist.free(txid, p)
+  }
+
+  fn allocate(&self, tx_id: TxId, count: u64) -> crate::Result<SelfOwned<AlignedBytes<alignment::Page>, MutPage>> {
+    DBShared::allocate(self, tx_id, count)
   }
 }
 
@@ -722,232 +742,232 @@ impl DbRwAPI for DB {
 mod test {
 
   #[test]
-  fn TestOpen() {
+  fn test_open() {
     todo!()
   }
 
   #[test]
-  fn TestOpen_MultipleGoroutines() {
+  fn test_open_multiple_goroutines() {
     todo!()
   }
 
   #[test]
-  fn TestOpen_ErrPathRequired() {
+  fn test_open_err_path_required() {
     todo!()
   }
 
   #[test]
-  fn TestOpen_ErrNotExists() {
+  fn test_open_err_not_exists() {
     todo!()
   }
 
   #[test]
-  fn TestOpen_ErrInvalid() {
+  fn test_open_err_invalid() {
     todo!()
   }
 
   #[test]
-  fn TestOpen_ErrVersionMismatch() {
+  fn test_open_err_version_mismatch() {
     todo!()
   }
 
   #[test]
-  fn TestOpen_ErrChecksum() {
+  fn test_open_err_checksum() {
     todo!()
   }
 
   #[test]
-  fn TestOpen_ReadPageSize_FromMeta1_OS() {
+  fn test_open_read_page_size_from_meta1_os() {
     todo!()
   }
 
   #[test]
-  fn TestOpen_ReadPageSize_FromMeta1_Given() {
+  fn test_open_read_page_size_from_meta1_given() {
     todo!()
   }
 
   #[test]
-  fn TestOpen_Size() {
+  fn test_open_size() {
     todo!()
   }
 
   #[test]
-  fn TestOpen_Size_Large() {
+  fn test_open_size_large() {
     todo!()
   }
 
   #[test]
-  fn TestOpen_Check() {
+  fn test_open_check() {
     todo!()
   }
 
   #[test]
-  fn TestOpen_MetaInitWriteError() {
+  fn test_open_meta_init_write_error() {
     todo!()
   }
 
   #[test]
-  fn TestOpen_FileTooSmall() {
+  fn test_open_file_too_small() {
     todo!()
   }
 
   #[test]
-  fn TestDB_Open_InitialMmapSize() {
+  fn test_db_open_initial_mmap_size() {
     todo!()
   }
 
   #[test]
-  fn TestDB_Open_ReadOnly() {
+  fn test_db_open_read_only() {
     todo!()
   }
 
   #[test]
-  fn TestOpen_BigPage() {
+  fn test_open_big_page() {
     todo!()
   }
 
   #[test]
-  fn TestOpen_RecoverFreeList() {
+  fn test_open_recover_free_list() {
     todo!()
   }
 
   #[test]
-  fn TestDB_Begin_ErrDatabaseNotOpen() {
+  fn test_db_begin_err_database_not_open() {
     todo!()
   }
 
   #[test]
-  fn TestDB_BeginRW() {
+  fn test_db_begin_rw() {
     todo!()
   }
 
   #[test]
-  fn TestDB_Concurrent_WriteTo() {
+  fn test_db_concurrent_write_to() {
     todo!()
   }
 
   #[test]
-  fn TestDB_BeginRW_Closed() {
+  fn test_db_begin_rw_closed() {
     todo!()
   }
 
   #[test]
-  fn TestDB_Close_PendingTx_RW() {
+  fn test_db_close_pending_tx_rw() {
     todo!()
   }
 
   #[test]
-  fn TestDB_Close_PendingTx_RO() {
+  fn test_db_close_pending_tx_ro() {
     todo!()
   }
 
   #[test]
-  fn TestDB_Update() {
+  fn test_db_update() {
     todo!()
   }
 
   #[test]
-  fn TestDB_Update_Closed() {
+  fn test_db_update_closed() {
     todo!()
   }
 
   #[test]
-  fn TestDB_Update_ManualCommit() {
+  fn test_db_update_manual_commit() {
     todo!()
   }
 
   #[test]
-  fn TestDB_Update_ManualRollback() {
+  fn test_db_update_manual_rollback() {
     todo!()
   }
 
   #[test]
-  fn TestDB_View_ManualCommit() {
+  fn test_db_view_manual_commit() {
     todo!()
   }
 
   #[test]
-  fn TestDB_Update_Panic() {
+  fn test_db_update_panic() {
     todo!()
   }
 
   #[test]
-  fn TestDB_View_Error() {
+  fn test_db_view_error() {
     todo!()
   }
 
   #[test]
-  fn TestDB_View_Panic() {
+  fn test_db_view_panic() {
     todo!()
   }
 
   #[test]
-  fn TestDB_Stats() {
+  fn test_db_stats() {
     todo!()
   }
 
   #[test]
-  fn TestDB_Consistency() {
+  fn test_db_consistency() {
     todo!()
   }
 
   #[test]
-  fn TestDBStats_Sub() {
+  fn test_dbstats_sub() {
     todo!()
   }
 
   #[test]
-  fn TestDB_Batch() {
+  fn test_db_batch() {
     todo!()
   }
 
   #[test]
-  fn TestDB_Batch_Panic() {
+  fn test_db_batch_panic() {
     todo!()
   }
 
   #[test]
-  fn TestDB_BatchFull() {
+  fn test_db_batch_full() {
     todo!()
   }
 
   #[test]
-  fn TestDB_BatchTime() {
+  fn test_db_batch_time() {
     todo!()
   }
 
   #[test]
-  fn TestDBUnmap() {
+  fn test_dbunmap() {
     todo!()
   }
 
   #[test]
-  fn ExampleDB_Update() {
+  fn example_db_update() {
     todo!()
   }
 
   #[test]
-  fn ExampleDB_View() {
+  fn example_db_view() {
     todo!()
   }
 
   #[test]
-  fn ExampleDB_Begin() {
+  fn example_db_begin() {
     todo!()
   }
 
   #[test]
-  fn BenchmarkDBBatchAutomatic() {
+  fn benchmark_dbbatch_automatic() {
     todo!()
   }
 
   #[test]
-  fn BenchmarkDBBatchSingle() {
+  fn benchmark_dbbatch_single() {
     todo!()
   }
 
   #[test]
-  fn BenchmarkDBBatchManual10x100() {
+  fn benchmark_dbbatch_manual10x100() {
     todo!()
   }
 }

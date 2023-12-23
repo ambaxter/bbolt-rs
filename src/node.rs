@@ -361,6 +361,10 @@ impl<'tx> NodeRwCell<'tx> {
     self_borrow.is_unbalanced = true;
   }
 
+  pub(crate) fn size(self: NodeRwCell<'tx>) -> usize {
+    self.cell.borrow().size()
+  }
+
   /// write writes the items onto one or more pages.
   /// The page should have p.id (might be 0 for meta or bucket-inline page) and p.overflow set
   /// and the rest should be zeroed.
@@ -482,7 +486,7 @@ impl<'tx> NodeRwCell<'tx> {
       let mut node_borrow = node.cell.borrow_mut();
       // Add node's page to the freelist if it's not new.
       if node_borrow.pgid > ZERO_PGID {
-        tx.freelist().free(tx.api_id(), &tx.page(node_borrow.pgid));
+        tx.freelist_free_page(tx.api_id(), &tx.page(node_borrow.pgid));
         node_borrow.pgid = ZERO_PGID;
       }
 
@@ -681,7 +685,7 @@ impl<'tx> NodeRwCell<'tx> {
     };
     let page = api_tx.page(pgid);
     let txid = api_tx.meta().txid();
-    api_tx.freelist().free(txid, &page);
+    api_tx.freelist_free_page(txid, &page);
   }
 }
 

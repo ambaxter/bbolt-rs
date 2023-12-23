@@ -1,7 +1,9 @@
 use crate::common::bucket::{InBucket, IN_BUCKET_SIZE};
 use crate::common::memory::{BCell, IsAligned, LCell};
 use crate::common::meta::MetaPage;
-use crate::common::page::{CoerciblePage, Page, RefPage, BUCKET_LEAF_FLAG, PAGE_HEADER_SIZE};
+use crate::common::page::{
+  CoerciblePage, MutPage, Page, RefPage, BUCKET_LEAF_FLAG, PAGE_HEADER_SIZE,
+};
 use crate::common::tree::{
   MappedBranchPage, MappedLeafPage, TreePage, BRANCH_PAGE_ELEMENT_SIZE, LEAF_PAGE_ELEMENT_SIZE,
 };
@@ -16,6 +18,7 @@ use crate::Error::{
   ValueTooLarge,
 };
 use crate::{CursorRwApi, Error, TxRwApi};
+use aligners::{alignment, AlignedBytes};
 use bumpalo::Bump;
 use bytemuck::{Pod, Zeroable};
 use either::Either;
@@ -27,6 +30,7 @@ use std::mem;
 use std::ops::{AddAssign, Deref, DerefMut};
 use std::ptr::slice_from_raw_parts_mut;
 use std::rc::{Rc, Weak};
+use std::slice::from_raw_parts;
 
 pub trait BucketApi<'tx>
 where
@@ -675,6 +679,8 @@ pub(crate) trait BucketRwIAPI<'tx>: BucketIAPI<'tx, TxRwCell<'tx>> {
   /// spill writes all the nodes for this bucket to dirty pages.
   fn spill(self, bump: &'tx Bump) -> crate::Result<()>;
 
+  fn write(self, bump: &'tx Bump) -> &'tx [u8];
+
   /// inlineable returns true if a bucket is small enough to be written inline
   /// and if it contains no subbuckets. Otherwise returns false.
   fn inlineable(self) -> bool;
@@ -684,6 +690,9 @@ pub(crate) trait BucketRwIAPI<'tx>: BucketIAPI<'tx, TxRwCell<'tx>> {
 
   /// node creates a node from a page and associates it with a given parent.
   fn node(self, pgid: PgId, parent: Option<NodeRwCell<'tx>>) -> NodeRwCell<'tx>;
+
+  /// rebalance attempts to balance all nodes.
+  fn rebalance(self);
 }
 
 pub struct BucketR<'tx> {
@@ -1087,7 +1096,7 @@ impl<'tx> BucketRwIAPI<'tx> for BucketRwCell<'tx> {
     let txid = self.api_tx().meta().txid();
 
     self.for_each_page_node(|pn, depth| match pn {
-      Either::Left(page) => self.api_tx().freelist().free(txid, page),
+      Either::Left(page) => self.api_tx().freelist_free_page(txid, page),
       Either::Right(node) => node.free(),
     });
   }
@@ -1102,15 +1111,76 @@ impl<'tx> BucketRwIAPI<'tx> for BucketRwCell<'tx> {
       let mut v = BVec::with_capacity_in(w.buckets.len(), bump);
       // v.extend() would be more idiomatic, but I'm too tired atm to figure out why
       // it's not working
-      w.buckets.iter().for_each(|(k, b)| {
-        v.push((*k, *b));
-      });
+      for (name, child) in &w.buckets {
+        v.push((*name, *child));
+      }
       v
     };
 
-    for (name, child) in v.into_iter() {}
+    for (name, child) in v.into_iter() {
+      let value = if child.inlineable() {
+        child.free();
+        child.write(bump)
+      } else {
+        child.spill(bump)?;
+        let layout = Layout::from_size_align(IN_BUCKET_SIZE, INLINE_PAGE_ALIGNMENT).unwrap();
+        let inline_bucket_ptr = bump.alloc_layout(layout).as_ptr();
+        unsafe {
+          let inline_bucket = &mut (*(inline_bucket_ptr as *mut InBucket));
+          *inline_bucket = child.split_r().bucket_header;
+          from_raw_parts(inline_bucket_ptr, IN_BUCKET_SIZE)
+        }
+      };
+      if self.split_ow().unwrap().root_node.is_none() {
+        continue;
+      }
+      let mut c = self.i_cursor();
+      let (k, _, flags) = c.i_seek(name).unwrap();
+      assert_eq!(name, k, "misplaced bucket header");
+      assert_ne!(
+        flags & BUCKET_LEAF_FLAG,
+        0,
+        "unexpected bucket header flag: {:x}",
+        flags
+      );
 
-    todo!()
+      c.node().put(name, name, value, ZERO_PGID, BUCKET_LEAF_FLAG);
+    }
+
+    let root_node = match self.split_ow().unwrap().root_node {
+      None => return Ok(()),
+      Some(root_node) => root_node,
+    };
+    let mut parent_children = BVec::new_in(self.cell.1.upgrade().unwrap().bump());
+    root_node.spill_child(&mut parent_children)?;
+    if let (mut r, Some(mut w)) = self.split_r_ow_mut() {
+      let mut new_root = root_node.root();
+      w.root_node = Some(new_root);
+      let mut borrow_root = new_root.cell.borrow_mut();
+      let new_pgid = borrow_root.pgid;
+      borrow_root.children = parent_children;
+      let tx_pgid = self.cell.1.upgrade().unwrap().meta().pgid();
+      if new_pgid >= tx_pgid {
+        panic!("pgid ({}) above high water mark ({})", new_pgid, tx_pgid);
+      }
+      r.bucket_header.set_root(new_pgid);
+    }
+    Ok(())
+  }
+
+  fn write(self, bump: &'tx Bump) -> &'tx [u8] {
+    let root_node = self.materialize_root();
+    let page_size = IN_BUCKET_SIZE + root_node.size();
+    let layout = Layout::from_size_align(page_size, INLINE_PAGE_ALIGNMENT).unwrap();
+    let inline_bucket_ptr = bump.alloc_layout(layout).as_ptr();
+
+    unsafe {
+      let inline_bucket = &mut (*(inline_bucket_ptr as *mut InBucket));
+      *inline_bucket = self.cell.0.borrow().r.bucket_header;
+      let mut mut_page = MutPage::new(inline_bucket_ptr.add(IN_BUCKET_SIZE));
+      root_node.write(&mut mut_page);
+      from_raw_parts(inline_bucket_ptr, page_size)
+    }
   }
 
   fn inlineable(self) -> bool {
@@ -1192,6 +1262,22 @@ impl<'tx> BucketRwIAPI<'tx> for BucketRwCell<'tx> {
 
     wb.nodes.insert(pgid, n);
     n
+  }
+
+  fn rebalance(self) {
+    let bump = self.api_tx().bump();
+    let (nodes, buckets) = {
+      let borrow = self.cell.0.borrow();
+      let nodes = BVec::from_iter_in(borrow.w.nodes.values().cloned(), bump);
+      let buckets = BVec::from_iter_in(borrow.w.buckets.values().cloned(), bump);
+      (nodes, buckets)
+    };
+    for node in nodes.into_iter() {
+      node.rebalance();
+    }
+    for bucket in buckets.into_iter() {
+      bucket.rebalance();
+    }
   }
 }
 

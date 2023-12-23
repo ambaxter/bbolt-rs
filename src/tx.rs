@@ -4,11 +4,11 @@ use crate::bucket::{
 use crate::common::defaults::DEFAULT_PAGE_SIZE;
 use crate::common::memory::{BCell, LCell};
 use crate::common::meta::Meta;
-use crate::common::page::{MutPage, PageInfo, RefPage};
+use crate::common::page::{MutPage, Page, PageInfo, RefPage};
 use crate::common::self_owned::SelfOwned;
 use crate::common::{BVec, HashMap, PgId, SplitRef, TxId};
 use crate::cursor::{CursorImpl, CursorRwIAPI, CursorRwImpl, InnerCursor};
-use crate::db::{DBShared, Pager};
+use crate::db::{DBShared, DbLock};
 use crate::freelist::Freelist;
 use crate::node::NodeRwCell;
 use crate::{BucketApi, CursorApi, CursorRwApi};
@@ -22,8 +22,9 @@ use std::ops::{AddAssign, Deref, DerefMut, Sub};
 use std::pin::Pin;
 use std::ptr::{addr_of, addr_of_mut};
 use std::rc::Rc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::{cell, mem};
+use aligners::{AlignedBytes, alignment};
 
 pub trait TxApi<'tx> {
   type CursorType: CursorApi<'tx>;
@@ -195,7 +196,7 @@ pub(crate) trait TxIAPI<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
   }
 
   fn page(self, id: PgId) -> RefPage<'tx> {
-    self.split_r().pager.page(id)
+    self.split_r().db.page(id)
   }
 
   /// See [TxApi::id]
@@ -273,12 +274,12 @@ pub(crate) trait TxIAPI<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
     //TODO: Check if freelist loaded
     //WHEN: Freelists can be unloaded
 
-    let p = r.pager.page(id);
+    let p = r.db.page(id);
     let id = p.id;
     let count = p.count as u64;
     let overflow_count = p.overflow as u64;
 
-    let t = if r.pager.page_is_free(id) {
+    let t = if r.db.page_is_free(id) {
       Cow::Borrowed("free")
     } else {
       p.page_type()
@@ -297,9 +298,9 @@ pub(crate) trait TxIAPI<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
 
 pub(crate) trait TxRwIAPI<'tx>: TxIAPI<'tx> {
   type CursorRwType: CursorRwIAPI<'tx>;
-  fn freelist(self) -> RefMut<'tx, Freelist>;
+  fn freelist_free_page(self, txid: TxId, p: &Page);
 
-  fn allocate(self, count: usize) -> crate::Result<MutPage<'tx>>;
+  fn allocate(self, count: usize) -> crate::Result<SelfOwned<AlignedBytes<alignment::Page>, MutPage<'tx>>>;
 
   /// See [TxRwApi::cursor_mut]
   fn api_cursor_mut(self) -> Self::CursorRwType;
@@ -330,7 +331,7 @@ impl TxImplTODORenameMe {
 pub struct TxR<'tx> {
   b: &'tx Bump,
   page_size: usize,
-  pager: &'tx dyn Pager,
+  db: &'tx dyn DbLock,
   pub(crate) stats: TxStats,
   meta: Meta,
   is_rollback: bool,
@@ -472,12 +473,13 @@ impl<'tx> TxIAPI<'tx> for TxRwCell<'tx> {
 impl<'tx> TxRwIAPI<'tx> for TxRwCell<'tx> {
   type CursorRwType = InnerCursor<'tx, Self, Self::BucketType>;
 
-  fn freelist(self) -> RefMut<'tx, Freelist> {
-    todo!()
+  fn freelist_free_page(self, txid: TxId, p: &Page) {
+    self.cell.0.borrow().r.db.freelist_free_page(txid, p)
   }
 
-  fn allocate(self, count: usize) -> crate::Result<MutPage<'tx>> {
-    todo!()
+  fn allocate(self, count: usize) -> crate::Result<SelfOwned<AlignedBytes<alignment::Page>, MutPage<'tx>>> {
+    let tx_id = self.cell.1.api_tx().api_id();
+    self.cell.0.borrow().r.db.allocate(tx_id, count as u64)
   }
 
   fn api_cursor_mut(self) -> Self::CursorRwType {
@@ -501,6 +503,40 @@ impl<'tx> TxRwIAPI<'tx> for TxRwCell<'tx> {
   }
 
   fn api_commit(self) -> crate::Result<()> {
+    let start_time = Instant::now();
+    self.root_bucket().rebalance();
+    {
+      let mut stats = self.mut_stats();
+      if stats.rebalance > 0 {
+        stats.rebalance_time += Instant::now().duration_since(start_time);
+      }
+    }
+
+    let opgid = self.meta().txid();
+    let bump = self.bump();
+    let start_time = Instant::now();
+
+    match self.root_bucket().spill(bump) {
+      Ok(_) => {}
+      Err(e) => {
+        let _ = self.rollback();
+        return Err(e);
+      }
+    }
+    {
+      let mut stats = self.mut_stats();
+      stats.spill_time += Instant::now().duration_since(start_time);
+    }
+    {
+      let new_bucket = self.cell.1.split_r().bucket_header;
+      let mut tx = self.cell.0.borrow_mut();
+      tx.r.meta.set_root(new_bucket);
+
+      //TODO: implement pgidNoFreeList
+      let freelist_pg = tx.r.db.page(tx.r.meta.free_list());
+      // TODO: left on accessing the records from the pager
+    }
+
     todo!("api_commit")
   }
 }
@@ -523,12 +559,12 @@ impl<'tx> TxImpl<'tx> {
       addr_of_mut!((*ptr).bump).write(Box::pin(bump));
       let bump = &(**addr_of!((*ptr).bump));
       addr_of_mut!((*ptr).lock).write(Box::pin(lock));
-      let pager: &dyn Pager = &(**addr_of!((*ptr).lock));
+      let pager: &dyn DbLock = &(**addr_of!((*ptr).lock));
       let tx = Rc::new_cyclic(|weak| {
         let r = TxR {
           b: bump,
           page_size,
-          pager,
+          db: pager,
           meta,
           stats: Default::default(),
           is_rollback: false,
@@ -674,12 +710,12 @@ impl<'tx> TxRwImpl<'tx> {
       addr_of_mut!((*ptr).bump).write(Box::pin(bump));
       let bump = &(**addr_of!((*ptr).bump));
       addr_of_mut!((*ptr).lock).write(Box::pin(lock));
-      let pager: &dyn Pager = &(**addr_of!((*ptr).lock));
+      let pager: &dyn DbLock = &(**addr_of!((*ptr).lock));
       let tx = Rc::new_cyclic(|weak| {
         let r = TxR {
           b: bump,
           page_size,
-          pager,
+          db: pager,
           meta,
           stats: Default::default(),
           is_rollback: false,
@@ -890,7 +926,9 @@ pub(crate) fn create_cycle<'a>(bump: &'a Bump) -> (&RefCell<TypeA<'a>>, &RefCell
 
 #[cfg(test)]
 mod test {
+  use crate::test_support::TestDb;
   use crate::tx::create_cycle;
+  use crate::{DbApi, DbRwAPI, TxApi, TxRwApi};
   use bumpalo::Bump;
 
   // This is to prove out the memory safety of creating a cycle in a bump
@@ -950,8 +988,18 @@ mod test {
   }
 
   #[test]
-  fn test_tx_create_bucket() {
-    todo!()
+  fn test_tx_create_bucket() -> crate::Result<()> {
+    let mut db = TestDb::new()?;
+    db.update(|mut tx| {
+      let bucket = tx.create_bucket(b"widgets")?;
+      Ok(())
+    })?;
+
+    db.view(|tx| {
+      let bucket = tx.bucket(b"widget");
+      assert!(bucket.is_some(), "expected bucket");
+      Ok(())
+    })
   }
 
   #[test]
