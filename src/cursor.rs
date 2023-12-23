@@ -199,7 +199,6 @@ pub struct ElemRef<'tx> {
 }
 
 impl<'tx> ElemRef<'tx> {
-
   /// count returns the number of inodes or page elements.
   fn count(&self) -> u32 {
     match &self.pn {
@@ -411,7 +410,6 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for InnerCursor
       return None;
     }
 
-
     match &elem_ref.pn {
       // Retrieve value from page.
       Either::Left(r) => {
@@ -535,13 +533,7 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for InnerCursor
       let w = node.cell.borrow();
 
       let r = w.inodes.binary_search_by_key(&key, |inode| inode.key());
-      let index = r.unwrap_or_else(|index| {
-        if index > 0 {
-          index - 1
-        } else {
-          index
-        }
-      });
+      let index = r.unwrap_or_else(|index| if index > 0 { index - 1 } else { index });
       (index as u32, w.inodes[index].pgid())
     };
 
@@ -558,13 +550,7 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for InnerCursor
     let r = branch_page
       .elements()
       .binary_search_by_key(&key, |elem| elem.as_ref().key());
-    let index = r.unwrap_or_else(|index| {
-      if index > 0 {
-        index - 1
-      } else {
-        index
-      }
-    });
+    let index = r.unwrap_or_else(|index| if index > 0 { index - 1 } else { index });
 
     if let Some(elem) = self.stack.last_mut() {
       elem.index = index as u32;
@@ -615,5 +601,94 @@ impl<'tx, B: BucketRwIAPI<'tx>> CursorRwIAPI<'tx> for InnerCursor<'tx, TxRwCell<
     }
     self.node().del(key);
     Ok(())
+  }
+}
+
+#[cfg(test)]
+mod tests {
+
+  #[test]
+  fn test_cursor_bucket() {
+    todo!()
+  }
+
+  #[test]
+  fn test_cursor_seek() {
+    todo!()
+  }
+
+  #[test]
+  fn test_cursor_delete() {
+    todo!()
+  }
+
+  #[test]
+  fn test_cursor_seek_large() {
+    todo!()
+  }
+
+  #[test]
+  fn test_cursor_empty_bucket() {
+    todo!()
+  }
+
+  #[test]
+  fn test_cursor_empty_bucket_reverse() {
+    todo!()
+  }
+
+  #[test]
+  fn test_cursor_iterate_leaf() {
+    todo!()
+  }
+
+  #[test]
+  fn test_cursor_leaf_root_reverse() {
+    todo!()
+  }
+
+  #[test]
+  fn test_cursor_restart() {
+    todo!()
+  }
+
+  #[test]
+  fn test_cursor_first_empty_pages() {
+    todo!()
+  }
+
+  #[test]
+  fn test_cursor_last_empty_pages() {
+    todo!()
+  }
+
+  #[test]
+  fn test_cursor_quick_check() {
+    todo!()
+  }
+
+  #[test]
+  fn test_cursor_quick_check_reverse() {
+    todo!()
+  }
+
+  #[test]
+  fn test_cursor_quick_check_buckets_only() {
+    todo!()
+  }
+
+  #[test]
+  fn test_cursor_quick_check_buckets_only_reverse() {
+    todo!()
+  }
+
+  #[test]
+  fn example_cursor() {
+    todo!()
+  }
+
+  #[test]
+  fn example_cursor_reverse() {
+    todo!()
   }
 }

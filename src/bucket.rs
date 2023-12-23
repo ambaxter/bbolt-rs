@@ -711,7 +711,6 @@ pub struct InnerBucketW<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> {
   /// node cache
   pub(crate) nodes: HashMap<'tx, PgId, NodeRwCell<'tx>>,
 
-
   /// Sets the threshold for filling nodes when they split. By default,
   /// the bucket will fill to 50% but it can be useful to increase this
   /// amount if you know that your write workloads are mostly append-only.
@@ -1193,5 +1192,259 @@ impl<'tx> BucketRwIAPI<'tx> for BucketRwCell<'tx> {
 
     wb.nodes.insert(pgid, n);
     n
+  }
+}
+
+#[cfg(test)]
+mod tests {
+
+  #[test]
+  fn test_bucket_get_non_existent() {
+    todo!()
+  }
+
+  #[test]
+  fn test_bucket_get_from_node() {
+    todo!()
+  }
+
+  #[test]
+  fn test_bucket_get_incompatible_value() {
+    todo!()
+  }
+
+  #[test]
+  fn test_bucket_get_capacity() {
+    todo!()
+  }
+
+  #[test]
+  fn test_bucket_put() {
+    todo!()
+  }
+
+  #[test]
+  fn test_bucket_put_repeat() {
+    todo!()
+  }
+
+  #[test]
+  fn test_bucket_put_large() {
+    todo!()
+  }
+
+  #[test]
+  fn test_db_put_very_large() {
+    todo!()
+  }
+
+  #[test]
+  fn test_bucket_put_incompatible_value() {
+    todo!()
+  }
+
+  #[test]
+  fn test_bucket_put_closed() {
+    todo!()
+  }
+
+  #[test]
+  fn test_bucket_put_read_only() {
+    todo!()
+  }
+
+  #[test]
+  fn test_bucket_delete() {
+    todo!()
+  }
+
+  #[test]
+  fn test_bucket_delete_large() {
+    todo!()
+  }
+
+  #[test]
+  fn test_bucket_delete_freelist_overflow() {
+    todo!()
+  }
+
+  #[test]
+  fn test_bucket_delete_non_existing() {
+    todo!()
+  }
+
+  #[test]
+  fn test_bucket_nested() {
+    todo!()
+  }
+
+  #[test]
+  fn test_bucket_delete_bucket() {
+    todo!()
+  }
+
+  #[test]
+  fn test_bucket_delete_read_only() {
+    todo!()
+  }
+
+  #[test]
+  fn test_bucket_delete_closed() {
+    todo!()
+  }
+
+  #[test]
+  fn test_bucket_delete_bucket_nested() {
+    todo!()
+  }
+
+  #[test]
+  fn test_bucket_delete_bucket_nested2() {
+    todo!()
+  }
+
+  #[test]
+  fn test_bucket_delete_bucket_large() {
+    todo!()
+  }
+
+  #[test]
+  fn test_bucket_bucket_incompatible_value() {
+    todo!()
+  }
+
+  #[test]
+  fn test_bucket_create_bucket_incompatible_value() {
+    todo!()
+  }
+
+  #[test]
+  fn test_bucket_delete_bucket_incompatible_value() {
+    todo!()
+  }
+
+  #[test]
+  fn test_bucket_sequence() {
+    todo!()
+  }
+
+  #[test]
+  fn test_bucket_next_sequence() {
+    todo!()
+  }
+
+  #[test]
+  fn test_bucket_next_sequence_persist() {
+    todo!()
+  }
+
+  #[test]
+  fn test_bucket_next_sequence_read_only() {
+    todo!()
+  }
+
+  #[test]
+  fn test_bucket_next_sequence_closed() {
+    todo!()
+  }
+
+  #[test]
+  fn test_bucket_for_each() {
+    todo!()
+  }
+
+  #[test]
+  fn test_bucket_for_each_bucket() {
+    todo!()
+  }
+
+  #[test]
+  fn test_bucket_for_each_bucket_no_buckets() {
+    todo!()
+  }
+
+  #[test]
+  fn test_bucket_for_each_short_circuit() {
+    todo!()
+  }
+
+  #[test]
+  fn test_bucket_for_each_closed() {
+    todo!()
+  }
+
+  #[test]
+  fn test_bucket_put_empty_key() {
+    todo!()
+  }
+
+  #[test]
+  fn test_bucket_put_key_too_large() {
+    todo!()
+  }
+
+  #[test]
+  fn test_bucket_put_value_too_large() {
+    todo!()
+  }
+
+  #[test]
+  fn test_bucket_stats() {
+    todo!()
+  }
+
+  #[test]
+  fn test_bucket_stats_random_fill() {
+    todo!()
+  }
+
+  #[test]
+  fn test_bucket_stats_small() {
+    todo!()
+  }
+
+  #[test]
+  fn test_bucket_stats_empty_bucket() {
+    todo!()
+  }
+
+  #[test]
+  fn test_bucket_stats_nested() {
+    todo!()
+  }
+
+  #[test]
+  fn test_bucket_stats_large() {
+    todo!()
+  }
+
+  #[test]
+  fn test_bucket_put_single() {
+    todo!()
+  }
+
+  #[test]
+  fn test_bucket_put_multiple() {
+    todo!()
+  }
+
+  #[test]
+  fn test_bucket_delete_quick() {
+    todo!()
+  }
+
+  #[test]
+  fn example_bucket_put() {
+    todo!()
+  }
+
+  #[test]
+  fn example_bucket_delete() {
+    todo!()
+  }
+
+  #[test]
+  fn example_bucket_for_each() {
+    todo!()
   }
 }

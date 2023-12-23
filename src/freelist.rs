@@ -245,6 +245,7 @@ impl Freelist {
     if n == 0 {
       return None;
     }
+    // if we have a exact size match just return short path
     if let Some(pgid) = self
       .free_maps
       .get(&n)
@@ -260,6 +261,8 @@ impl Freelist {
       }
       return Some(pgid);
     }
+
+    // lookup the map to find larger span
     if let Some((size, pgid)) = self
       .free_maps
       .iter()
@@ -267,6 +270,7 @@ impl Freelist {
       .flat_map(|(&size, pgids)| zip(repeat(size), pgids.iter().copied()))
       .next()
     {
+      // remove the initial
       self.del_span(pgid, size);
       self.allocs.insert(pgid, txid);
       let remain = size - n;
@@ -347,6 +351,8 @@ impl Freelist {
     let mut m = Vec::with_capacity(0);
     self.pending.retain(|&tid, txp| {
       if tid <= txid {
+        // Move transaction's pending pages to the available freelist.
+        // Don't remove from the cache since the page is still free.
         m.extend_from_slice(&txp.ids);
         false
       } else {
@@ -814,6 +820,12 @@ mod tests {
     f2.read_ids(exp2);
     assert_eq!(exp2, f2.free_page_ids().as_slice());
   }
+
+  #[test]
+  fn freelist_merge_with_exist() {
+    todo!()
+  }
+
   /*
   // TODO: merge with exist
   #[test]

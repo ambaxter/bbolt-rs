@@ -5,7 +5,7 @@ use crate::common::defaults::DEFAULT_PAGE_SIZE;
 use crate::common::memory::{BCell, LCell};
 use crate::common::meta::Meta;
 use crate::common::page::{MutPage, PageInfo, RefPage};
-use crate::common::selfowned::SelfOwned;
+use crate::common::self_owned::SelfOwned;
 use crate::common::{BVec, HashMap, PgId, SplitRef, TxId};
 use crate::cursor::{CursorImpl, CursorRwIAPI, CursorRwImpl, InnerCursor};
 use crate::db::{DBShared, Pager};
@@ -893,6 +893,8 @@ mod test {
   use crate::tx::create_cycle;
   use bumpalo::Bump;
 
+  // This is to prove out the memory safety of creating a cycle in a bump
+  // using only MaybeUninit
   #[test]
   fn create_cycle_test() -> crate::Result<()> {
     let bump = Bump::new();
@@ -900,5 +902,170 @@ mod test {
     assert_eq!(100, a.borrow().b.borrow().i);
     assert_eq!(1, b.borrow().a.borrow().i);
     Ok(())
+  }
+
+  #[test]
+  fn test_tx_check_read_only() {
+    todo!()
+  }
+
+  #[test]
+  fn test_tx_commit_err_tx_closed() {
+    todo!()
+  }
+
+  #[test]
+  fn test_tx_rollback_err_tx_closed() {
+    todo!()
+  }
+
+  #[test]
+  fn test_tx_commit_err_tx_not_writable() {
+    todo!()
+  }
+
+  #[test]
+  fn test_tx_cursor() {
+    todo!()
+  }
+
+  #[test]
+  fn test_tx_create_bucket_err_tx_not_writable() {
+    todo!()
+  }
+
+  #[test]
+  fn test_tx_create_bucket_err_tx_closed() {
+    todo!()
+  }
+
+  #[test]
+  fn test_tx_bucket() {
+    todo!()
+  }
+
+  #[test]
+  fn test_tx_get_not_found() {
+    todo!()
+  }
+
+  #[test]
+  fn test_tx_create_bucket() {
+    todo!()
+  }
+
+  #[test]
+  fn test_tx_create_bucket_if_not_exists() {
+    todo!()
+  }
+
+  #[test]
+  fn test_tx_create_bucket_if_not_exists_err_bucket_name_required() {
+    todo!()
+  }
+
+  #[test]
+  fn test_tx_create_bucket_err_bucket_exists() {
+    todo!()
+  }
+
+  #[test]
+  fn test_tx_create_bucket_err_bucket_name_required() {
+    todo!()
+  }
+
+  #[test]
+  fn test_tx_delete_bucket() {
+    todo!()
+  }
+
+  #[test]
+  fn test_tx_delete_bucket_err_tx_closed() {
+    todo!()
+  }
+
+  #[test]
+  fn test_tx_delete_bucket_read_only() {
+    todo!()
+  }
+
+  #[test]
+  fn test_tx_delete_bucket_not_found() {
+    todo!()
+  }
+
+  #[test]
+  fn test_tx_for_each_no_error() {
+    todo!()
+  }
+
+  #[test]
+  fn test_tx_for_each_with_error() {
+    todo!()
+  }
+
+  #[test]
+  fn test_tx_on_commit() {
+    todo!()
+  }
+
+  #[test]
+  fn test_tx_on_commit_rollback() {
+    todo!()
+  }
+
+  #[test]
+  fn test_tx_copy_file() {
+    todo!()
+  }
+
+  #[test]
+  fn test_tx_copy_file_error_meta() {
+    todo!()
+  }
+
+  #[test]
+  fn test_tx_copy_file_error_normal() {
+    todo!()
+  }
+
+  #[test]
+  fn test_tx_rollback() {
+    todo!()
+  }
+
+  #[test]
+  fn test_tx_release_range() {
+    todo!()
+  }
+
+  #[test]
+  fn example_tx_rollback() {
+    todo!()
+  }
+
+  #[test]
+  fn example_tx_copy_file() {
+    todo!()
+  }
+
+  #[test]
+  fn test_tx_stats_get_and_inc_atomically() {
+    todo!()
+  }
+
+  #[test]
+  fn test_tx_stats_sub() {
+    todo!()
+  }
+
+  #[test]
+  fn test_tx_truncate_before_write() {
+    todo!()
+  }
+
+  #[test]
+  fn test_tx_stats_add() {
+    todo!()
   }
 }

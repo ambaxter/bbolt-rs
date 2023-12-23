@@ -7,7 +7,7 @@ use crate::common::defaults::{
 use crate::common::memory::LCell;
 use crate::common::meta::{MappedMetaPage, Meta};
 use crate::common::page::{CoerciblePage, MutPage, Page, RefPage, FREE_LIST_PAGE_FLAG};
-use crate::common::selfowned::SelfOwned;
+use crate::common::self_owned::SelfOwned;
 use crate::common::tree::MappedLeafPage;
 use crate::common::{PgId, TxId};
 use crate::freelist::{Freelist, MappedFreeListPage};
@@ -715,5 +715,239 @@ impl DbRwAPI for DB {
   fn sync(&mut self) -> crate::Result<()> {
     self.db.write().backend.file.sync_all()?;
     Ok(())
+  }
+}
+
+#[cfg(test)]
+mod test {
+
+  #[test]
+  fn TestOpen() {
+    todo!()
+  }
+
+  #[test]
+  fn TestOpen_MultipleGoroutines() {
+    todo!()
+  }
+
+  #[test]
+  fn TestOpen_ErrPathRequired() {
+    todo!()
+  }
+
+  #[test]
+  fn TestOpen_ErrNotExists() {
+    todo!()
+  }
+
+  #[test]
+  fn TestOpen_ErrInvalid() {
+    todo!()
+  }
+
+  #[test]
+  fn TestOpen_ErrVersionMismatch() {
+    todo!()
+  }
+
+  #[test]
+  fn TestOpen_ErrChecksum() {
+    todo!()
+  }
+
+  #[test]
+  fn TestOpen_ReadPageSize_FromMeta1_OS() {
+    todo!()
+  }
+
+  #[test]
+  fn TestOpen_ReadPageSize_FromMeta1_Given() {
+    todo!()
+  }
+
+  #[test]
+  fn TestOpen_Size() {
+    todo!()
+  }
+
+  #[test]
+  fn TestOpen_Size_Large() {
+    todo!()
+  }
+
+  #[test]
+  fn TestOpen_Check() {
+    todo!()
+  }
+
+  #[test]
+  fn TestOpen_MetaInitWriteError() {
+    todo!()
+  }
+
+  #[test]
+  fn TestOpen_FileTooSmall() {
+    todo!()
+  }
+
+  #[test]
+  fn TestDB_Open_InitialMmapSize() {
+    todo!()
+  }
+
+  #[test]
+  fn TestDB_Open_ReadOnly() {
+    todo!()
+  }
+
+  #[test]
+  fn TestOpen_BigPage() {
+    todo!()
+  }
+
+  #[test]
+  fn TestOpen_RecoverFreeList() {
+    todo!()
+  }
+
+  #[test]
+  fn TestDB_Begin_ErrDatabaseNotOpen() {
+    todo!()
+  }
+
+  #[test]
+  fn TestDB_BeginRW() {
+    todo!()
+  }
+
+  #[test]
+  fn TestDB_Concurrent_WriteTo() {
+    todo!()
+  }
+
+  #[test]
+  fn TestDB_BeginRW_Closed() {
+    todo!()
+  }
+
+  #[test]
+  fn TestDB_Close_PendingTx_RW() {
+    todo!()
+  }
+
+  #[test]
+  fn TestDB_Close_PendingTx_RO() {
+    todo!()
+  }
+
+  #[test]
+  fn TestDB_Update() {
+    todo!()
+  }
+
+  #[test]
+  fn TestDB_Update_Closed() {
+    todo!()
+  }
+
+  #[test]
+  fn TestDB_Update_ManualCommit() {
+    todo!()
+  }
+
+  #[test]
+  fn TestDB_Update_ManualRollback() {
+    todo!()
+  }
+
+  #[test]
+  fn TestDB_View_ManualCommit() {
+    todo!()
+  }
+
+  #[test]
+  fn TestDB_Update_Panic() {
+    todo!()
+  }
+
+  #[test]
+  fn TestDB_View_Error() {
+    todo!()
+  }
+
+  #[test]
+  fn TestDB_View_Panic() {
+    todo!()
+  }
+
+  #[test]
+  fn TestDB_Stats() {
+    todo!()
+  }
+
+  #[test]
+  fn TestDB_Consistency() {
+    todo!()
+  }
+
+  #[test]
+  fn TestDBStats_Sub() {
+    todo!()
+  }
+
+  #[test]
+  fn TestDB_Batch() {
+    todo!()
+  }
+
+  #[test]
+  fn TestDB_Batch_Panic() {
+    todo!()
+  }
+
+  #[test]
+  fn TestDB_BatchFull() {
+    todo!()
+  }
+
+  #[test]
+  fn TestDB_BatchTime() {
+    todo!()
+  }
+
+  #[test]
+  fn TestDBUnmap() {
+    todo!()
+  }
+
+  #[test]
+  fn ExampleDB_Update() {
+    todo!()
+  }
+
+  #[test]
+  fn ExampleDB_View() {
+    todo!()
+  }
+
+  #[test]
+  fn ExampleDB_Begin() {
+    todo!()
+  }
+
+  #[test]
+  fn BenchmarkDBBatchAutomatic() {
+    todo!()
+  }
+
+  #[test]
+  fn BenchmarkDBBatchSingle() {
+    todo!()
+  }
+
+  #[test]
+  fn BenchmarkDBBatchManual10x100() {
+    todo!()
   }
 }

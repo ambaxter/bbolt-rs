@@ -13,7 +13,7 @@ pub mod inode;
 pub mod memory;
 pub mod meta;
 pub mod page;
-pub mod selfowned;
+pub mod self_owned;
 pub mod tree;
 pub mod utility;
 

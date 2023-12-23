@@ -1,5 +1,5 @@
 use crate::common::meta::MappedMetaPage;
-use crate::common::selfowned::SelfOwned;
+use crate::common::self_owned::SelfOwned;
 use std::mem;
 use std::ops::{Deref, DerefMut};
 //use crate::freelist::MappedFreeListPage;
