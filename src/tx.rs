@@ -13,7 +13,7 @@ use crate::freelist::Freelist;
 use crate::node::NodeRwCell;
 use crate::{BucketApi, CursorApi, CursorRwApi};
 use bumpalo::Bump;
-use parking_lot::{RwLockReadGuard, RwLockWriteGuard};
+use parking_lot::{Mutex, RwLockReadGuard, RwLockWriteGuard};
 use std::borrow::Cow;
 use std::cell::{Ref, RefCell, RefMut};
 use std::marker::{PhantomData, PhantomPinned};
@@ -313,9 +313,7 @@ pub(crate) trait TxRwIAPI<'tx>: TxIAPI<'tx> {
 
   /// See [TxRwApi::delete_bucket]
   fn api_delete_bucket(self, name: &[u8]) -> crate::Result<()>;
-
-  /// See [TxRwApi::commit]
-  fn api_commit(self) -> crate::Result<()>;
+  fn commit_freelist(self) -> crate::Result<()>;
 }
 
 pub(crate) struct TxImplTODORenameMe {}
@@ -339,7 +337,7 @@ pub struct TxR<'tx> {
 }
 
 pub struct TxW<'tx> {
-  pages: HashMap<'tx, PgId, MutPage<'tx>>,
+  pages: HashMap<'tx, PgId, SelfOwned<AlignedBytes<alignment::Page>, MutPage<'tx>>>,
   //TODO: We leak memory when this drops. Need special handling here
   commit_handlers: BVec<'tx, Box<dyn FnMut()>>,
   p: PhantomData<&'tx u8>,
@@ -479,7 +477,14 @@ impl<'tx> TxRwIAPI<'tx> for TxRwCell<'tx> {
 
   fn allocate(self, count: usize) -> crate::Result<SelfOwned<AlignedBytes<alignment::Page>, MutPage<'tx>>> {
     let tx_id = self.cell.1.api_tx().api_id();
-    self.cell.0.borrow().r.db.allocate(tx_id, count as u64)
+    let meta_page = self.cell.0.borrow().r.db.allocate(tx_id, count as u64)?;
+    let pg_id = meta_page.id;
+    {
+      let mut tx = self.cell.0.borrow_mut();
+      tx.r.stats.page_count += 1;
+      tx.r.stats.page_alloc += (count * tx.r.page_size) as i64;
+    }
+    Ok(meta_page)
   }
 
   fn api_cursor_mut(self) -> Self::CursorRwType {
@@ -502,42 +507,38 @@ impl<'tx> TxRwIAPI<'tx> for TxRwCell<'tx> {
     root_bucket.api_delete_bucket(name)
   }
 
-  fn api_commit(self) -> crate::Result<()> {
-    let start_time = Instant::now();
-    self.root_bucket().rebalance();
-    {
-      let mut stats = self.mut_stats();
-      if stats.rebalance > 0 {
-        stats.rebalance_time += Instant::now().duration_since(start_time);
+  fn commit_freelist(self) -> crate::Result<()> {
+    // Allocate new pages for the new free list. This will overestimate
+    // the size of the freelist but not underestimate the size (which would be bad).
+    let (freelist_size, page_size) = {
+      let tx = self.cell.0.borrow();
+      (tx.r.db.freelist_size(), tx.r.page_size)
+    };
+
+    let mut p = match self.allocate(((freelist_size / page_size as u64 ) + 1) as usize) {
+      Ok(p) => p,
+      Err(e) => {
+        let _ = self.rollback();
+        return Err(e);
       }
-    }
+    };
 
-    let opgid = self.meta().txid();
-    let bump = self.bump();
-    let start_time = Instant::now();
-
-    match self.root_bucket().spill(bump) {
+    let pg_id = p.id;
+    let write_result = {
+      let tx = self.cell.0.borrow_mut();
+      tx.r.db.freelist_write(&mut p)
+    };
+    match write_result {
       Ok(_) => {}
       Err(e) => {
         let _ = self.rollback();
         return Err(e);
       }
     }
-    {
-      let mut stats = self.mut_stats();
-      stats.spill_time += Instant::now().duration_since(start_time);
-    }
-    {
-      let new_bucket = self.cell.1.split_r().bucket_header;
-      let mut tx = self.cell.0.borrow_mut();
-      tx.r.meta.set_root(new_bucket);
-
-      //TODO: implement pgidNoFreeList
-      let freelist_pg = tx.r.db.page(tx.r.meta.free_list());
-      // TODO: left on accessing the records from the pager
-    }
-
-    todo!("api_commit")
+    let mut tx = self.cell.0.borrow_mut();
+    tx.r.meta.set_free_list(p.id);
+    tx.w.pages.insert(pg_id, p);
+    Ok(())
   }
 }
 
@@ -816,7 +817,47 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
   }
 
   fn commit(self) -> crate::Result<()> {
-    self.tx.api_commit()
+    let start_time = Instant::now();
+    self.tx.root_bucket().rebalance();
+    {
+      let mut stats = self.tx.mut_stats();
+      if stats.rebalance > 0 {
+        stats.rebalance_time += Instant::now().duration_since(start_time);
+      }
+    }
+    let opgid = self.tx.meta().pgid();
+    let bump = self.tx.bump();
+    let start_time = Instant::now();
+    match self.tx.root_bucket().spill(bump) {
+      Ok(_) => {}
+      Err(e) => {
+        let _ = self.rollback();
+        return Err(e);
+      }
+    }
+    {
+      let mut stats = self.tx.mut_stats();
+      stats.spill_time += Instant::now().duration_since(start_time);
+    }
+    {
+      let new_bucket = self.tx.cell.1.split_r().bucket_header;
+      let mut tx = self.tx.cell.0.borrow_mut();
+      tx.r.meta.set_root(new_bucket);
+
+      //TODO: implement pgidNoFreeList
+      let freelist_pg = tx.r.db.page(tx.r.meta.free_list());
+      let tx_id = tx.r.meta.txid();
+      tx.r.db.freelist_free_page(tx_id, &freelist_pg);
+
+    }
+    // TODO: implement noFreelistSync
+
+    self.tx.commit_freelist()?;
+
+    if self.tx.meta().pgid() > opgid {
+
+    }
+    todo!()
   }
 }
 
@@ -888,7 +929,7 @@ impl<'tx> TxRwApi<'tx> for TxRwRef<'tx> {
   }
 
   fn commit(self) -> crate::Result<()> {
-    self.tx.api_commit()
+    todo!()
   }
 }
 
