@@ -847,7 +847,7 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
       //TODO: implement pgidNoFreeList
       let freelist_pg = tx.r.db.page(tx.r.meta.free_list());
       let tx_id = tx.r.meta.txid();
-      tx.r.db.freelist_free_page(tx_id, &freelist_pg);
+      self.lock.records.lock().freelist_free_page(tx_id, &freelist_pg);
 
     }
     // TODO: implement noFreelistSync

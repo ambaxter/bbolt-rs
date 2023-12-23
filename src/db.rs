@@ -228,6 +228,20 @@ impl DBRecords {
   pub(crate) fn pop_read_bump(&mut self) -> Bump {
     self.bump_pool.pop().unwrap_or_default()
   }
+
+
+  pub(crate) fn freelist_size(&self) -> u64 {
+    self.freelist.size()
+  }
+
+  pub(crate) fn freelist_write(&self, page: &mut MutPage) -> crate::Result<()> {
+    self.freelist.write(MappedFreeListPage::mut_into(page));
+    Ok(())
+  }
+
+  pub(crate) fn freelist_free_page(&mut self, txid: TxId, p: &Page) {
+    self.freelist.free(txid, p)
+  }
 }
 
 pub struct DBBackend {
@@ -535,12 +549,13 @@ pub(crate) trait DbLock {
 
   fn page_is_free(&self, pg_id: PgId) -> bool;
 
-  fn freelist_size(&self) -> u64;
-  fn freelist_write(&self, page: &mut MutPage) -> crate::Result<()>;
-
   fn freelist_free_page(&self, txid: TxId, p: &Page);
 
   fn allocate(&self, tx_id: TxId, count: u64) -> crate::Result<SelfOwned<AlignedBytes<alignment::Page>, MutPage>>;
+
+  fn freelist_write(&self, page: &mut MutPage) -> crate::Result<()>;
+
+  fn freelist_size(&self) -> u64;
 }
 
 impl<'tx> DbLock for RwLockReadGuard<'tx, DBShared> {
@@ -552,20 +567,20 @@ impl<'tx> DbLock for RwLockReadGuard<'tx, DBShared> {
     self.records.lock().freelist.freed(pg_id)
   }
 
-  fn freelist_size(&self) -> u64 {
-    self.records.lock().freelist.size()
-  }
-
-  fn freelist_write(&self, page: &mut MutPage) -> crate::Result<()> {
-    panic!()
-  }
-
   fn freelist_free_page(&self, txid: TxId, p: &Page) {
     panic!()
   }
 
   fn allocate(&self, tx_id: TxId, count: u64) -> crate::Result<SelfOwned<AlignedBytes<alignment::Page>, MutPage>> {
     panic!()
+  }
+
+  fn freelist_write(&self, page: &mut MutPage)  -> crate::Result<()> {
+    todo!()
+  }
+
+  fn freelist_size(&self) -> u64 {
+    todo!()
   }
 }
 
@@ -578,21 +593,20 @@ impl<'tx> DbLock for RwLockWriteGuard<'tx, DBShared> {
     self.records.lock().freelist.freed(pg_id)
   }
 
-  fn freelist_size(&self) -> u64 {
-    self.records.lock().freelist.size()
-  }
-
-  fn freelist_write(&self, page: &mut MutPage) -> crate::Result<()> {
-    self.records.lock().freelist.write(MappedFreeListPage::mut_into(page));
-    Ok(())
-  }
-
   fn freelist_free_page(&self, txid: TxId, p: &Page) {
     self.records.lock().freelist.free(txid, p)
   }
 
   fn allocate(&self, tx_id: TxId, count: u64) -> crate::Result<SelfOwned<AlignedBytes<alignment::Page>, MutPage>> {
     DBShared::allocate(self, tx_id, count)
+  }
+
+  fn freelist_write(&self, page: &mut MutPage) -> crate::Result<()> {
+    self.records.lock().freelist_write(page)
+  }
+
+  fn freelist_size(&self) -> u64 {
+    self.records.lock().freelist_size()
   }
 }
 
