@@ -313,7 +313,6 @@ pub(crate) trait TxRwIAPI<'tx>: TxIAPI<'tx> {
 
   /// See [TxRwApi::delete_bucket]
   fn api_delete_bucket(self, name: &[u8]) -> crate::Result<()>;
-  fn commit_freelist(self) -> crate::Result<()>;
 }
 
 pub(crate) struct TxImplTODORenameMe {}
@@ -507,39 +506,6 @@ impl<'tx> TxRwIAPI<'tx> for TxRwCell<'tx> {
     root_bucket.api_delete_bucket(name)
   }
 
-  fn commit_freelist(self) -> crate::Result<()> {
-    // Allocate new pages for the new free list. This will overestimate
-    // the size of the freelist but not underestimate the size (which would be bad).
-    let (freelist_size, page_size) = {
-      let tx = self.cell.0.borrow();
-      (tx.r.db.freelist_size(), tx.r.page_size)
-    };
-
-    let mut p = match self.allocate(((freelist_size / page_size as u64 ) + 1) as usize) {
-      Ok(p) => p,
-      Err(e) => {
-        let _ = self.rollback();
-        return Err(e);
-      }
-    };
-
-    let pg_id = p.id;
-    let write_result = {
-      let tx = self.cell.0.borrow_mut();
-      tx.r.db.freelist_write(&mut p)
-    };
-    match write_result {
-      Ok(_) => {}
-      Err(e) => {
-        let _ = self.rollback();
-        return Err(e);
-      }
-    }
-    let mut tx = self.cell.0.borrow_mut();
-    tx.r.meta.set_free_list(p.id);
-    tx.w.pages.insert(pg_id, p);
-    Ok(())
-  }
 }
 
 pub struct TxImpl<'tx> {
@@ -736,6 +702,25 @@ impl<'tx> TxRwImpl<'tx> {
       uninit.assume_init()
     }
   }
+
+
+  fn commit_freelist(&mut self) -> crate::Result<()> {
+    // Allocate new pages for the new free list. This will overestimate
+    // the size of the freelist but not underestimate the size (which would be bad).
+    let (freelist_size, page_size) = {
+      let tx = self.tx.cell.0.borrow();
+      (tx.r.db.freelist_size(), tx.r.page_size)
+    };
+
+    let mut p = self.tx.allocate(((freelist_size / page_size as u64 ) + 1) as usize)?;
+
+    let pg_id = p.id;
+    let mut tx = self.tx.cell.0.borrow_mut();
+    self.lock.freelist_write(&mut p)?;
+    tx.r.meta.set_free_list(p.id);
+    tx.w.pages.insert(pg_id, p);
+    Ok(())
+  }
 }
 
 impl<'tx> Drop for TxRwImpl<'tx> {
@@ -816,7 +801,7 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
     self.tx.api_delete_bucket(name)
   }
 
-  fn commit(self) -> crate::Result<()> {
+  fn commit(mut self) -> crate::Result<()> {
     let start_time = Instant::now();
     self.tx.root_bucket().rebalance();
     {
@@ -852,7 +837,14 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
     }
     // TODO: implement noFreelistSync
 
-    self.tx.commit_freelist()?;
+    //TODO: move to TxRwImpl
+    match self.commit_freelist() {
+      Ok(_) => {}
+      Err(e) => {
+        let _ = self.rollback();
+        return Err(e);
+      }
+    }
 
     if self.tx.meta().pgid() > opgid {
 
