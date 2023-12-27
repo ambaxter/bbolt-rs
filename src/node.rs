@@ -483,20 +483,25 @@ impl<'tx> NodeRwCell<'tx> {
     // Split nodes into appropriate sizes. The first node will always be n.
     let nodes = self.split(page_size, bump, parent_children);
     for node in nodes {
-      let mut node_borrow = node.cell.borrow_mut();
-      // Add node's page to the freelist if it's not new.
-      if node_borrow.pgid > ZERO_PGID {
-        tx.freelist_free_page(tx.api_id(), &tx.page(node_borrow.pgid));
-        node_borrow.pgid = ZERO_PGID;
-      }
+      let node_size = {
+        let mut node_borrow = node.cell.borrow_mut();
+        // Add node's page to the freelist if it's not new.
+        if node_borrow.pgid > ZERO_PGID {
+          tx.freelist_free_page(tx.api_id(), &tx.page(node_borrow.pgid));
+          node_borrow.pgid = ZERO_PGID;
+        }
+        node_borrow.size()
+      };
+
 
       // Allocate contiguous space for the node.
-      let mut p = tx.allocate((node_borrow.size() + tx.page_size() - 1) / tx.page_size())?;
+      let mut p = tx.allocate((node_size + tx.page_size() - 1) / tx.page_size())?;
 
       // Write the node.
       if p.id >= tx.meta().pgid() {
         panic!("pgid {} above high water mark {}", p.id, tx.meta().pgid())
       }
+      let mut node_borrow = self.cell.borrow_mut();
 
       node_borrow.pgid = p.id;
       node_borrow.write(&mut p);
@@ -659,15 +664,17 @@ impl<'tx> NodeRwCell<'tx> {
   /// own_in causes the node to copy all its inode key/value references to heap memory.
   /// This is required when the mmap is reallocated so inodes are not pointing to stale data.
   pub(crate) fn own_in(self: NodeRwCell<'tx>, bump: &'tx Bump) {
-    let mut self_borrow = self.cell.borrow_mut();
-    self_borrow.key.own_in(bump);
-    for inode in &mut self_borrow.inodes {
-      inode.own_in(bump);
-    }
+    {
+      let mut self_borrow = self.cell.borrow_mut();
+      self_borrow.key.own_in(bump);
+      for inode in &mut self_borrow.inodes {
+        inode.own_in(bump);
+      }
 
-    // Recursively own_in children.
-    for child in &self_borrow.children {
-      child.own_in(bump);
+      // Recursively own_in children.
+      for child in &self_borrow.children {
+        child.own_in(bump);
+      }
     }
 
     // Update statistics.
