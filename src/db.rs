@@ -11,19 +11,20 @@ use crate::common::self_owned::SelfOwned;
 use crate::common::tree::MappedLeafPage;
 use crate::common::{PgId, TxId};
 use crate::freelist::{Freelist, MappedFreeListPage};
-use crate::tx::{TxCell, TxImpl, TxRef, TxRwCell, TxRwImpl, TxRwRef, TxStats};
+use crate::tx::{TxCell, TxIAPI, TxImpl, TxRef, TxRwCell, TxRwImpl, TxRwRef, TxStats};
 use crate::{Error, TxApi, TxRwApi};
 use aligners::{alignment, Aligned, AlignedBytes};
 use bumpalo::Bump;
 use fs4::FileExt;
 use itertools::{min, Itertools};
+use lockfree_object_pool::LinearObjectPool;
 use memmap2::{Advice, MmapOptions, MmapRaw};
 use parking_lot::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use size::consts::MEGABYTE;
 use std::cell::{RefCell, RefMut};
 use std::fs::File;
 use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
-use std::ops::{Deref, Sub};
+use std::ops::{Deref, DerefMut, Sub};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::{fs, io, mem};
@@ -68,7 +69,7 @@ where
 
   /// Stats retrieves ongoing performance stats for the database.
   /// This is only updated when a transaction closes.
-  fn stats(&self) -> DbStats;
+  fn stats(&self) -> Arc<RwLock<DbStats>>;
 }
 
 pub trait DbRwAPI: DbApi {
@@ -154,24 +155,18 @@ impl Sub<&DbStats> for &DbStats {
 
 pub struct DbInfo {}
 
-pub struct DBRecords {
-  bump_pool: Vec<Bump>,
+pub struct TxRecords {
   txs: Vec<TxId>,
   rwtx: Option<TxId>,
   freelist: Freelist,
-  stats: DbStats,
-  page_pool: Vec<AlignedBytes<alignment::Page>>,
 }
 
-impl DBRecords {
-  fn new(freelist: Freelist) -> DBRecords {
-    DBRecords {
-      bump_pool: vec![],
+impl TxRecords {
+  fn new(freelist: Freelist) -> TxRecords {
+    TxRecords {
       txs: vec![],
       rwtx: None,
       freelist,
-      stats: Default::default(),
-      page_pool: vec![],
     }
   }
 
@@ -192,56 +187,6 @@ impl DBRecords {
     }
     self.freelist.release_range(minid, TxId(0xFFFFFFFFFFFFFFFF));
   }
-
-  pub(crate) fn remove_rw_tx<'tx>(
-    &mut self, page_size: usize, rem_tx: TxId, tx_stats: TxStats, mut bump: Bump,
-  ) {
-    let free_list_free_n = self.freelist.free_count();
-    let free_list_pending_n = self.freelist.pending_count();
-    let free_list_alloc = self.freelist.size();
-
-    bump.reset();
-    self.bump_pool.push(bump);
-
-    self.rwtx = None;
-
-    self.stats.free_page_n = free_list_free_n as i64;
-    self.stats.pending_page_n = free_list_pending_n as i64;
-    self.stats.free_alloc = ((free_list_free_n + free_list_pending_n) * page_size as u64) as i64;
-    self.stats.free_list_in_use = free_list_alloc as i64;
-    self.stats.tx_stats += tx_stats;
-  }
-
-  pub(crate) fn remove_tx<'tx>(&mut self, rem_tx: TxId, tx_stats: TxStats, mut bump: Bump) {
-    if let Some(pos) = self.txs.iter().position(|tx| *tx == rem_tx) {
-      self.txs.swap_remove(pos);
-    }
-
-    bump.reset();
-    self.bump_pool.push(bump);
-
-    let n = self.txs.len();
-    self.stats.open_tx_n = n as i64;
-    self.stats.tx_stats += tx_stats;
-  }
-
-  pub(crate) fn pop_read_bump(&mut self) -> Bump {
-    self.bump_pool.pop().unwrap_or_default()
-  }
-
-
-  pub(crate) fn freelist_size(&self) -> u64 {
-    self.freelist.size()
-  }
-
-  pub(crate) fn freelist_write(&self, page: &mut MutPage) -> crate::Result<()> {
-    self.freelist.write(MappedFreeListPage::mut_into(page));
-    Ok(())
-  }
-
-  pub(crate) fn freelist_free_page(&mut self, txid: TxId, p: &Page) {
-    self.freelist.free(txid, p)
-  }
 }
 
 pub struct DBBackend {
@@ -251,6 +196,7 @@ pub struct DBBackend {
   mmap: Option<MmapRaw>,
   meta0: MappedMetaPage,
   meta1: MappedMetaPage,
+  page_pool: Vec<AlignedBytes<alignment::Page>>,
   alloc_size: u64,
   /// current on disk file size
   file_size: u64,
@@ -433,11 +379,10 @@ impl DBBackend {
     size = DBBackend::mmap_size(self.page_size, size)?;
     if let Some(mmap) = self.mmap.take() {
       mmap.unlock()?;
+      tx.cell.1.own_in();
     }
 
-    tx.cell.1.own_in();
-
-    let mmap = MmapRaw::map_raw(&self.file)?;
+    let mmap = MmapOptions::new().len(size as usize).map_raw(&self.file)?;
     mmap.advise(Advice::Random)?;
     if self.use_mlock {
       mmap.lock()?;
@@ -454,6 +399,7 @@ impl DBBackend {
     }
 
     self.mmap = Some(mmap);
+    self.data_size = size;
     Ok(())
   }
 
@@ -461,6 +407,10 @@ impl DBBackend {
     let page_addr = pg_id.0 as usize * self.page_size;
     let page_ptr = unsafe { self.mmap.as_ref().unwrap().as_ptr().add(page_addr) };
     RefPage::new(page_ptr)
+  }
+
+  pub(crate) fn grow(&self, size: u64) -> crate::Result<()> {
+    todo!()
   }
 }
 
@@ -478,19 +428,115 @@ impl Drop for DBBackend {
   }
 }
 
+pub(crate) trait DbIAPI<'tx>: 'tx {
+  fn page(&self, pg_id: PgId) -> RefPage<'tx>;
+
+  fn is_page_free(&self, pg_id: PgId) -> bool;
+
+  fn remove_tx(&self, rem_tx: TxId, tx_stats: TxStats);
+}
+
+pub(crate) trait DbRwIAPI<'tx>: DbIAPI<'tx> {
+  fn free_page(&self, txid: TxId, p: &Page);
+
+  fn free_pages(&mut self);
+
+  fn allocate(
+    &mut self, tx: TxRwCell<'tx>, count: u64,
+  ) -> crate::Result<SelfOwned<AlignedBytes<alignment::Page>, MutPage<'tx>>>;
+
+  fn grow(&mut self, size: u64) -> crate::Result<()>;
+
+  fn commit_freelist(
+    &mut self, tx: TxRwCell<'tx>,
+  ) -> crate::Result<SelfOwned<AlignedBytes<alignment::Page>, MutPage<'tx>>>;
+
+  fn remove_rw_tx(&mut self, rem_tx: TxId, tx_stats: TxStats);
+}
+
+pub(crate) enum DbGuard<'tx> {
+  Read(RwLockReadGuard<'tx, DBShared>),
+  Write(RefCell<RwLockWriteGuard<'tx, DBShared>>),
+}
+
+impl<'tx> DbGuard<'tx> {
+  pub(crate) fn get_rw(&self) -> Option<RefMut<DBShared>> {
+    match self {
+      DbGuard::Read(_) => None,
+      DbGuard::Write(guard) => Some(RefMut::map(guard.borrow_mut(), |g| &mut **g)),
+    }
+  }
+}
+
+impl<'tx> DbIAPI<'tx> for DbGuard<'tx> {
+  fn page(&self, pg_id: PgId) -> RefPage<'tx> {
+    match self {
+      DbGuard::Read(guard) => guard.page(pg_id),
+      DbGuard::Write(guard) => guard.borrow().page(pg_id),
+    }
+  }
+
+  fn is_page_free(&self, pg_id: PgId) -> bool {
+    match self {
+      DbGuard::Read(guard) => guard.is_page_free(pg_id),
+      DbGuard::Write(guard) => guard.borrow().is_page_free(pg_id),
+    }
+  }
+
+  fn remove_tx(&self, rem_tx: TxId, tx_stats: TxStats) {
+    match self {
+      DbGuard::Read(guard) => guard.remove_tx(rem_tx, tx_stats),
+      DbGuard::Write(guard) => guard.borrow().remove_tx(rem_tx, tx_stats),
+    }
+  }
+}
+
 // In theory things are wired up ok. Here's hoping Miri is happy
 pub struct DBShared {
-  pub(crate) records: Mutex<DBRecords>,
+  pub(crate) stats: Arc<RwLock<DbStats>>,
+  pub(crate) records: Mutex<TxRecords>,
   pub(crate) backend: DBBackend,
 }
 
-impl DBShared {
-  fn allocate<'tx>(
-    &self, tx_id: TxId, count: u64,
+impl<'tx> DbIAPI<'tx> for DBShared {
+  fn page(&self, pg_id: PgId) -> RefPage<'tx> {
+    self.backend.page(pg_id)
+  }
+
+  fn is_page_free(&self, pg_id: PgId) -> bool {
+    self.records.lock().freelist.freed(pg_id)
+  }
+
+  fn remove_tx(&self, rem_tx: TxId, tx_stats: TxStats) {
+    let mut records = self.records.lock();
+    let mut stats = self.stats.write();
+    if let Some(pos) = records.txs.iter().position(|tx| *tx == rem_tx) {
+      records.txs.swap_remove(pos);
+    }
+
+    let n = records.txs.len();
+    stats.open_tx_n = n as i64;
+    stats.tx_stats += tx_stats;
+  }
+}
+
+impl<'tx> DbRwIAPI<'tx> for DBShared {
+  fn free_pages(&mut self) {
+    todo!()
+  }
+
+  fn free_page(&self, txid: TxId, p: &Page) {
+    self.records.lock().freelist.free(txid, p)
+  }
+
+  fn allocate(
+    &mut self, tx: TxRwCell, count: u64,
   ) -> crate::Result<SelfOwned<AlignedBytes<alignment::Page>, MutPage<'tx>>> {
+    let tx_id = tx.api_id();
+    let high_water = tx.meta().pgid();
     let mut r = self.records.lock();
-    let bytes = if count == 1 && !r.page_pool.is_empty() {
-      r.page_pool.pop().unwrap()
+    let bytes = if count == 1 && !self.backend.page_pool.is_empty() {
+      self.backend.page_pool.pop().unwrap()
     } else {
       AlignedBytes::new_zeroed(count as usize * self.backend.page_size)
     };
@@ -506,6 +552,14 @@ impl DBShared {
     // TODO: How do we signal back that the file is at a new high water mark?
     // TODO: When remapping the file how do we signal that we should own/dereference before we go further?
     // I think we can just pass in the tx when we grow the db size
+
+    // Resize mmap() if we're at the end.
+    mut_page.id = high_water;
+    let min_size = (high_water.0 + count + 1) * self.backend.page_size as u64;
+    if min_size > self.backend.data_size {
+      self.backend.mmap(min_size, tx)?;
+    }
+    todo!("set pgid when there is none existing");
     Ok(mut_page)
   }
 
@@ -542,81 +596,54 @@ impl DBShared {
     self.backend.mmap = Some(mmap);
     Ok(())
   }
-}
 
-pub(crate) trait DbLock {
-  fn page(&self, pg_id: PgId) -> RefPage;
+  fn commit_freelist(
+    &mut self, tx: TxRwCell<'tx>,
+  ) -> crate::Result<SelfOwned<AlignedBytes<alignment::Page>, MutPage<'tx>>> {
+    // Allocate new pages for the new free list. This will overestimate
+    // the size of the freelist but not underestimate the size (which would be bad).
+    let count = {
+      let records = self.records.lock();
+      let page_size = self.backend.page_size;
+      let freelist_size = records.freelist.size();
+      (freelist_size / page_size as u64) + 1
+    };
 
-  fn page_is_free(&self, pg_id: PgId) -> bool;
+    let mut freelist_page = self.allocate(tx, count)?;
 
-  fn freelist_free_page(&self, txid: TxId, p: &Page);
+    let records = self.records.lock();
+    records
+      .freelist
+      .write(MappedFreeListPage::mut_into(&mut freelist_page));
 
-  fn allocate(&self, tx_id: TxId, count: u64) -> crate::Result<SelfOwned<AlignedBytes<alignment::Page>, MutPage>>;
-
-  fn freelist_write(&self, page: &mut MutPage) -> crate::Result<()>;
-
-  fn freelist_size(&self) -> u64;
-}
-
-impl<'tx> DbLock for RwLockReadGuard<'tx, DBShared> {
-  fn page(&self, pg_id: PgId) -> RefPage {
-    self.backend.page(pg_id)
+    Ok(freelist_page)
   }
 
-  fn page_is_free(&self, pg_id: PgId) -> bool {
-    self.records.lock().freelist.freed(pg_id)
-  }
+  fn remove_rw_tx(&mut self, rem_tx: TxId, tx_stats: TxStats) {
+    let mut records = self.records.lock();
+    let mut stats = self.stats.write();
+    let page_size = self.backend.page_size;
 
-  fn freelist_free_page(&self, txid: TxId, p: &Page) {
-    panic!()
-  }
+    let free_list_free_n = records.freelist.free_count();
+    let free_list_pending_n = records.freelist.pending_count();
+    let free_list_alloc = records.freelist.size();
 
-  fn allocate(&self, tx_id: TxId, count: u64) -> crate::Result<SelfOwned<AlignedBytes<alignment::Page>, MutPage>> {
-    panic!()
-  }
+    records.rwtx = None;
 
-  fn freelist_write(&self, page: &mut MutPage)  -> crate::Result<()> {
-    todo!()
-  }
-
-  fn freelist_size(&self) -> u64 {
-    todo!()
-  }
-}
-
-impl<'tx> DbLock for RwLockWriteGuard<'tx, DBShared> {
-  fn page(&self, pg_id: PgId) -> RefPage {
-    self.backend.page(pg_id)
-  }
-
-  fn page_is_free(&self, pg_id: PgId) -> bool {
-    self.records.lock().freelist.freed(pg_id)
-  }
-
-  fn freelist_free_page(&self, txid: TxId, p: &Page) {
-    self.records.lock().freelist.free(txid, p)
-  }
-
-  fn allocate(&self, tx_id: TxId, count: u64) -> crate::Result<SelfOwned<AlignedBytes<alignment::Page>, MutPage>> {
-    DBShared::allocate(self, tx_id, count)
-  }
-
-  fn freelist_write(&self, page: &mut MutPage) -> crate::Result<()> {
-    self.records.lock().freelist_write(page)
-  }
-
-  fn freelist_size(&self) -> u64 {
-    self.records.lock().freelist_size()
+    stats.free_page_n = free_list_free_n as i64;
+    stats.pending_page_n = free_list_pending_n as i64;
+    stats.free_alloc = ((free_list_free_n + free_list_pending_n) * page_size as u64) as i64;
+    stats.free_list_in_use = free_list_alloc as i64;
+    stats.tx_stats += tx_stats;
   }
 }
-
-pub(crate) trait DbIAPI<'tx>: 'tx {}
-
-pub(crate) trait DbMutIAPI<'tx>: DbIAPI<'tx> {}
 
 #[derive(Clone)]
 pub struct DB {
+  // TODO: Save a single Bump for RW transactions with a size hint
+  bump_pool: Arc<LinearObjectPool<Bump>>,
   db: Arc<RwLock<DBShared>>,
+  stats: Arc<RwLock<DbStats>>,
 }
 unsafe impl Send for DB {}
 unsafe impl Sync for DB {}
@@ -660,6 +687,7 @@ impl DB {
       mmap: Some(mmap),
       meta0,
       meta1,
+      page_pool: vec![],
       alloc_size: DEFAULT_ALLOC_SIZE.bytes() as u64,
       file_size,
       data_size: 0,
@@ -672,13 +700,18 @@ impl DB {
     let freelist_page = MappedFreeListPage::coerce_ref(&refpage).unwrap();
     let freelist = freelist_page.read();
     let free_count = freelist.free_count();
-    let mut records = DBRecords::new(freelist);
-    records.stats.free_page_n = free_count as i64;
+    let mut records = TxRecords::new(freelist);
+    let mut stats = DbStats::default();
+    stats.free_page_n = free_count as i64;
+    let arc_stats = Arc::new(RwLock::new(stats));
     Ok(DB {
+      bump_pool: Arc::new(LinearObjectPool::new(|| Bump::new(), |b| b.reset())),
       db: Arc::new(RwLock::new(DBShared {
+        stats: arc_stats.clone(),
         records: Mutex::new(records),
         backend,
       })),
+      stats: arc_stats.clone(),
     })
   }
 
@@ -727,21 +760,23 @@ impl DbApi for DB {
   }
 
   fn begin<'tx>(&'tx self) -> Self::TxType<'tx> {
-    TxImpl::new(self.db.read())
+    let bump = self.bump_pool.pull_owned();
+    TxImpl::new(bump, self.db.read())
   }
 
   fn view<'tx, F: FnMut(TxRef<'tx>) -> crate::Result<()>>(
     &'tx self, mut f: F,
   ) -> crate::Result<()> {
-    let tx = TxImpl::new(self.db.read());
+    let bump = self.bump_pool.pull_owned();
+    let tx = TxImpl::new(bump, self.db.read());
     let tx_ref = tx.get_ref();
     let r = f(tx_ref);
     let _ = tx.rollback();
     r
   }
 
-  fn stats(&self) -> DbStats {
-    self.db.read().records.lock().stats
+  fn stats(&self) -> Arc<RwLock<DbStats>> {
+    self.stats.clone()
   }
 }
 
@@ -749,13 +784,15 @@ impl DbRwAPI for DB {
   type TxRwType<'tx> = TxRwImpl<'tx> where Self: 'tx;
 
   fn begin_mut<'tx>(&'tx mut self) -> Self::TxRwType<'tx> {
-    TxRwImpl::new(self.db.write())
+    let bump = self.bump_pool.pull_owned();
+    TxRwImpl::new(bump, self.db.write())
   }
 
   fn update<'tx, F: FnMut(TxRwRef<'tx>) -> crate::Result<()>>(
     &'tx mut self, mut f: F,
   ) -> crate::Result<()> {
-    let txrw = TxRwImpl::new(self.db.write());
+    let bump = self.bump_pool.pull_owned();
+    let txrw = TxRwImpl::new(bump, self.db.write());
     let tx_ref = txrw.get_ref();
     match f(tx_ref) {
       Ok(_) => txrw.commit(),

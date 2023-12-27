@@ -8,10 +8,11 @@ use crate::common::page::{MutPage, Page, PageInfo, RefPage};
 use crate::common::self_owned::SelfOwned;
 use crate::common::{BVec, HashMap, PgId, SplitRef, TxId};
 use crate::cursor::{CursorImpl, CursorRwIAPI, CursorRwImpl, InnerCursor};
-use crate::db::{DBShared, DbLock};
+use crate::db::{DBShared, DbGuard, DbIAPI, DbRwIAPI};
 use crate::freelist::Freelist;
 use crate::node::NodeRwCell;
 use crate::{BucketApi, CursorApi, CursorRwApi};
+use aligners::{alignment, AlignedBytes};
 use bumpalo::Bump;
 use parking_lot::{Mutex, RwLockReadGuard, RwLockWriteGuard};
 use std::borrow::Cow;
@@ -24,7 +25,7 @@ use std::ptr::{addr_of, addr_of_mut};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 use std::{cell, mem};
-use aligners::{AlignedBytes, alignment};
+use lockfree_object_pool::LinearOwnedReusable;
 
 pub trait TxApi<'tx> {
   type CursorType: CursorApi<'tx>;
@@ -279,7 +280,7 @@ pub(crate) trait TxIAPI<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
     let count = p.count as u64;
     let overflow_count = p.overflow as u64;
 
-    let t = if r.db.page_is_free(id) {
+    let t = if r.db.is_page_free(id) {
       Cow::Borrowed("free")
     } else {
       p.page_type()
@@ -300,7 +301,9 @@ pub(crate) trait TxRwIAPI<'tx>: TxIAPI<'tx> {
   type CursorRwType: CursorRwIAPI<'tx>;
   fn freelist_free_page(self, txid: TxId, p: &Page);
 
-  fn allocate(self, count: usize) -> crate::Result<SelfOwned<AlignedBytes<alignment::Page>, MutPage<'tx>>>;
+  fn allocate(
+    self, count: usize,
+  ) -> crate::Result<SelfOwned<AlignedBytes<alignment::Page>, MutPage<'tx>>>;
 
   /// See [TxRwApi::cursor_mut]
   fn api_cursor_mut(self) -> Self::CursorRwType;
@@ -328,7 +331,7 @@ impl TxImplTODORenameMe {
 pub struct TxR<'tx> {
   b: &'tx Bump,
   page_size: usize,
-  db: &'tx dyn DbLock,
+  db: &'tx DbGuard<'tx>,
   pub(crate) stats: TxStats,
   meta: Meta,
   is_rollback: bool,
@@ -471,12 +474,29 @@ impl<'tx> TxRwIAPI<'tx> for TxRwCell<'tx> {
   type CursorRwType = InnerCursor<'tx, Self, Self::BucketType>;
 
   fn freelist_free_page(self, txid: TxId, p: &Page) {
-    self.cell.0.borrow().r.db.freelist_free_page(txid, p)
+    self
+      .cell
+      .0
+      .borrow()
+      .r
+      .db
+      .get_rw()
+      .unwrap()
+      .free_page(txid, p)
   }
 
-  fn allocate(self, count: usize) -> crate::Result<SelfOwned<AlignedBytes<alignment::Page>, MutPage<'tx>>> {
-    let tx_id = self.cell.1.api_tx().api_id();
-    let meta_page = self.cell.0.borrow().r.db.allocate(tx_id, count as u64)?;
+  fn allocate(
+    self, count: usize,
+  ) -> crate::Result<SelfOwned<AlignedBytes<alignment::Page>, MutPage<'tx>>> {
+    let meta_page = self
+      .cell
+      .0
+      .borrow()
+      .r
+      .db
+      .get_rw()
+      .unwrap()
+      .allocate(self, count as u64)?;
     let pg_id = meta_page.id;
     {
       let mut tx = self.cell.0.borrow_mut();
@@ -505,18 +525,16 @@ impl<'tx> TxRwIAPI<'tx> for TxRwCell<'tx> {
     let root_bucket = self.root_bucket();
     root_bucket.api_delete_bucket(name)
   }
-
 }
 
 pub struct TxImpl<'tx> {
-  bump: Pin<Box<Bump>>,
-  lock: Pin<Box<RwLockReadGuard<'tx, DBShared>>>,
+  bump: Pin<Box<LinearOwnedReusable<Bump>>>,
+  db: Pin<Box<DbGuard<'tx>>>,
   tx: Pin<Rc<TxCell<'tx>>>,
 }
 
 impl<'tx> TxImpl<'tx> {
-  pub(crate) fn new(lock: RwLockReadGuard<'tx, DBShared>) -> TxImpl<'tx> {
-    let bump = lock.records.lock().pop_read_bump();
+  pub(crate) fn new(bump: LinearOwnedReusable<Bump>, lock: RwLockReadGuard<'tx, DBShared>) -> TxImpl<'tx> {
     let meta = lock.backend.meta();
     let page_size = meta.page_size() as usize;
     let inline_bucket = meta.root();
@@ -525,13 +543,13 @@ impl<'tx> TxImpl<'tx> {
     unsafe {
       addr_of_mut!((*ptr).bump).write(Box::pin(bump));
       let bump = &(**addr_of!((*ptr).bump));
-      addr_of_mut!((*ptr).lock).write(Box::pin(lock));
-      let pager: &dyn DbLock = &(**addr_of!((*ptr).lock));
+      addr_of_mut!((*ptr).db).write(Box::pin(DbGuard::Read(lock)));
+      let db = &(**addr_of!((*ptr).db));
       let tx = Rc::new_cyclic(|weak| {
         let r = TxR {
           b: bump,
           page_size,
-          db: pager,
+          db,
           meta,
           stats: Default::default(),
           is_rollback: false,
@@ -558,10 +576,7 @@ impl<'tx> Drop for TxImpl<'tx> {
   fn drop(&mut self) {
     let tx_id = self.id();
     let stats = self.stats();
-    let mut swap_bump = Bump::with_capacity(0);
-    mem::swap(&mut swap_bump, &mut self.bump);
-    let mut records = self.lock.records.lock();
-    records.remove_tx(tx_id, stats, swap_bump);
+    self.db.remove_tx(tx_id, stats);
   }
 }
 
@@ -654,8 +669,8 @@ impl<'tx> TxApi<'tx> for TxRef<'tx> {
 }
 
 pub struct TxRwImpl<'tx> {
-  bump: Pin<Box<Bump>>,
-  lock: Pin<Box<RwLockWriteGuard<'tx, DBShared>>>,
+  bump: Pin<Box<LinearOwnedReusable<Bump>>>,
+  db: Pin<Box<DbGuard<'tx>>>,
   pub(crate) tx: Pin<Rc<TxRwCell<'tx>>>,
 }
 
@@ -666,8 +681,7 @@ impl<'tx> TxRwImpl<'tx> {
     }
   }
 
-  pub(crate) fn new(lock: RwLockWriteGuard<'tx, DBShared>) -> TxRwImpl<'tx> {
-    let bump = lock.records.lock().pop_read_bump();
+  pub(crate) fn new(bump: LinearOwnedReusable<Bump>, lock: RwLockWriteGuard<'tx, DBShared>) -> TxRwImpl<'tx> {
     let meta = lock.backend.meta();
     let page_size = meta.page_size() as usize;
     let inline_bucket = meta.root();
@@ -676,13 +690,13 @@ impl<'tx> TxRwImpl<'tx> {
     unsafe {
       addr_of_mut!((*ptr).bump).write(Box::pin(bump));
       let bump = &(**addr_of!((*ptr).bump));
-      addr_of_mut!((*ptr).lock).write(Box::pin(lock));
-      let pager: &dyn DbLock = &(**addr_of!((*ptr).lock));
+      addr_of_mut!((*ptr).db).write(Box::pin(DbGuard::Write(RefCell::new(lock))));
+      let db = &(**addr_of!((*ptr).db));
       let tx = Rc::new_cyclic(|weak| {
         let r = TxR {
           b: bump,
           page_size,
-          db: pager,
+          db,
           meta,
           stats: Default::default(),
           is_rollback: false,
@@ -703,22 +717,12 @@ impl<'tx> TxRwImpl<'tx> {
     }
   }
 
-
   fn commit_freelist(&mut self) -> crate::Result<()> {
-    // Allocate new pages for the new free list. This will overestimate
-    // the size of the freelist but not underestimate the size (which would be bad).
-    let (freelist_size, page_size) = {
-      let tx = self.tx.cell.0.borrow();
-      (tx.r.db.freelist_size(), tx.r.page_size)
-    };
-
-    let mut p = self.tx.allocate(((freelist_size / page_size as u64 ) + 1) as usize)?;
-
-    let pg_id = p.id;
+    let freelist_page = self.db.get_rw().unwrap().commit_freelist(*self.tx)?;
+    let pg_id = freelist_page.id;
     let mut tx = self.tx.cell.0.borrow_mut();
-    self.lock.freelist_write(&mut p)?;
-    tx.r.meta.set_free_list(p.id);
-    tx.w.pages.insert(pg_id, p);
+    tx.r.meta.set_free_list(pg_id);
+    tx.w.pages.insert(pg_id, freelist_page);
     Ok(())
   }
 }
@@ -727,12 +731,7 @@ impl<'tx> Drop for TxRwImpl<'tx> {
   fn drop(&mut self) {
     let tx_id = self.id();
     let stats = self.stats();
-    let mut swap_bump = Bump::with_capacity(0);
-    mem::swap(&mut swap_bump, &mut self.bump);
-    let mut records = self.lock.records.lock();
-
-    // TODO: Reload freelist
-    records.remove_tx(tx_id, stats, swap_bump);
+    self.db.get_rw().unwrap().remove_rw_tx(tx_id, stats);
   }
 }
 
@@ -832,8 +831,7 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
       //TODO: implement pgidNoFreeList
       let freelist_pg = tx.r.db.page(tx.r.meta.free_list());
       let tx_id = tx.r.meta.txid();
-      self.lock.records.lock().freelist_free_page(tx_id, &freelist_pg);
-
+      self.db.get_rw().unwrap().free_page(tx_id, &freelist_pg);
     }
     // TODO: implement noFreelistSync
 
@@ -846,8 +844,29 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
       }
     }
 
-    if self.tx.meta().pgid() > opgid {
-
+    let new_pgid = self.tx.meta().pgid();
+    let page_size = self.tx.meta().page_size();
+    let tx = self.tx.cell.0.borrow();
+    for page in tx.w.pages.values() {
+      assert!(page.id.0 > 1, "Invalid page id");
+      println!("id: {}", page.id);
+    }
+    if new_pgid > opgid {
+      match self
+        .db
+        .get_rw()
+        .unwrap()
+        .grow((new_pgid.0 + 1) * page_size as u64)
+      {
+        Ok(_) => {
+          println!("grow ok")
+        }
+        Err(e) => {
+          println!("grow error: {:?}", e)
+        }
+      }
+    } else {
+      println!("No grow");
     }
     todo!()
   }

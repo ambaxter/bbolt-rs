@@ -22,6 +22,7 @@ thiserror = "1.0.51"
 anyhow = "1.0"
 fs4 = { version = "0.7.0", features = ["sync"] }
 parking_lot = "0.12.1"
+lockfree-object-pool = "0.1"
 
 
 [dev-dependencies]
