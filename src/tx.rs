@@ -488,15 +488,10 @@ impl<'tx> TxRwIAPI<'tx> for TxRwCell<'tx> {
   fn allocate(
     self, count: usize,
   ) -> crate::Result<SelfOwned<AlignedBytes<alignment::Page>, MutPage<'tx>>> {
-    let meta_page = self
-      .cell
-      .0
-      .borrow()
-      .r
-      .db
-      .get_rw()
-      .unwrap()
-      .allocate(self, count as u64)?;
+    let mut db = {
+      self.cell.0.borrow().r.db.get_rw().unwrap()
+    };
+    let meta_page = db.allocate(self, count as u64)?;
     let pg_id = meta_page.id;
     {
       let mut tx = self.cell.0.borrow_mut();
