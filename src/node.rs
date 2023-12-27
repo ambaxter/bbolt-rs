@@ -493,7 +493,6 @@ impl<'tx> NodeRwCell<'tx> {
         node_borrow.size()
       };
 
-
       // Allocate contiguous space for the node.
       let mut p = tx.allocate((node_size + tx.page_size() - 1) / tx.page_size())?;
 
@@ -664,21 +663,19 @@ impl<'tx> NodeRwCell<'tx> {
   /// own_in causes the node to copy all its inode key/value references to heap memory.
   /// This is required when the mmap is reallocated so inodes are not pointing to stale data.
   pub(crate) fn own_in(self: NodeRwCell<'tx>, bump: &'tx Bump) {
-    {
-      let mut self_borrow = self.cell.borrow_mut();
-      self_borrow.key.own_in(bump);
-      for inode in &mut self_borrow.inodes {
-        inode.own_in(bump);
-      }
+    let mut self_borrow = self.cell.borrow_mut();
+    self_borrow.key.own_in(bump);
+    for inode in &mut self_borrow.inodes {
+      inode.own_in(bump);
+    }
 
-      // Recursively own_in children.
-      for child in &self_borrow.children {
-        child.own_in(bump);
-      }
+    // Recursively own_in children.
+    for child in &self_borrow.children {
+      child.own_in(bump);
     }
 
     // Update statistics.
-    self.cell.borrow().bucket.api_tx().mut_stats().node_deref += 1;
+    self_borrow.bucket.api_tx().mut_stats().node_deref += 1;
   }
 
   /// free adds the node's underlying page to the freelist.

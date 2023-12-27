@@ -1,9 +1,10 @@
+use crate::arch::size::MAX_ALLOC_SIZE;
 use crate::bucket::{
   BucketCell, BucketIAPI, BucketImpl, BucketRW, BucketRwCell, BucketRwIAPI, BucketRwImpl,
 };
 use crate::common::defaults::DEFAULT_PAGE_SIZE;
 use crate::common::memory::{BCell, LCell};
-use crate::common::meta::Meta;
+use crate::common::meta::{MappedMetaPage, Meta, MetaPage};
 use crate::common::page::{MutPage, Page, PageInfo, RefPage};
 use crate::common::self_owned::SelfOwned;
 use crate::common::{BVec, HashMap, PgId, SplitRef, TxId};
@@ -14,6 +15,7 @@ use crate::node::NodeRwCell;
 use crate::{BucketApi, CursorApi, CursorRwApi};
 use aligners::{alignment, AlignedBytes};
 use bumpalo::Bump;
+use lockfree_object_pool::LinearOwnedReusable;
 use parking_lot::{Mutex, RwLockReadGuard, RwLockWriteGuard};
 use std::borrow::Cow;
 use std::cell::{Ref, RefCell, RefMut};
@@ -25,8 +27,8 @@ use std::ptr::{addr_of, addr_of_mut};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 use std::{cell, mem};
-use lockfree_object_pool::LinearOwnedReusable;
-use crate::arch::size::MAX_ALLOC_SIZE;
+use std::alloc::Layout;
+use std::slice::from_raw_parts_mut;
 
 pub trait TxApi<'tx> {
   type CursorType: CursorApi<'tx>;
@@ -319,6 +321,8 @@ pub(crate) trait TxRwIAPI<'tx>: TxIAPI<'tx> {
   fn api_delete_bucket(self, name: &[u8]) -> crate::Result<()>;
 
   fn write(self) -> crate::Result<()>;
+
+  fn write_meta(self) -> crate::Result<()>;
 }
 
 pub(crate) struct TxImplTODORenameMe {}
@@ -344,7 +348,7 @@ pub struct TxR<'tx> {
 pub struct TxW<'tx> {
   pages: HashMap<'tx, PgId, SelfOwned<AlignedBytes<alignment::Page>, MutPage<'tx>>>,
   //TODO: We leak memory when this drops. Need special handling here
-  commit_handlers: BVec<'tx, Box<dyn FnMut()>>,
+  commit_handlers: BVec<'tx, Box<dyn Fn()>>,
   p: PhantomData<&'tx u8>,
 }
 
@@ -491,9 +495,7 @@ impl<'tx> TxRwIAPI<'tx> for TxRwCell<'tx> {
   fn allocate(
     self, count: usize,
   ) -> crate::Result<SelfOwned<AlignedBytes<alignment::Page>, MutPage<'tx>>> {
-    let mut db = {
-      self.cell.0.borrow().r.db.get_rw().unwrap()
-    };
+    let mut db = { self.cell.0.borrow().r.db.get_rw().unwrap() };
     let meta_page = db.allocate(self, count as u64)?;
     let pg_id = meta_page.id;
     {
@@ -563,9 +565,11 @@ impl<'tx> TxRwIAPI<'tx> for TxRwCell<'tx> {
         offset += size as u64;
         written += size;
       }
-
     }
+
+    // TODO: skip fsync?
     db.fsync()?;
+
     for page in pages.into_iter() {
       if page.overflow == 0 {
         let mut bytes = page.into_owner();
@@ -574,7 +578,30 @@ impl<'tx> TxRwIAPI<'tx> for TxRwCell<'tx> {
       }
     }
     Ok(())
+  }
 
+  fn write_meta(self) -> crate::Result<()> {
+
+    let mut r = self.split_r_mut();
+    let page_size = r.page_size;
+
+    let layout = Layout::from_size_align(page_size, mem::align_of::<MetaPage>() ).unwrap();
+    let ptr = r.b.alloc_layout(layout);
+
+    let mut meta_page = unsafe {MappedMetaPage::new(ptr.as_ptr())};
+    r.meta.write(&mut meta_page);
+
+    let mut db = r.db.get_rw().unwrap();
+    let offset = meta_page.page.id.0 * page_size as u64;
+    let buf = unsafe {from_raw_parts_mut(ptr.as_ptr(), page_size)};
+    db.write_at(buf, offset)?;
+
+    //TODO: Ignore sync
+    db.fsync()?;
+
+    r.stats.write += 1;
+
+    Ok(())
   }
 }
 
@@ -585,7 +612,9 @@ pub struct TxImpl<'tx> {
 }
 
 impl<'tx> TxImpl<'tx> {
-  pub(crate) fn new(bump: LinearOwnedReusable<Bump>, lock: RwLockReadGuard<'tx, DBShared>) -> TxImpl<'tx> {
+  pub(crate) fn new(
+    bump: LinearOwnedReusable<Bump>, lock: RwLockReadGuard<'tx, DBShared>,
+  ) -> TxImpl<'tx> {
     let meta = lock.backend.meta();
     let page_size = meta.page_size() as usize;
     let inline_bucket = meta.root();
@@ -732,7 +761,9 @@ impl<'tx> TxRwImpl<'tx> {
     }
   }
 
-  pub(crate) fn new(bump: LinearOwnedReusable<Bump>, lock: RwLockWriteGuard<'tx, DBShared>) -> TxRwImpl<'tx> {
+  pub(crate) fn new(
+    bump: LinearOwnedReusable<Bump>, lock: RwLockWriteGuard<'tx, DBShared>,
+  ) -> TxRwImpl<'tx> {
     let meta = lock.backend.meta();
     let page_size = meta.page_size() as usize;
     let inline_bucket = meta.root();
@@ -921,10 +952,7 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
     }
     let start_time = Instant::now();
     match self.tx.write() {
-      Ok(_) => {
-        let mut stats = self.tx.mut_stats();
-        stats.spill_time += Instant::now().duration_since(start_time);
-      }
+      Ok(_) => {}
       Err(e) => {
         let _ = self.tx.rollback();
         return Err(e);
@@ -933,11 +961,22 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
 
     // TODO: Add strict mode
 
-    todo!("writeMeta");
+    match self.tx.write_meta() {
+      Ok(_) => {
+        let mut stats = self.tx.mut_stats();
+        stats.write_time += Instant::now().duration_since(start_time);
+      }
+      Err(e) => {
+        let _ = self.rollback();
+        return Err(e);
+      }
+    }
 
+    for f in &self.tx.split_r_ow().1.unwrap().commit_handlers {
+      f();
+    }
 
     Ok(())
-
   }
 }
 

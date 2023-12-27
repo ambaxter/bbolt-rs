@@ -30,7 +30,9 @@ impl<O: Unpin, T> SelfOwned<O, T> {
     }
   }
 
-  pub fn ref_owner(&self) -> &O { & self.owner }
+  pub fn ref_owner(&self) -> &O {
+    &self.owner
+  }
   pub fn into_owner(self) -> O {
     *Pin::into_inner(self.owner)
   }

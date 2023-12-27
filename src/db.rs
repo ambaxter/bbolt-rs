@@ -643,7 +643,11 @@ impl<'tx> DbRwIAPI<'tx> for DBShared {
   }
 
   fn write_at(&mut self, buf: &[u8], offset: u64) -> crate::Result<usize> {
-    self.backend.file.seek(SeekFrom::Start(offset)).map_err(|e| Error::IO(e))?;
+    self
+      .backend
+      .file
+      .seek(SeekFrom::Start(offset))
+      .map_err(|e| Error::IO(e))?;
     self.backend.file.write(buf).map_err(|e| Error::IO(e))
   }
 

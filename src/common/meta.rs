@@ -43,7 +43,7 @@ impl Meta {
   }
 
   /// write writes the meta onto a page.
-  pub fn write(&mut self, mp: &mut MetaPage) {
+  pub fn write(&self, mp: &mut MetaPage) {
     if self.root.root() >= self.pgid {
       panic!(
         "root bucket pgid ({}) above high water mark ({})",
@@ -59,9 +59,9 @@ impl Meta {
     // Page id is either going to be 0 or 1 which we can determine by the transaction ID.
     mp.page.id = PgId(self.txid.0 % 2);
     mp.page.set_meta();
-    // Calculate the checksum.
-    self.checksum = self.sum64();
     mp.meta = *self;
+    // Calculate the checksum.
+    mp.meta.set_checksum(mp.meta.sum64());
   }
 
   /// generates the checksum for the meta.
