@@ -649,7 +649,12 @@ impl<'tx> DbRwIAPI<'tx> for DBShared {
       .seek(SeekFrom::Start(offset))
       .map_err(|e| Error::IO(e))?;
     let r = self.backend.file.write(buf).map_err(|e| Error::IO(e));
-    println!("Write at {} for {} bytes. Current size is {}", offset, r.as_ref().unwrap(), self.backend.file.metadata()?.len());
+    println!(
+      "Write at {} for {} bytes. Current size is {}",
+      offset,
+      r.as_ref().unwrap(),
+      self.backend.file.metadata()?.len()
+    );
     r
   }
 

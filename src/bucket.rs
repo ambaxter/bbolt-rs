@@ -1,7 +1,10 @@
 use crate::common::bucket::{InBucket, IN_BUCKET_SIZE};
+use crate::common::defaults::PGID_NO_FREE_LIST;
 use crate::common::memory::{BCell, IsAligned, LCell};
 use crate::common::meta::MetaPage;
-use crate::common::page::{CoerciblePage, MutPage, Page, RefPage, BUCKET_LEAF_FLAG, PAGE_HEADER_SIZE, LEAF_PAGE_FLAG};
+use crate::common::page::{
+  CoerciblePage, MutPage, Page, RefPage, BUCKET_LEAF_FLAG, LEAF_PAGE_FLAG, PAGE_HEADER_SIZE,
+};
 use crate::common::tree::{
   MappedBranchPage, MappedLeafPage, TreePage, BRANCH_PAGE_ELEMENT_SIZE, LEAF_PAGE_ELEMENT_SIZE,
 };
@@ -29,7 +32,6 @@ use std::ops::{AddAssign, Deref, DerefMut};
 use std::ptr::slice_from_raw_parts_mut;
 use std::rc::{Rc, Weak};
 use std::slice::from_raw_parts;
-use crate::common::defaults::PGID_NO_FREE_LIST;
 
 pub trait BucketApi<'tx>
 where

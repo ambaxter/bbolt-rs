@@ -507,7 +507,6 @@ impl<'tx> NodeRwCell<'tx> {
       tx.queue_page(p);
       node_borrow.is_spilled = true;
 
-
       // Insert into parent inodes.
       if let Some(parent) = node_borrow.parent {
         let key: &'tx [u8] = {

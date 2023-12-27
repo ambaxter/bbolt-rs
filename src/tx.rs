@@ -17,6 +17,7 @@ use aligners::{alignment, AlignedBytes};
 use bumpalo::Bump;
 use lockfree_object_pool::LinearOwnedReusable;
 use parking_lot::{Mutex, RwLockReadGuard, RwLockWriteGuard};
+use std::alloc::Layout;
 use std::borrow::Cow;
 use std::cell::{Ref, RefCell, RefMut};
 use std::marker::{PhantomData, PhantomPinned};
@@ -25,10 +26,9 @@ use std::ops::{AddAssign, Deref, DerefMut, Sub};
 use std::pin::Pin;
 use std::ptr::{addr_of, addr_of_mut};
 use std::rc::Rc;
+use std::slice::from_raw_parts_mut;
 use std::time::{Duration, Instant};
 use std::{cell, mem};
-use std::alloc::Layout;
-use std::slice::from_raw_parts_mut;
 
 pub trait TxApi<'tx> {
   type CursorType: CursorApi<'tx>;
@@ -586,19 +586,18 @@ impl<'tx> TxRwIAPI<'tx> for TxRwCell<'tx> {
   }
 
   fn write_meta(self) -> crate::Result<()> {
-
     let mut r = self.split_r_mut();
     let page_size = r.page_size;
 
-    let layout = Layout::from_size_align(page_size, mem::align_of::<MetaPage>() ).unwrap();
+    let layout = Layout::from_size_align(page_size, mem::align_of::<MetaPage>()).unwrap();
     let ptr = r.b.alloc_layout(layout);
 
-    let mut meta_page = unsafe {MappedMetaPage::new(ptr.as_ptr())};
+    let mut meta_page = unsafe { MappedMetaPage::new(ptr.as_ptr()) };
     r.meta.write(&mut meta_page);
 
     let mut db = r.db.get_rw().unwrap();
     let offset = meta_page.page.id.0 * page_size as u64;
-    let buf = unsafe {from_raw_parts_mut(ptr.as_ptr(), page_size)};
+    let buf = unsafe { from_raw_parts_mut(ptr.as_ptr(), page_size) };
     db.write_at(buf, offset)?;
 
     //TODO: Ignore sync
