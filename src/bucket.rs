@@ -1,9 +1,7 @@
 use crate::common::bucket::{InBucket, IN_BUCKET_SIZE};
 use crate::common::memory::{BCell, IsAligned, LCell};
 use crate::common::meta::MetaPage;
-use crate::common::page::{
-  CoerciblePage, MutPage, Page, RefPage, BUCKET_LEAF_FLAG, PAGE_HEADER_SIZE,
-};
+use crate::common::page::{CoerciblePage, MutPage, Page, RefPage, BUCKET_LEAF_FLAG, PAGE_HEADER_SIZE, LEAF_PAGE_FLAG};
 use crate::common::tree::{
   MappedBranchPage, MappedLeafPage, TreePage, BRANCH_PAGE_ELEMENT_SIZE, LEAF_PAGE_ELEMENT_SIZE,
 };
@@ -31,6 +29,7 @@ use std::ops::{AddAssign, Deref, DerefMut};
 use std::ptr::slice_from_raw_parts_mut;
 use std::rc::{Rc, Weak};
 use std::slice::from_raw_parts;
+use crate::common::defaults::PGID_NO_FREE_LIST;
 
 pub trait BucketApi<'tx>
 where
@@ -324,18 +323,32 @@ const MAX_KEY_SIZE: u32 = 32768;
 
 /// MaxValueSize is the maximum length of a value, in bytes.
 const MAX_VALUE_SIZE: u32 = (1 << 31) - 2;
-const INLINE_PAGE_ALIGNMENT: usize = mem::align_of::<InlinePage>();
-const INLINE_PAGE_SIZE: usize = mem::size_of::<InlinePage>();
+const INLINE_BUCKET_ALIGNMENT: usize = mem::align_of::<InlineBucket>();
+const INLINE_BUCKET_SIZE: usize = mem::size_of::<InlineBucket>();
 
 pub(crate) const MIN_FILL_PERCENT: f64 = 0.1;
 pub(crate) const MAX_FILL_PERCENT: f64 = 1.0;
 
 /// A convenience struct representing an inline page header
 #[repr(C)]
-#[derive(Copy, Clone, Default, Pod, Zeroable)]
-struct InlinePage {
+#[derive(Copy, Clone, Pod, Zeroable)]
+struct InlineBucket {
   header: InBucket,
   page: Page,
+}
+
+impl Default for InlineBucket {
+  fn default() -> Self {
+    InlineBucket {
+      header: InBucket::new(ZERO_PGID, 0),
+      page: Page {
+        id: Default::default(),
+        flags: LEAF_PAGE_FLAG,
+        count: 0,
+        overflow: 0,
+      },
+    }
+  }
 }
 
 /// The internal Bucket API
@@ -401,9 +414,9 @@ pub(crate) trait BucketIAPI<'tx, T: TxIAPI<'tx>>:
     let bump = tx.bump();
     // Unaligned access requires a copy to be made.
     //TODO: use std is_aligned_to when it comes out
-    if !IsAligned::is_aligned_to::<InlinePage>(value.as_ptr()) {
+    if !IsAligned::is_aligned_to::<InlineBucket>(value.as_ptr()) {
       // TODO: Shove this into a centralized function somewhere
-      let layout = Layout::from_size_align(value.len(), INLINE_PAGE_ALIGNMENT).unwrap();
+      let layout = Layout::from_size_align(value.len(), INLINE_BUCKET_ALIGNMENT).unwrap();
       let new_value = unsafe {
         let mut new_value = bump.alloc_layout(layout);
         let new_value_ptr = new_value.as_mut() as *mut u8;
@@ -416,9 +429,9 @@ pub(crate) trait BucketIAPI<'tx, T: TxIAPI<'tx>>:
     // Save a reference to the inline page if the bucket is inline.
     let ref_page = if bucket_header.root() == ZERO_PGID {
       assert!(
-        value.len() >= INLINE_PAGE_SIZE,
+        value.len() >= INLINE_BUCKET_SIZE,
         "subbucket value not large enough. Expected at least {} bytes. Was {}",
-        INLINE_PAGE_SIZE,
+        INLINE_BUCKET_SIZE,
         value.len()
       );
       unsafe {
@@ -973,13 +986,12 @@ impl<'tx> BucketRwIAPI<'tx> for BucketRwCell<'tx> {
       }
     }
 
-    let mut inline_page = InlinePage::default();
-    inline_page.page.set_leaf();
-    let layout = Layout::from_size_align(INLINE_PAGE_SIZE, INLINE_PAGE_ALIGNMENT).unwrap();
+    let inline_page = InlineBucket::default();
+    let layout = Layout::from_size_align(INLINE_BUCKET_SIZE, INLINE_BUCKET_ALIGNMENT).unwrap();
     let bump = self.api_tx().bump();
     let value = unsafe {
       let mut data = bump.alloc_layout(layout);
-      &mut *slice_from_raw_parts_mut(data.as_mut() as *mut u8, INLINE_PAGE_SIZE)
+      &mut *slice_from_raw_parts_mut(data.as_mut() as *mut u8, INLINE_BUCKET_SIZE)
     };
     value.copy_from_slice(bytemuck::bytes_of(&inline_page));
     let key = bump.alloc_slice_clone(key) as &[u8];
@@ -1123,7 +1135,7 @@ impl<'tx> BucketRwIAPI<'tx> for BucketRwCell<'tx> {
         child.write(bump)
       } else {
         child.spill(bump)?;
-        let layout = Layout::from_size_align(IN_BUCKET_SIZE, INLINE_PAGE_ALIGNMENT).unwrap();
+        let layout = Layout::from_size_align(IN_BUCKET_SIZE, INLINE_BUCKET_ALIGNMENT).unwrap();
         let inline_bucket_ptr = bump.alloc_layout(layout).as_ptr();
         unsafe {
           let inline_bucket = &mut (*(inline_bucket_ptr as *mut InBucket));
@@ -1171,7 +1183,7 @@ impl<'tx> BucketRwIAPI<'tx> for BucketRwCell<'tx> {
   fn write(self, bump: &'tx Bump) -> &'tx [u8] {
     let root_node = self.materialize_root();
     let page_size = IN_BUCKET_SIZE + root_node.size();
-    let layout = Layout::from_size_align(page_size, INLINE_PAGE_ALIGNMENT).unwrap();
+    let layout = Layout::from_size_align(page_size, INLINE_BUCKET_ALIGNMENT).unwrap();
     let inline_bucket_ptr = bump.alloc_layout(layout).as_ptr();
 
     unsafe {
@@ -1184,16 +1196,11 @@ impl<'tx> BucketRwIAPI<'tx> for BucketRwCell<'tx> {
   }
 
   fn inlineable(self) -> bool {
-    let b = self.split_ow();
-    let w = b.unwrap();
+    let n = self.materialize_root();
 
     // Bucket must only contain a single leaf node.
-    let n = match w.root_node {
-      None => return false,
-      Some(n) => n,
-    };
     let node_ref = n.cell.borrow();
-    if node_ref.is_leaf {
+    if !node_ref.is_leaf {
       return false;
     }
 
