@@ -26,6 +26,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 use std::{cell, mem};
 use lockfree_object_pool::LinearOwnedReusable;
+use crate::arch::size::MAX_ALLOC_SIZE;
 
 pub trait TxApi<'tx> {
   type CursorType: CursorApi<'tx>;
@@ -316,6 +317,8 @@ pub(crate) trait TxRwIAPI<'tx>: TxIAPI<'tx> {
 
   /// See [TxRwApi::delete_bucket]
   fn api_delete_bucket(self, name: &[u8]) -> crate::Result<()>;
+
+  fn write(self) -> crate::Result<()>;
 }
 
 pub(crate) struct TxImplTODORenameMe {}
@@ -333,7 +336,7 @@ pub struct TxR<'tx> {
   page_size: usize,
   db: &'tx DbGuard<'tx>,
   pub(crate) stats: TxStats,
-  meta: Meta,
+  pub(crate) meta: Meta,
   is_rollback: bool,
   p: PhantomData<&'tx u8>,
 }
@@ -519,6 +522,59 @@ impl<'tx> TxRwIAPI<'tx> for TxRwCell<'tx> {
   fn api_delete_bucket(self, name: &[u8]) -> crate::Result<()> {
     let root_bucket = self.root_bucket();
     root_bucket.api_delete_bucket(name)
+  }
+
+  fn write(self) -> crate::Result<()> {
+    let (pages, mut db, page_size) = {
+      let mut tx = self.cell.0.borrow_mut();
+      let mut swap_pages = HashMap::with_capacity_in(0, tx.r.b);
+      // Clear out page cache early.
+      mem::swap(&mut swap_pages, &mut tx.w.pages);
+      let mut pages = BVec::from_iter_in(swap_pages.into_iter().map(|(_, page)| page), tx.r.b);
+
+      // Sort pages by id.
+      pages.sort_by_key(|page| page.id);
+      (pages, tx.r.db.get_rw().unwrap(), tx.r.page_size)
+    };
+
+    let mut stats = self.mut_stats();
+
+    // Write pages to disk in order.
+    for page in &pages {
+      let mut rem = (page.overflow as usize + 1) * page_size;
+      let mut offset = page.id.0 * page_size as u64;
+      let mut written = 0;
+
+      // Write out page in "max allocation" sized chunks.
+      loop {
+        let size = rem.min(MAX_ALLOC_SIZE.bytes() as usize - 1);
+        let buf = &page.ref_owner()[written..size];
+
+        let size = db.write_at(buf, offset)?;
+
+        // Update statistics.
+        stats.write += 1;
+
+        rem -= size;
+        if rem == 0 {
+          break;
+        }
+
+        offset += size as u64;
+        written += size;
+      }
+
+    }
+    db.fsync()?;
+    for page in pages.into_iter() {
+      if page.overflow == 0 {
+        let mut bytes = page.into_owner();
+        bytes.fill(0);
+        db.repool_allocated(bytes);
+      }
+    }
+    Ok(())
+
   }
 }
 
@@ -808,15 +864,14 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
     let bump = self.tx.bump();
     let start_time = Instant::now();
     match self.tx.root_bucket().spill(bump) {
-      Ok(_) => {}
+      Ok(_) => {
+        let mut stats = self.tx.mut_stats();
+        stats.spill_time += Instant::now().duration_since(start_time);
+      }
       Err(e) => {
         let _ = self.rollback();
         return Err(e);
       }
-    }
-    {
-      let mut stats = self.tx.mut_stats();
-      stats.spill_time += Instant::now().duration_since(start_time);
     }
     {
       let new_bucket = self.tx.cell.1.split_r().bucket_header;
@@ -830,7 +885,6 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
     }
     // TODO: implement noFreelistSync
 
-    //TODO: move to TxRwImpl
     match self.commit_freelist() {
       Ok(_) => {}
       Err(e) => {
@@ -841,10 +895,12 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
 
     let new_pgid = self.tx.meta().pgid();
     let page_size = self.tx.meta().page_size();
-    let tx = self.tx.cell.0.borrow();
-    for page in tx.w.pages.values() {
-      assert!(page.id.0 > 1, "Invalid page id");
-      println!("id: {}", page.id);
+    {
+      let tx = self.tx.cell.0.borrow();
+      for page in tx.w.pages.values() {
+        assert!(page.id.0 > 1, "Invalid page id");
+        println!("id: {}", page.id);
+      }
     }
     if new_pgid > opgid {
       match self
@@ -863,7 +919,25 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
     } else {
       println!("No grow");
     }
-    todo!()
+    let start_time = Instant::now();
+    match self.tx.write() {
+      Ok(_) => {
+        let mut stats = self.tx.mut_stats();
+        stats.spill_time += Instant::now().duration_since(start_time);
+      }
+      Err(e) => {
+        let _ = self.tx.rollback();
+        return Err(e);
+      }
+    };
+
+    // TODO: Add strict mode
+
+    todo!("writeMeta");
+
+
+    Ok(())
+
   }
 }
 

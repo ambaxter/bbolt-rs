@@ -9,7 +9,7 @@ use crate::common::meta::{MappedMetaPage, Meta};
 use crate::common::page::{CoerciblePage, MutPage, Page, RefPage, FREE_LIST_PAGE_FLAG};
 use crate::common::self_owned::SelfOwned;
 use crate::common::tree::MappedLeafPage;
-use crate::common::{PgId, TxId};
+use crate::common::{PgId, SplitRef, TxId};
 use crate::freelist::{Freelist, MappedFreeListPage};
 use crate::tx::{TxCell, TxIAPI, TxImpl, TxRef, TxRwCell, TxRwImpl, TxRwRef, TxStats};
 use crate::{Error, TxApi, TxRwApi};
@@ -452,6 +452,10 @@ pub(crate) trait DbRwIAPI<'tx>: DbIAPI<'tx> {
   ) -> crate::Result<SelfOwned<AlignedBytes<alignment::Page>, MutPage<'tx>>>;
 
   fn remove_rw_tx(&mut self, rem_tx: TxId, tx_stats: TxStats);
+
+  fn repool_allocated(&mut self, page: AlignedBytes<alignment::Page>);
+  fn fsync(&mut self) -> crate::Result<()>;
+  fn write_at(&mut self, buf: &[u8], offset: u64) -> crate::Result<usize>;
 }
 
 pub(crate) enum DbGuard<'tx> {
@@ -559,7 +563,8 @@ impl<'tx> DbRwIAPI<'tx> for DBShared {
     if min_size > self.backend.data_size {
       self.backend.mmap(min_size, tx)?;
     }
-    todo!("set pgid when there is none existing");
+
+    tx.split_r_mut().meta.set_pgid(high_water + count);
     Ok(mut_page)
   }
 
@@ -635,6 +640,20 @@ impl<'tx> DbRwIAPI<'tx> for DBShared {
     stats.free_alloc = ((free_list_free_n + free_list_pending_n) * page_size as u64) as i64;
     stats.free_list_in_use = free_list_alloc as i64;
     stats.tx_stats += tx_stats;
+  }
+
+  fn write_at(&mut self, buf: &[u8], offset: u64) -> crate::Result<usize> {
+    self.backend.file.seek(SeekFrom::Start(offset)).map_err(|e| Error::IO(e))?;
+    self.backend.file.write(buf).map_err(|e| Error::IO(e))
+  }
+
+  fn fsync(&mut self) -> crate::Result<()> {
+    self.backend.file.sync_all().map_err(|e| Error::IO(e))
+  }
+
+  fn repool_allocated(&mut self, mut page: AlignedBytes<alignment::Page>) {
+    page.fill(0);
+    self.backend.page_pool.push(page);
   }
 }
 
