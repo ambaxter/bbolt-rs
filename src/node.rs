@@ -504,7 +504,9 @@ impl<'tx> NodeRwCell<'tx> {
 
       node_borrow.pgid = p.id;
       node_borrow.write(&mut p);
+      tx.queue_page(p);
       node_borrow.is_spilled = true;
+
 
       // Insert into parent inodes.
       if let Some(parent) = node_borrow.parent {

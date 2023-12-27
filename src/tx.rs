@@ -308,6 +308,8 @@ pub(crate) trait TxRwIAPI<'tx>: TxIAPI<'tx> {
     self, count: usize,
   ) -> crate::Result<SelfOwned<AlignedBytes<alignment::Page>, MutPage<'tx>>>;
 
+  fn queue_page(self, page: SelfOwned<AlignedBytes<alignment::Page>, MutPage<'tx>>);
+
   /// See [TxRwApi::cursor_mut]
   fn api_cursor_mut(self) -> Self::CursorRwType;
 
@@ -496,14 +498,17 @@ impl<'tx> TxRwIAPI<'tx> for TxRwCell<'tx> {
     self, count: usize,
   ) -> crate::Result<SelfOwned<AlignedBytes<alignment::Page>, MutPage<'tx>>> {
     let mut db = { self.cell.0.borrow().r.db.get_rw().unwrap() };
-    let meta_page = db.allocate(self, count as u64)?;
-    let pg_id = meta_page.id;
-    {
-      let mut tx = self.cell.0.borrow_mut();
-      tx.r.stats.page_count += 1;
-      tx.r.stats.page_alloc += (count * tx.r.page_size) as i64;
-    }
-    Ok(meta_page)
+    let page = db.allocate(self, count as u64)?;
+    let pg_id = page.id;
+
+    let mut tx = self.cell.0.borrow_mut();
+    tx.r.stats.page_count += 1;
+    tx.r.stats.page_alloc += (count * tx.r.page_size) as i64;
+    Ok(page)
+  }
+
+  fn queue_page(self, page: SelfOwned<AlignedBytes<alignment::Page>, MutPage<'tx>>) {
+    self.cell.0.borrow_mut().w.pages.insert(page.id, page);
   }
 
   fn api_cursor_mut(self) -> Self::CursorRwType {
@@ -1155,8 +1160,9 @@ mod test {
       Ok(())
     })?;
 
+    db.sync().unwrap();
     db.view(|tx| {
-      let bucket = tx.bucket(b"widget");
+      let bucket = tx.bucket(b"widgets");
       assert!(bucket.is_some(), "expected bucket");
       Ok(())
     })
