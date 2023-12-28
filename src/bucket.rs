@@ -270,7 +270,7 @@ pub struct BucketStats {
 
   // Tree statistics.
   /// number of keys/value pairs
-  key_n: i64,
+  pub(crate) key_n: i64,
   /// number of levels in B+tree
   depth: i64,
 

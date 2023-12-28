@@ -42,7 +42,7 @@ pub trait CursorApi<'tx> {
 pub trait CursorRwApi<'tx>: CursorApi<'tx> {
   /// Delete removes the current key/value under the cursor from the bucket.
   /// Delete fails if current key/value is a bucket or if the transaction is not writable.
-  fn delete(&mut self, key: &[u8]) -> crate::Result<()>;
+  fn delete(&mut self) -> crate::Result<()>;
 }
 
 pub struct CursorImpl<'tx, C: CursorIAPI<'tx>> {
@@ -130,8 +130,8 @@ impl<'tx, C: CursorRwIAPI<'tx>> CursorApi<'tx> for CursorRwImpl<'tx, C> {
 }
 
 impl<'tx, C: CursorRwIAPI<'tx>> CursorRwApi<'tx> for CursorRwImpl<'tx, C> {
-  fn delete(&mut self, key: &[u8]) -> crate::Result<()> {
-    self.c.api_delete(key)
+  fn delete(&mut self) -> crate::Result<()> {
+    self.c.api_delete()
   }
 }
 
@@ -189,7 +189,7 @@ pub(crate) trait CursorRwIAPI<'tx>: CursorIAPI<'tx> {
   fn node(&mut self) -> NodeRwCell<'tx>;
 
   /// See [CursorRwApi::delete]
-  fn api_delete(&mut self, key: &[u8]) -> crate::Result<()>;
+  fn api_delete(&mut self) -> crate::Result<()>;
 }
 
 #[derive(Clone)]
@@ -602,19 +602,19 @@ impl<'tx, B: BucketRwIAPI<'tx>> CursorRwIAPI<'tx> for InnerCursor<'tx, TxRwCell<
     n
   }
 
-  fn api_delete(&mut self, key: &[u8]) -> crate::Result<()> {
+  fn api_delete(&mut self) -> crate::Result<()> {
     let (k, _, flags) = self.key_value().unwrap();
     if flags & BUCKET_LEAF_FLAG != 0 {
       return Err(IncompatibleValue);
     }
-    self.node().del(key);
+    self.node().del(k);
     Ok(())
   }
 }
 
 #[cfg(test)]
 mod tests {
-  use crate::{BucketApi, BucketRwApi, CursorApi, DbApi, DbRwAPI, TxApi, TxRwApi};
+  use crate::{BucketApi, BucketRwApi, CursorApi, CursorRwApi, DbApi, DbRwAPI, Error, TxApi, TxRwApi};
   use crate::test_support::TestDb;
 
   #[test]
@@ -627,6 +627,7 @@ mod tests {
     todo!("Do we really want the api to return the bucket?")
   }
 
+  /// Ensure that a Tx cursor can seek to the appropriate keys.
   #[test]
   fn test_cursor_seek() -> crate::Result<()> {
     let mut db = TestDb::new()?;
@@ -656,8 +657,39 @@ mod tests {
   }
 
   #[test]
-  fn test_cursor_delete() {
-    todo!()
+  fn test_cursor_delete() -> crate::Result<()>{
+    let mut db = TestDb::new()?;
+    let count = 1000u64;
+    let value= [0u8; 100];
+    db.update(|mut tx | {
+      let mut b = tx.create_bucket(b"widgets")?;
+      for i in 0..count {
+        let be_i = i.to_be_bytes();
+        b.put(&be_i, &value)?;
+      }
+      let _ = b.create_bucket(b"sub")?;
+      Ok(())
+    })?;
+    db.update(|mut tx| {
+      let b = tx.bucket(b"widgets").unwrap();
+      let mut c = b.cursor_mut();
+      let bound = (count/2).to_be_bytes();
+      let (mut key, _) = c.first().unwrap();
+      while key < bound.as_slice() {
+        c.delete()?;
+        key = c.next().unwrap().0;
+      }
+      c.seek(b"sub");
+      assert_eq!(Err(Error::IncompatibleValue), c.delete());
+      Ok(())
+    })?;
+    db.view(|tx| {
+      let b = tx.bucket(b"widgets").unwrap();
+      let stats = b.stats();
+      assert_eq!((count/2) + 1, stats.key_n as u64);
+      Ok(())
+    })?;
+    Ok(())
   }
 
   #[test]
