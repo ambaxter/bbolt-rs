@@ -65,7 +65,7 @@ where
   /// Any error that is returned from the function is returned from the View() method.
   ///
   /// Attempting to manually rollback within the function will cause a panic.
-  fn view<'tx, F: FnMut(TxRef<'tx>) -> crate::Result<()>>(&'tx self, f: F) -> crate::Result<()>;
+  fn view<'tx, F: Fn(TxRef<'tx>) -> crate::Result<()>>(&'tx self, f: F) -> crate::Result<()>;
 
   /// Stats retrieves ongoing performance stats for the database.
   /// This is only updated when a transaction closes.
@@ -103,7 +103,7 @@ pub trait DbRwAPI: DbApi {
   /// returned from the Update() method.
   ///
   /// Attempting to manually commit or rollback within the function will cause a panic.
-  fn update<'tx, F: FnMut(TxRwRef<'tx>) -> crate::Result<()>>(
+  fn update<'tx, F: Fn(TxRwRef<'tx>) -> crate::Result<()>>(
     &'tx mut self, f: F,
   ) -> crate::Result<()>;
 
@@ -818,7 +818,7 @@ impl DbRwAPI for DB {
     TxRwImpl::new(bump, self.db.write())
   }
 
-  fn update<'tx, F: FnMut(TxRwRef<'tx>) -> crate::Result<()>>(
+  fn update<'tx, F: Fn(TxRwRef<'tx>) -> crate::Result<()>>(
     &'tx mut self, mut f: F,
   ) -> crate::Result<()> {
     let bump = self.bump_pool.pull_owned();

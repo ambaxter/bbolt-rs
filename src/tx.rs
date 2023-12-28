@@ -1159,7 +1159,6 @@ mod test {
       Ok(())
     })?;
 
-    db.sync().unwrap();
     db.view(|tx| {
       let bucket = tx.bucket(b"widgets");
       assert!(bucket.is_some(), "expected bucket");

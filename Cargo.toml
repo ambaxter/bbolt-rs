@@ -27,3 +27,9 @@ lockfree-object-pool = "0.1"
 
 [dev-dependencies]
 tempfile = "3.8.1"
+
+[profile.release]
+debug = true
+
+[profile.bench]
+debug = true

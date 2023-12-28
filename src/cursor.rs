@@ -414,14 +414,22 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for InnerCursor
       // Retrieve value from page.
       Either::Left(r) => {
         let l = MappedLeafPage::coerce_ref(r).unwrap();
-        let inode = l.get_elem(elem_ref.index as u16).unwrap();
-        Some((inode.key(), inode.value(), inode.flags()))
+        if let Some(inode) = l.get_elem(elem_ref.index as u16) {
+          Some((inode.key(), inode.value(), inode.flags()))
+        } else {
+          None
+        }
+
       }
       // Retrieve value from node.
       Either::Right(n) => {
         let ref_node = n.cell.borrow();
-        let inode = &ref_node.inodes[elem_ref.index as usize];
-        Some((inode.key(), inode.value(), inode.flags()))
+        if let Some(inode) = ref_node.inodes.get(elem_ref.index as usize) {
+          Some((inode.key(), inode.value(), inode.flags()))
+        } else {
+          None
+        }
+
       }
     }
   }
@@ -606,15 +614,45 @@ impl<'tx, B: BucketRwIAPI<'tx>> CursorRwIAPI<'tx> for InnerCursor<'tx, TxRwCell<
 
 #[cfg(test)]
 mod tests {
+  use crate::{BucketApi, BucketRwApi, CursorApi, DbApi, DbRwAPI, TxApi, TxRwApi};
+  use crate::test_support::TestDb;
 
   #[test]
-  fn test_cursor_bucket() {
-    todo!()
+  fn test_cursor_bucket() -> crate::Result<()>{
+    let mut db = TestDb::new()?;
+    db.update(|mut tx| {
+      let b = tx.create_bucket(b"widgets")?;
+      Ok(())
+    })?;
+    todo!("Do we really want the api to return the bucket?")
   }
 
   #[test]
-  fn test_cursor_seek() {
-    todo!()
+  fn test_cursor_seek() -> crate::Result<()> {
+    let mut db = TestDb::new()?;
+    db.update(|mut tx| {
+      let mut b = tx.create_bucket(b"widgets")?;
+      b.put(b"foo", b"0001")?;
+      b.put(b"bar", b"0002")?;
+      b.put(b"baz", b"0003")?;
+      let _ = b.create_bucket(b"bkt")?;
+      Ok(())
+    })?;
+    db.view(|tx| {
+      let b = tx.bucket(b"widgets").unwrap();
+      let mut c = b.cursor();
+      // Exact match should go to the key.
+      assert_eq!((b"bar".as_slice(), Some(b"0002".as_slice())), c.seek(b"bar").unwrap());
+      // Inexact match should go to the next key.
+      assert_eq!((b"baz".as_slice(), Some(b"0003".as_slice())), c.seek(b"bas").unwrap());
+      // Low key should go to the first key.
+      assert_eq!((b"bar".as_slice(), Some(b"0002".as_slice())), c.seek(b"").unwrap());
+      // High key should return no key.
+      assert_eq!(None, c.seek(b"zzz"));
+      // Buckets should return their key but no value.
+      assert_eq!((b"bkt".as_slice(), None), c.seek(b"bkt").unwrap());
+      Ok(())
+    })
   }
 
   #[test]

@@ -1060,11 +1060,12 @@ impl<'tx> BucketRwIAPI<'tx> for BucketRwCell<'tx> {
       return Err(ValueTooLarge);
     }
     let mut c = self.i_cursor();
-    let (k, _, flags) = c.i_seek(key).unwrap();
-
-    if (flags & BUCKET_LEAF_FLAG) != 0 || key != k {
-      return Err(IncompatibleValue);
+    if let Some((k, _, flags)) = c.i_seek(key) {
+      if key == k && (flags & BUCKET_LEAF_FLAG) != 0 {
+        return Err(IncompatibleValue);
+      }
     }
+
     let bump = self.api_tx().bump();
     let key = &*bump.alloc_slice_clone(key);
     let value = &*bump.alloc_slice_clone(value);
