@@ -235,7 +235,7 @@ pub trait TreePage<'tx>: Deref<Target = Page> + DerefMut {
     }
   }
 
-  fn elements_mut(&self) -> &mut [Self::Elem] {
+  fn elements_mut(&mut self) -> &mut [Self::Elem] {
     unsafe {
       let page_ptr = self.page_ptr();
       let elem_ptr = page_ptr.add(PAGE_HEADER_SIZE).cast::<Self::Elem>();

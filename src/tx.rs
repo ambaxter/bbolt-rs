@@ -1142,6 +1142,7 @@ pub(crate) mod check {
       let high_water = self.meta().pgid();
       // TODO: ReadOnly mode handling
 
+      // Check if any pages are double freed.
       let mut freed = HashSet::new_in(bump);
       let mut all = BVec::with_capacity_in(freelist_count as usize, bump);
       for i in 0..freelist_count {
@@ -1163,13 +1164,15 @@ pub(crate) mod check {
       reachable.insert(PgId(0), self.page(PgId(0))); //meta 0
       reachable.insert(PgId(1), self.page(PgId(1))); // meta 1
       let freelist_pgid = self.meta().free_list();
-      for i in 0..self.page(freelist_pgid).overflow {
-        let pg_id = PgId(i as u64);
+      for i in 0..=self.page(freelist_pgid).overflow {
+        let pg_id = freelist_pgid + i as u64;
         reachable.insert(pg_id, self.page(freelist_pgid));
       }
 
+      // Recursively check buckets.
       self.check_bucket(self.split_bound(), &mut reachable, &mut freed, &mut errors);
 
+      // Ensure all pages below high water mark are either reachable or freed.
       for i in 0..high_water.0 {
         let pg_id = PgId(i);
         if !reachable.contains_key(&pg_id) && !freed.contains(&pg_id) {
@@ -1198,8 +1201,8 @@ pub(crate) mod check {
             pgid_stack
           ));
         }
-
-        for i in 0..p.overflow {
+        let pg_id = p.id;
+        for i in 0..=p.overflow {
           let id = p.id + i as u64;
           if reachable.contains_key(&id) {
             errors.push(format!(
@@ -1335,9 +1338,10 @@ pub(crate) mod check {
 
 #[cfg(test)]
 mod test {
-  use crate::test_support::TestDb;
+  use crate::test_support::{TestDb, Unseal};
+  use crate::tx::check::TxCheck;
   use crate::tx::create_cycle;
-  use crate::{DbApi, DbRwAPI, TxApi, TxRwApi};
+  use crate::{DbApi, DbRwAPI, Error, TxApi, TxRwApi};
   use bumpalo::Bump;
 
   // This is to prove out the memory safety of creating a cycle in a bump
@@ -1403,7 +1407,6 @@ mod test {
       let bucket = tx.create_bucket(b"widgets")?;
       Ok(())
     })?;
-
     db.view(|tx| {
       let bucket = tx.bucket(b"widgets");
       assert!(bucket.is_some(), "expected bucket");

@@ -681,13 +681,6 @@ mod tests {
       Ok(())
     })?;
     db.update(|mut tx| {
-      let tx_cell = tx.unseal();
-      let errors = tx_cell.check();
-      for error in errors {
-        println!("{}", error);
-      }
-      return Err(Error::BucketExists);
-
       let b = tx.bucket(b"widgets").unwrap();
       let mut c = b.cursor_mut();
       let bound = (count / 2).to_be_bytes();

@@ -365,10 +365,14 @@ pub(crate) trait BucketIAPI<'tx, T: TxIAPI<'tx>>:
   fn is_writeable(&self) -> bool;
 
   /// Returns the rc ptr Tx of the bucket
-  fn api_tx(self) -> Rc<T>;
+  fn api_tx(self) -> Rc<T> {
+    self.split_bound().upgrade().unwrap()
+  }
 
   /// Returns the weak ptr to the Tx of the bucket
-  fn weak_tx(self) -> Weak<T>;
+  fn weak_tx(self) -> Weak<T> {
+    self.split_bound()
+  }
 
   /// Returns the root page id of the bucket
   fn root(self) -> PgId {
@@ -797,15 +801,6 @@ impl<'tx> BucketIAPI<'tx, TxCell<'tx>> for BucketCell<'tx> {
   fn is_writeable(&self) -> bool {
     false
   }
-
-  #[inline(always)]
-  fn api_tx(self) -> Rc<TxCell<'tx>> {
-    self.split_bound().upgrade().unwrap()
-  }
-
-  fn weak_tx(self) -> Weak<TxCell<'tx>> {
-    self.split_bound().clone()
-  }
 }
 
 impl<'tx> SplitRef<BucketR<'tx>, Weak<TxCell<'tx>>, InnerBucketW<'tx, TxCell<'tx>, BucketCell<'tx>>>
@@ -950,14 +945,6 @@ impl<'tx> BucketIAPI<'tx, TxRwCell<'tx>> for BucketRwCell<'tx> {
   #[inline(always)]
   fn is_writeable(&self) -> bool {
     true
-  }
-
-  fn api_tx(self) -> Rc<TxRwCell<'tx>> {
-    self.split_bound().upgrade().unwrap()
-  }
-
-  fn weak_tx(self) -> Weak<TxRwCell<'tx>> {
-    self.split_bound().clone()
   }
 }
 
@@ -1146,7 +1133,7 @@ impl<'tx> BucketRwIAPI<'tx> for BucketRwCell<'tx> {
           from_raw_parts(inline_bucket_ptr, IN_BUCKET_SIZE)
         }
       };
-      if self.split_ow().unwrap().root_node.is_none() {
+      if child.split_ow().unwrap().root_node.is_none() {
         continue;
       }
       let mut c = self.i_cursor();
@@ -1167,6 +1154,7 @@ impl<'tx> BucketRwIAPI<'tx> for BucketRwCell<'tx> {
       Some(root_node) => root_node,
     };
     let mut parent_children = BVec::new_in(self.cell.1.upgrade().unwrap().bump());
+
     root_node.spill_child(&mut parent_children)?;
     if let (mut r, Some(mut w)) = self.split_r_ow_mut() {
       let mut new_root = root_node.root();
@@ -1199,10 +1187,15 @@ impl<'tx> BucketRwIAPI<'tx> for BucketRwCell<'tx> {
   }
 
   fn inlineable(self) -> bool {
-    // TODO: Why do we need to materialize the root here for the single bucket commit test?
-    let n = self.materialize_root();
+    let b = self.split_ow();
+    let w = b.unwrap();
 
     // Bucket must only contain a single leaf node.
+    let n = match w.root_node {
+      None => return false,
+      Some(n) => n,
+    };
+
     let node_ref = n.cell.borrow();
     if !node_ref.is_leaf {
       return false;
@@ -1272,6 +1265,10 @@ impl<'tx> BucketRwIAPI<'tx> for BucketRwCell<'tx> {
     }
 
     wb.nodes.insert(pgid, n);
+
+    // Update statistics.
+    self.split_bound().upgrade().unwrap().mut_stats().node_count += 1;
+
     n
   }
 

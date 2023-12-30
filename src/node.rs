@@ -519,9 +519,11 @@ impl<'tx> NodeRwCell<'tx> {
         parent.put(key, node_borrow.inodes[0].key(), &[], node_borrow.pgid, 0);
         node_borrow.key = node_borrow.inodes[0].cod_key();
       }
+
+      tx.mut_stats().spill += 1;
     }
 
-    tx.mut_stats().spill += 1;
+    // TODO: Add parent spill
     Ok(())
   }
 
