@@ -1199,6 +1199,7 @@ impl<'tx> BucketRwIAPI<'tx> for BucketRwCell<'tx> {
   }
 
   fn inlineable(self) -> bool {
+    // TODO: Why do we need to materialize the root here for the single bucket commit test?
     let n = self.materialize_root();
 
     // Bucket must only contain a single leaf node.

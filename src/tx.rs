@@ -5,9 +5,10 @@ use crate::bucket::{
 use crate::common::defaults::DEFAULT_PAGE_SIZE;
 use crate::common::memory::{BCell, LCell};
 use crate::common::meta::{MappedMetaPage, Meta, MetaPage};
-use crate::common::page::{MutPage, Page, PageInfo, RefPage};
+use crate::common::page::{CoerciblePage, MutPage, Page, PageInfo, RefPage};
 use crate::common::self_owned::SelfOwned;
-use crate::common::{BVec, HashMap, PgId, SplitRef, TxId};
+use crate::common::tree::{MappedBranchPage, TreePage};
+use crate::common::{BVec, HashMap, PgId, SplitRef, TxId, ZERO_PGID};
 use crate::cursor::{CursorImpl, CursorRwIAPI, CursorRwImpl, InnerCursor};
 use crate::db::{DBShared, DbGuard, DbIAPI, DbRwIAPI};
 use crate::freelist::Freelist;
@@ -255,6 +256,31 @@ pub(crate) trait TxIAPI<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
       let bucket = root_bucket.api_bucket(k).unwrap();
       Ok(f(k, bucket))
     })
+  }
+
+  /// forEachPage iterates over every page within a given page and executes a function.
+  fn for_each_page<F: FnMut(&RefPage<'tx>, usize, &mut BVec<PgId>)>(self, pg_id: PgId, f: &mut F) {
+    let mut stack = BVec::with_capacity_in(10, self.bump());
+    stack.push(pg_id);
+    self.for_each_page_internal(&mut stack, f);
+  }
+
+  fn for_each_page_internal<F: FnMut(&RefPage<'tx>, usize, &mut BVec<PgId>)>(
+    self, pgid_stack: &mut BVec<PgId>, f: &mut F,
+  ) {
+    let p = self.page(*pgid_stack.first().unwrap());
+
+    // Execute function.
+    f(&p, pgid_stack.len() - 1, pgid_stack);
+
+    // Recursively loop over children.
+    if let Some(branch_page) = MappedBranchPage::coerce_ref(&p) {
+      for elem in branch_page.elements() {
+        pgid_stack.push(elem.pgid());
+        self.for_each_page_internal(pgid_stack, f);
+        pgid_stack.pop();
+      }
+    }
   }
 
   /// See [TxApi::rollback]
@@ -985,7 +1011,7 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
 }
 
 pub struct TxRwRef<'tx> {
-  tx: TxRwCell<'tx>,
+  pub(crate) tx: TxRwCell<'tx>,
 }
 
 impl<'tx> TxApi<'tx> for TxRwRef<'tx> {
@@ -1086,6 +1112,225 @@ pub(crate) fn create_cycle<'a>(bump: &'a Bump) -> (&RefCell<TypeA<'a>>, &RefCell
     cell_b.borrow_mut().assume_init_mut();
     (cell_a_t, cell_b_t)
   }
+}
+
+pub(crate) mod check {
+  use crate::bucket::BucketIAPI;
+  use crate::common::page::{CoerciblePage, RefPage};
+  use crate::common::tree::{MappedBranchPage, MappedLeafPage, TreePage};
+  use crate::common::{BVec, HashMap, HashSet, PgId, ZERO_PGID};
+  use crate::tx::{TxIAPI, TxRwCell, TxRwIAPI};
+  use std::io::Read;
+
+  /// Check performs several consistency checks on the database for this transaction.
+  /// An error is returned if any inconsistency is found.
+  ///
+  /// It can be safely run concurrently on a writable transaction. However, this
+  /// incurs a high cost for large databases and databases with a lot of subbuckets
+  /// because of caching. This overhead can be removed if running on a read-only
+  /// transaction, however, it is not safe to execute other writer transactions at
+  /// the same time.
+  pub trait TxCheck<'tx>: TxRwIAPI<'tx> {
+    fn check(self) -> Vec<String> {
+      let mut errors = Vec::new();
+      let bump = self.bump();
+      // TODO: Rework the DB api to get the freelist?
+      let db = self.split_r().db.get_rw().unwrap();
+      let records = db.records.lock();
+
+      let freelist_count = records.freelist.count();
+      let high_water = self.meta().pgid();
+      // TODO: ReadOnly mode handling
+
+      let mut freed = HashSet::new_in(bump);
+      let mut all = BVec::with_capacity_in(freelist_count as usize, bump);
+      for i in 0..freelist_count {
+        all.push(ZERO_PGID);
+      }
+      records.freelist.copy_all(&mut all);
+      drop(records);
+      drop(db);
+      for id in &all {
+        if freed.contains(id) {
+          errors.push(format!("page {}: already freed", id));
+        } else {
+          freed.insert(*id);
+        }
+      }
+
+      // Track every reachable page.
+      let mut reachable = HashMap::new_in(bump);
+      reachable.insert(PgId(0), self.page(PgId(0))); //meta 0
+      reachable.insert(PgId(1), self.page(PgId(1))); // meta 1
+      let freelist_pgid = self.meta().free_list();
+      for i in 0..self.page(freelist_pgid).overflow {
+        let pg_id = PgId(i as u64);
+        reachable.insert(pg_id, self.page(freelist_pgid));
+      }
+
+      self.check_bucket(self.split_bound(), &mut reachable, &mut freed, &mut errors);
+
+      for i in 0..high_water.0 {
+        let pg_id = PgId(i);
+        if !reachable.contains_key(&pg_id) && !freed.contains(&pg_id) {
+          errors.push(format!("page {}: unreachable unfreed", pg_id));
+        }
+      }
+
+      errors
+    }
+
+    fn check_bucket(
+      &self, root: Self::BucketType, reachable: &mut HashMap<PgId, RefPage<'tx>>,
+      freed: &mut HashSet<PgId>, errors: &mut Vec<String>,
+    ) {
+      // ignore inline buckets
+      if root.root() == ZERO_PGID {
+        return;
+      }
+
+      self.for_each_page(root.root(), &mut |p, _, pgid_stack| {
+        if p.id > self.meta().pgid() {
+          errors.push(format!(
+            "page {}: out of bounds: {} (stack: {:?})",
+            p.id,
+            self.meta().pgid(),
+            pgid_stack
+          ));
+        }
+
+        for i in 0..p.overflow {
+          let id = p.id + i as u64;
+          if reachable.contains_key(&id) {
+            errors.push(format!(
+              "page {}: multiple references (stack: {:?})",
+              id, pgid_stack
+            ));
+          }
+          reachable.insert(id, *p);
+        }
+
+        if freed.contains(&p.id) {
+          errors.push(format!("page {}: reachable freed", p.id));
+        } else if !p.is_branch() && !p.is_leaf() {
+          errors.push(format!(
+            "page {}: invalid type: {} (stack: {:?})",
+            p.id,
+            p.page_type(),
+            pgid_stack
+          ));
+        }
+
+        self.recursively_check_pages(root.root(), errors);
+
+        root
+          .api_for_each_bucket(|key| {
+            if let Some(child) = root.api_bucket(key) {
+              self.check_bucket(child, reachable, freed, errors);
+            }
+            Ok(())
+          })
+          .unwrap();
+      });
+    }
+
+    fn recursively_check_pages(self, pg_id: PgId, errors: &mut Vec<String>) {
+      let bump = self.bump();
+      let mut pgid_stack = BVec::new_in(bump);
+      self.recursively_check_pages_internal(pg_id, &[], &[], &mut pgid_stack, errors);
+    }
+
+    fn recursively_check_pages_internal(
+      self, pg_id: PgId, min_key_closed: &[u8], max_key_open: &[u8], pageid_stack: &mut BVec<PgId>,
+      errors: &mut Vec<String>,
+    ) -> &'tx [u8] {
+      let p = self.page(pg_id);
+      pageid_stack.push(pg_id);
+      if let Some(branch_page) = MappedBranchPage::coerce_ref(&p) {
+        let running_min = min_key_closed;
+        let elements_len = branch_page.elements().len();
+        for (i, elem) in branch_page
+          .elements()
+          .iter()
+          .map(|e| e.as_ref())
+          .enumerate()
+        {
+          self.verify_key_order(
+            elem.pgid(),
+            "branch",
+            i,
+            elem.key(),
+            running_min,
+            max_key_open,
+            pageid_stack,
+            errors,
+          );
+          let mut max_key = max_key_open;
+          if i < elements_len - 1 {
+            max_key = branch_page.get_elem(i as u16 + 1).unwrap().key();
+          }
+          let max_key_in_subtree = self.recursively_check_pages_internal(
+            elem.pgid(),
+            elem.key(),
+            max_key,
+            pageid_stack,
+            errors,
+          );
+          pageid_stack.pop();
+          return max_key_in_subtree;
+        }
+      } else if let Some(leaf_page) = MappedLeafPage::coerce_ref(&p) {
+        let mut running_min = min_key_closed;
+        let elements_len = leaf_page.elements().len();
+        for (i, elem) in leaf_page.elements().iter().map(|e| e.as_ref()).enumerate() {
+          self.verify_key_order(
+            pg_id,
+            "leaf",
+            i,
+            elem.key(),
+            running_min,
+            max_key_open,
+            pageid_stack,
+            errors,
+          );
+          running_min = elem.key();
+        }
+        if p.count > 0 {
+          pageid_stack.pop();
+          return leaf_page.get_elem(p.count - 1).unwrap().key();
+        }
+      } else {
+        errors.push(format!("unexpected page type for pgId: {}", pg_id));
+      }
+      pageid_stack.pop();
+      &[]
+    }
+
+    /***
+     * verifyKeyOrder checks whether an entry with given #index on pgId (pageType: "branch|leaf") that has given "key",
+     * is within range determined by (previousKey..maxKeyOpen) and reports found violations to the channel (ch).
+     */
+    fn verify_key_order(
+      self, pg_id: PgId, page_type: &str, index: usize, key: &[u8], previous_key: &[u8],
+      max_key_open: &[u8], pageid_stack: &mut BVec<PgId>, errors: &mut Vec<String>,
+    ) {
+      if index == 0 && !previous_key.is_empty() && previous_key > key {
+        errors.push(format!("the first key[{}]={:02X?} on {} page({}) needs to be >= the key in the ancestor ({:02X?}). Stack: {:?}", index, key, page_type, pg_id, previous_key, pageid_stack));
+      }
+      if index > 0 {
+        if previous_key > key {
+          errors.push(format!("key[{}]=(hex){:02X?} on {} page({}) needs to be > (found <) than previous element (hex){:02X?}. Stack: {:?}", index, key, page_type, pg_id, previous_key, pageid_stack));
+        } else if previous_key == key {
+          errors.push(format!("key[{}]=(hex){:02X?} on {} page({}) needs to be > (found =) than previous element (hex){:02X?}. Stack: {:?}", index, key, page_type, pg_id, previous_key, pageid_stack));
+        }
+      }
+      if !max_key_open.is_empty() && key >= max_key_open {
+        errors.push(format!("key[{}]=(hex){:02X?} on {} page({}) needs to be < than key of the next element in ancestor (hex){:02X?}. Pages stack: {:?}", index, key, page_type, pg_id, previous_key, pageid_stack));
+      }
+    }
+  }
+
+  impl<'tx> TxCheck<'tx> for TxRwCell<'tx> {}
 }
 
 #[cfg(test)]

@@ -158,7 +158,7 @@ pub struct DbInfo {}
 pub struct TxRecords {
   txs: Vec<TxId>,
   rwtx: Option<TxId>,
-  freelist: Freelist,
+  pub(crate) freelist: Freelist,
 }
 
 impl TxRecords {

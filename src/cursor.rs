@@ -419,7 +419,6 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for InnerCursor
         } else {
           None
         }
-
       }
       // Retrieve value from node.
       Either::Right(n) => {
@@ -429,7 +428,6 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for InnerCursor
         } else {
           None
         }
-
       }
     }
   }
@@ -614,11 +612,14 @@ impl<'tx, B: BucketRwIAPI<'tx>> CursorRwIAPI<'tx> for InnerCursor<'tx, TxRwCell<
 
 #[cfg(test)]
 mod tests {
-  use crate::{BucketApi, BucketRwApi, CursorApi, CursorRwApi, DbApi, DbRwAPI, Error, TxApi, TxRwApi};
-  use crate::test_support::TestDb;
+  use crate::test_support::{TestDb, Unseal};
+  use crate::tx::check::TxCheck;
+  use crate::{
+    BucketApi, BucketRwApi, CursorApi, CursorRwApi, DbApi, DbRwAPI, Error, TxApi, TxRwApi,
+  };
 
   #[test]
-  fn test_cursor_bucket() -> crate::Result<()>{
+  fn test_cursor_bucket() -> crate::Result<()> {
     let mut db = TestDb::new()?;
     db.update(|mut tx| {
       let b = tx.create_bucket(b"widgets")?;
@@ -643,11 +644,20 @@ mod tests {
       let b = tx.bucket(b"widgets").unwrap();
       let mut c = b.cursor();
       // Exact match should go to the key.
-      assert_eq!((b"bar".as_slice(), Some(b"0002".as_slice())), c.seek(b"bar").unwrap());
+      assert_eq!(
+        (b"bar".as_slice(), Some(b"0002".as_slice())),
+        c.seek(b"bar").unwrap()
+      );
       // Inexact match should go to the next key.
-      assert_eq!((b"baz".as_slice(), Some(b"0003".as_slice())), c.seek(b"bas").unwrap());
+      assert_eq!(
+        (b"baz".as_slice(), Some(b"0003".as_slice())),
+        c.seek(b"bas").unwrap()
+      );
       // Low key should go to the first key.
-      assert_eq!((b"bar".as_slice(), Some(b"0002".as_slice())), c.seek(b"").unwrap());
+      assert_eq!(
+        (b"bar".as_slice(), Some(b"0002".as_slice())),
+        c.seek(b"").unwrap()
+      );
       // High key should return no key.
       assert_eq!(None, c.seek(b"zzz"));
       // Buckets should return their key but no value.
@@ -657,11 +667,11 @@ mod tests {
   }
 
   #[test]
-  fn test_cursor_delete() -> crate::Result<()>{
+  fn test_cursor_delete() -> crate::Result<()> {
     let mut db = TestDb::new()?;
     let count = 1000u64;
-    let value= [0u8; 100];
-    db.update(|mut tx | {
+    let value = [0u8; 100];
+    db.update(|mut tx| {
       let mut b = tx.create_bucket(b"widgets")?;
       for i in 0..count {
         let be_i = i.to_be_bytes();
@@ -671,9 +681,16 @@ mod tests {
       Ok(())
     })?;
     db.update(|mut tx| {
+      let tx_cell = tx.unseal();
+      let errors = tx_cell.check();
+      for error in errors {
+        println!("{}", error);
+      }
+      return Err(Error::BucketExists);
+
       let b = tx.bucket(b"widgets").unwrap();
       let mut c = b.cursor_mut();
-      let bound = (count/2).to_be_bytes();
+      let bound = (count / 2).to_be_bytes();
       let (mut key, _) = c.first().unwrap();
       while key < bound.as_slice() {
         c.delete()?;
@@ -686,7 +703,7 @@ mod tests {
     db.view(|tx| {
       let b = tx.bucket(b"widgets").unwrap();
       let stats = b.stats();
-      assert_eq!((count/2) + 1, stats.key_n as u64);
+      assert_eq!((count / 2) + 1, stats.key_n as u64);
       Ok(())
     })?;
     Ok(())
