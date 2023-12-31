@@ -380,117 +380,43 @@ impl<'tx> NodeRwCell<'tx> {
     }
   }
 
-  /// split breaks up a node into multiple smaller nodes, if appropriate.
-  /// This should only be called from the spill() function.
-  pub(crate) fn split(
-    self: NodeRwCell<'tx>, page_size: usize, bump: &'tx Bump,
-    parent_children: &mut BVec<NodeRwCell<'tx>>,
-  ) -> BVec<'tx, NodeRwCell<'tx>> {
-    let mut nodes = { BVec::new_in(bump) };
-    let mut node = self;
-    loop {
-      // Split node into two.
-      let (a, b) = node.split_two(page_size, parent_children);
-      nodes.push(a);
-      // If we can't split then exit the loop.
-      if b.is_none() {
-        break;
-      }
-
-      // Set node to b so it gets split on the next iteration.
-      node = b.unwrap();
-    }
-    nodes
-  }
-
-  /// splitTwo breaks up a node into two smaller nodes, if appropriate.
-  /// This should only be called from the split() function.
-  pub(crate) fn split_two(
-    self: NodeRwCell<'tx>, page_size: usize, parent_children: &mut BVec<NodeRwCell<'tx>>,
-  ) -> (NodeRwCell<'tx>, Option<NodeRwCell<'tx>>) {
-    let mut self_borrow = self.cell.borrow_mut();
-    // Ignore the split if the page doesn't have at least enough nodes for
-    // two pages or if the nodes can fit in a single page.
-    if self_borrow.inodes.len() <= MIN_KEYS_PER_PAGE * 2 || self_borrow.size_less_than(page_size) {
-      return (self, None);
-    }
-
-    // Determine the threshold before starting a new node.
-    let mut fill_percent = self_borrow.bucket.split_ref().2.unwrap().fill_percent;
-    fill_percent = fill_percent.max(MIN_FILL_PERCENT).min(MAX_FILL_PERCENT);
-    let threshold = (page_size as f64 * fill_percent) as usize;
-
-    // Determine split position and sizes of the two pages.
-    let (split_index, _) = self_borrow.split_index(threshold);
-
-    // Split node into two separate nodes.
-    // If there's no parent then we'll need to create one.
-    let parent = {
-      if let Some(parent) = self_borrow.parent {
-        parent
-      } else {
-        let parent = NodeRwCell::new_parent_in(self_borrow.bucket);
-        self_borrow.parent = Some(parent);
-        parent_children.push(self);
-        parent
-      }
-    };
-
-    // Create a new node and add it to the parent.
-    let next = NodeRwCell::new_child_in(self_borrow.bucket, self_borrow.is_leaf, parent);
-    parent_children.push(next);
-
-    let mut next_borrow = next.cell.borrow_mut();
-    // Split inodes across two nodes.
-    next_borrow.inodes = self_borrow.inodes.split_off(split_index);
-
-    // Update the statistics
-    self_borrow.bucket.api_tx().mut_stats().split += 1;
-
-    (self, Some(next))
-  }
-
-  /// spill_child writes the nodes to dirty pages and splits nodes as it goes.
+  /// spill writes the nodes to dirty pages and splits nodes as it goes.
   /// Returns an error if dirty pages cannot be allocated.
   /// The top-most spill function acts as if it is a parent
-  pub(crate) fn spill_child(
-    self: NodeRwCell<'tx>, parent_children: &mut BVec<NodeRwCell<'tx>>,
-  ) -> crate::Result<()> {
-    let (tx, mut children) = {
-      let mut self_borrow = self.cell.borrow_mut();
-      if self_borrow.is_spilled {
+  pub(crate) fn spill(self) -> crate::Result<()> {
+    let (tx, bump) = {
+      let mut cell = self.cell.borrow_mut();
+      if cell.is_spilled {
         return Ok(());
       }
-
-      // We no longer need the child list because it's only used for spill tracking.
-      let mut child_swap = BVec::with_capacity_in(0, self_borrow.bucket.api_tx().bump());
-      mem::swap(&mut self_borrow.children, &mut child_swap);
-      (self_borrow.bucket.api_tx(), child_swap)
+      cell.children.sort_by_key(|child| child.cell.borrow().key());
+      (cell.bucket.api_tx(), cell.children.bump())
     };
 
     // Spill child nodes first. Child nodes can materialize sibling nodes in
     // the case of split-merge so we cannot use a range loop. We have to check
     // the children size on every loop iteration.
-    children.sort_by_key(|probe| probe.cell.borrow().inodes[0].key());
-    let mut i: usize = 0;
-    while i < children.len() {
-      children[i].spill_child(&mut children)?;
+    let mut i = 0usize;
+    while let Some(child) = self.cell.borrow().children.get(i).cloned() {
+      child.spill()?;
       i += 1;
     }
-    let bump = tx.bump();
+
+    // We no longer need the child list because it's only used for spill tracking.
+    self.cell.borrow_mut().children.clear();
+
     let page_size = tx.page_size();
 
     // Split nodes into appropriate sizes. The first node will always be n.
-    let nodes = self.split(page_size, bump, parent_children);
+    let nodes = self.split(page_size, bump);
     for node in nodes {
       let node_size = {
-        let mut node_borrow = node.cell.borrow_mut();
-        // Add node's page to the freelist if it's not new.
-        if node_borrow.pgid > ZERO_PGID {
-          tx.freelist_free_page(tx.api_id(), &tx.page(node_borrow.pgid));
-          node_borrow.pgid = ZERO_PGID;
+        let mut node_cell = node.cell.borrow_mut();
+        if node_cell.pgid > ZERO_PGID {
+          tx.freelist_free_page(tx.api_id(), &tx.page(node_cell.pgid));
+          node_cell.pgid = ZERO_PGID;
         }
-        node_borrow.size()
+        node_cell.size()
       };
 
       // Allocate contiguous space for the node.
@@ -500,31 +426,99 @@ impl<'tx> NodeRwCell<'tx> {
       if p.id >= tx.meta().pgid() {
         panic!("pgid {} above high water mark {}", p.id, tx.meta().pgid())
       }
-      let mut node_borrow = self.cell.borrow_mut();
+      let mut node_cell = node.cell.borrow_mut();
 
-      node_borrow.pgid = p.id;
-      node_borrow.write(&mut p);
+      node_cell.pgid = p.id;
+      node_cell.write(&mut p);
       tx.queue_page(p);
-      node_borrow.is_spilled = true;
+      node_cell.is_spilled = true;
 
       // Insert into parent inodes.
-      if let Some(parent) = node_borrow.parent {
+      if let Some(parent) = node_cell.parent {
         let key: &'tx [u8] = {
-          if node_borrow.key.len() == 0 {
-            node_borrow.inodes[0].key()
+          if node_cell.key.len() == 0 {
+            node_cell.inodes[0].key()
           } else {
-            node_borrow.key()
+            node_cell.key()
           }
         };
-        parent.put(key, node_borrow.inodes[0].key(), &[], node_borrow.pgid, 0);
-        node_borrow.key = node_borrow.inodes[0].cod_key();
+        parent.put(key, node_cell.inodes[0].key(), &[], node_cell.pgid, 0);
+        node_cell.key = node_cell.inodes[0].cod_key();
       }
 
       tx.mut_stats().spill += 1;
     }
 
-    // TODO: Add parent spill
+
+    // If the root node split and created a new root then we need to spill that
+    // as well. We'll clear out the children to make sure it doesn't try to respill.
+    let cell = self.cell.borrow();
+    if let Some(parent) = cell.parent {
+      drop(cell);
+      return parent.spill();
+    }
     Ok(())
+  }
+
+  /// split breaks up a node into multiple smaller nodes, if appropriate.
+  /// This should only be called from the spill() function.
+  fn split(self, page_size: usize, bump: &'tx Bump) -> BVec<'tx, NodeRwCell<'tx>> {
+    let mut nodes = BVec::new_in(bump);
+    let mut node = self;
+    loop {
+      // Split node into two.
+      let (a, ob) = node.split_two(page_size);
+      nodes.push(a);
+      match ob {
+        // If we can't split then exit the loop.
+        None => break,
+        // Set node to b so it gets split on the next iteration.
+        Some(b) => node = b,
+      }
+    }
+    nodes
+  }
+
+  fn split_two(self, page_size: usize ) -> (NodeRwCell<'tx>, Option<NodeRwCell<'tx>>) {
+    let mut cell = self.cell.borrow_mut();
+    // Ignore the split if the page doesn't have at least enough nodes for
+    // two pages or if the nodes can fit in a single page.
+    if cell.inodes.len() <= MIN_KEYS_PER_PAGE * 2 || cell.size_less_than(page_size) {
+      return (self, None);
+    }
+    // Determine the threshold before starting a new node.
+    let mut fill_percent = cell.bucket.split_ow().unwrap().fill_percent;
+    fill_percent = fill_percent.max(MIN_FILL_PERCENT).min(MAX_FILL_PERCENT);
+    let threshold = (page_size as f64 * fill_percent) as usize;
+
+    // Determine split position and sizes of the two pages.
+    let (split_index, _) = cell.split_index(threshold);
+
+    // Split node into two separate nodes.
+    // If there's no parent then we'll need to create one.
+    let parent = {
+      if let Some(parent) = cell.parent {
+        parent
+      } else {
+        let parent = NodeRwCell::new_parent_in(cell.bucket);
+        cell.parent = Some(parent);
+        parent.cell.borrow_mut().children.push(self);
+        parent
+      }
+    };
+
+    // Create a new node and add it to the parent.
+    let next = NodeRwCell::new_child_in(cell.bucket, cell.is_leaf, parent);
+    parent.cell.borrow_mut().children.push(next);
+
+    let mut next_borrow = next.cell.borrow_mut();
+    // Split inodes across two nodes.
+    next_borrow.inodes = cell.inodes.split_off(split_index);
+
+    // Update the statistics
+    cell.bucket.api_tx().mut_stats().split += 1;
+
+    (self, Some(next))
   }
 
   /// rebalance attempts to combine the node with sibling nodes if the node fill
@@ -766,8 +760,9 @@ mod test {
     n.put(b"00000003", b"00000003", b"0123456701234567", ZERO_PGID, 0);
     n.put(b"00000004", b"00000004", b"0123456701234567", ZERO_PGID, 0);
     n.put(b"00000005", b"00000005", b"0123456701234567", ZERO_PGID, 0);
-    let mut parent_children = BVec::new_in(txrw.bump());
-    let split_nodes = n.split(100, txrw.bump(), &mut parent_children);
+    let split_nodes = n.split(100, txrw.bump());
+    let binding = n.cell.borrow().parent.unwrap();
+    let parent_children = &binding.cell.borrow().children;
     assert_eq!(2, parent_children.len());
     assert_eq!(2, parent_children[0].cell.borrow().inodes.len());
     assert_eq!(3, parent_children[1].cell.borrow().inodes.len());
@@ -783,8 +778,7 @@ mod test {
     let n = root_bucket.materialize_root();
     n.put(b"00000001", b"00000001", b"0123456701234567", ZERO_PGID, 0);
     n.put(b"00000002", b"00000002", b"0123456701234567", ZERO_PGID, 0);
-    let mut parent_children = BVec::new_in(txrw.bump());
-    let split_nodes = n.split(20, txrw.bump(), &mut parent_children);
+    let split_nodes = n.split(20, txrw.bump());
     assert!(n.cell.borrow().parent.is_none(), "expected none parent");
     Ok(())
   }
@@ -801,8 +795,7 @@ mod test {
     n.put(b"00000003", b"00000003", b"0123456701234567", ZERO_PGID, 0);
     n.put(b"00000004", b"00000004", b"0123456701234567", ZERO_PGID, 0);
     n.put(b"00000005", b"00000005", b"0123456701234567", ZERO_PGID, 0);
-    let mut parent_children = BVec::new_in(txrw.bump());
-    let split_nodes = n.split(4096, txrw.bump(), &mut parent_children);
+    let split_nodes = n.split(4096, txrw.bump());
     assert!(n.cell.borrow().parent.is_none(), "expected none parent");
     Ok(())
   }

@@ -1153,15 +1153,13 @@ impl<'tx> BucketRwIAPI<'tx> for BucketRwCell<'tx> {
       None => return Ok(()),
       Some(root_node) => root_node,
     };
-    let mut parent_children = BVec::new_in(self.cell.1.upgrade().unwrap().bump());
 
-    root_node.spill_child(&mut parent_children)?;
+    root_node.spill()?;
     if let (mut r, Some(mut w)) = self.split_r_ow_mut() {
       let mut new_root = root_node.root();
       w.root_node = Some(new_root);
       let mut borrow_root = new_root.cell.borrow_mut();
       let new_pgid = borrow_root.pgid;
-      borrow_root.children = parent_children;
       let tx_pgid = self.cell.1.upgrade().unwrap().meta().pgid();
       if new_pgid >= tx_pgid {
         panic!("pgid ({}) above high water mark ({})", new_pgid, tx_pgid);
