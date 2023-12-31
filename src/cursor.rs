@@ -283,7 +283,7 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for InnerCursor
       let mut stack_exhausted = true;
       let mut new_stack_depth = 0;
       for (depth, elem) in self.stack.iter_mut().enumerate().rev() {
-        new_stack_depth = depth;
+        new_stack_depth = depth + 1;
         if elem.index < elem.count() - 1 {
           elem.index += 1;
           stack_exhausted = false;
@@ -588,11 +588,12 @@ impl<'tx, B: BucketRwIAPI<'tx>> CursorRwIAPI<'tx> for InnerCursor<'tx, TxRwCell<
     let mut n = {
       let first = self.stack.first().unwrap();
       match &self.stack.first().unwrap().pn {
-        Either::Left(page) => BucketRwIAPI::node(self.bucket, page.id, None),
+        Either::Left(page) => self.bucket.node( page.id, None),
         Either::Right(node) => *node,
       }
     };
-    for elem in self.stack.split_last().unwrap().1 {
+    let _stack = &self.stack[0..self.stack.len() - 1];
+    for elem in &self.stack[0..self.stack.len() - 1] {
       assert!(!n.cell.borrow().is_leaf, "expected branch node");
       n = n.child_at(elem.index);
     }
@@ -680,6 +681,16 @@ mod tests {
       let _ = b.create_bucket(b"sub")?;
       Ok(())
     })?;
+    db.update(|tx| {
+      let errors = tx.unseal().check();
+      for error in &errors {
+        println!("{}", error);
+      }
+      if !errors.is_empty() {
+        panic!();
+      }
+      Ok(())
+    })?;
     db.update(|mut tx| {
       let b = tx.bucket(b"widgets").unwrap();
       let mut c = b.cursor_mut();
@@ -687,6 +698,7 @@ mod tests {
       let (mut key, _) = c.first().unwrap();
       while key < bound.as_slice() {
         c.delete()?;
+//        todo!(" next is not changing keys?");
         key = c.next().unwrap().0;
       }
       c.seek(b"sub");

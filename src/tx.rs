@@ -268,7 +268,7 @@ pub(crate) trait TxIAPI<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
   fn for_each_page_internal<F: FnMut(&RefPage<'tx>, usize, &mut BVec<PgId>)>(
     self, pgid_stack: &mut BVec<PgId>, f: &mut F,
   ) {
-    let p = self.page(*pgid_stack.first().unwrap());
+    let p = self.page(*pgid_stack.last().unwrap());
 
     // Execute function.
     f(&p, pgid_stack.len() - 1, pgid_stack);
