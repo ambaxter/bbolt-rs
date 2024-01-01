@@ -101,9 +101,11 @@ impl<'tx> INode<'tx> {
     if let Some(leaf_page) = MappedLeafPage::coerce_ref(page) {
       let i = leaf_page.iter().map(|elem| INode::from_leaf_in(elem));
       inodes.extend(i);
+      assert_eq!(leaf_page.count as usize, inodes.len())
     } else if let Some(branch_page) = MappedBranchPage::coerce_ref(page) {
       let i = branch_page.iter().map(|elem| INode::from_branch_in(elem));
       inodes.extend(i);
+      assert_eq!(branch_page.count as usize, inodes.len())
     } else {
       panic!(
         "INodes::read_inodes - Unexpected page type: {:?}",

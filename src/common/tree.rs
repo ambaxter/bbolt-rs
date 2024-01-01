@@ -290,8 +290,9 @@ impl<'a, 'tx, T: TreePage<'tx>> Iterator for TreeIterator<'a, 'tx, T> {
   type Item = T::ElemRef;
 
   fn next(&mut self) -> Option<Self::Item> {
+    let item = self.page.get_elem(self.i);
     self.i += 1;
-    self.page.get_elem(self.i)
+    item
   }
 }
 
