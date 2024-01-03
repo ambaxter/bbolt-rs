@@ -266,7 +266,7 @@ impl Freelist {
     if let Some((size, pgid)) = self
       .free_maps
       .iter()
-      .filter(|(&size, _)| size > n)
+      .filter(|(&size, _)| size >= n)
       .flat_map(|(&size, pgids)| zip(repeat(size), pgids.iter().copied()))
       .next()
     {

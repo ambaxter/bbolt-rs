@@ -439,7 +439,7 @@ pub(crate) trait DbIAPI<'tx>: 'tx {
 pub(crate) trait DbRwIAPI<'tx>: DbIAPI<'tx> {
   fn free_page(&self, txid: TxId, p: &Page);
 
-  fn free_pages(&mut self);
+  fn free_pages(&self);
 
   fn allocate(
     &mut self, tx: TxRwCell<'tx>, count: u64,
@@ -525,8 +525,33 @@ impl<'tx> DbIAPI<'tx> for DBShared {
 }
 
 impl<'tx> DbRwIAPI<'tx> for DBShared {
-  fn free_pages(&mut self) {
-    todo!()
+  fn free_pages(&self) {
+    let mut records = self.records.lock();
+    // Satisfy the borrow checker. We can't iterate txs and mutate freelist at the same time
+    let mut txs = Vec::with_capacity(0);
+    mem::swap(&mut txs, &mut records.txs);
+
+    // Free all pending pages prior to earliest open transaction.
+
+    txs.sort();
+    let mut min_id= TxId(0xFFFFFFFFFFFFFFFF);
+    if !txs.is_empty() {
+      min_id = *txs.first().unwrap();
+    }
+    if min_id.0 > 0 {
+      records.freelist.release(min_id - 1);
+    }
+
+    // Release unused txid extents.
+    for t in &txs {
+      records.freelist.release_range(min_id, *t - 1);
+      min_id = *t + 1;
+    }
+    records.freelist.release_range(min_id, TxId(0xFFFFFFFFFFFFFFFF));
+    // Any page both allocated and freed in an extent is safe to release.
+
+    // set the records back as the tx owner
+    mem::swap(&mut txs, &mut records.txs);
   }
 
   fn free_page(&self, txid: TxId, p: &Page) {
@@ -815,14 +840,17 @@ impl DbRwAPI for DB {
 
   fn begin_mut<'tx>(&'tx mut self) -> Self::TxRwType<'tx> {
     let bump = self.bump_pool.pull_owned();
-    TxRwImpl::new(bump, self.db.write())
+    let write_lock = self.db.write();
+    TxRwImpl::new(bump, write_lock)
   }
 
   fn update<'tx, F: Fn(TxRwRef<'tx>) -> crate::Result<()>>(
     &'tx mut self, mut f: F,
   ) -> crate::Result<()> {
     let bump = self.bump_pool.pull_owned();
-    let txrw = TxRwImpl::new(bump, self.db.write());
+    let write_lock = self.db.write();
+    write_lock.free_pages();
+    let txrw = TxRwImpl::new(bump, write_lock);
     let tx_ref = txrw.get_ref();
     match f(tx_ref) {
       Ok(_) => txrw.commit(),
