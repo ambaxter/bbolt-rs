@@ -153,8 +153,6 @@ impl Sub<&DbStats> for &DbStats {
   }
 }
 
-pub struct DbInfo {}
-
 pub struct TxRecords {
   txs: Vec<TxId>,
   rwtx: Option<TxId>,
@@ -189,14 +187,60 @@ impl TxRecords {
   }
 }
 
-pub struct DBBackend {
+fn mmap_size(page_size: usize, size: u64) -> crate::Result<u64> {
+  for i in 15..=30usize {
+    if size <= 1 << i {
+      return Ok(1 << i);
+    }
+  }
+  if size > MAX_MAP_SIZE.bytes() as u64 {
+    return Err(Error::MMapTooLarge);
+  }
+
+  let mut sz = size;
+  let remainder = sz % MAX_MMAP_STEP.bytes() as u64;
+  if remainder > 0 {
+    sz += MAX_MMAP_STEP.bytes() as u64 - remainder;
+  }
+
+  let ps = page_size as u64;
+  if sz % ps != 0 {
+    sz = ((sz / ps) + 1) * ps;
+  }
+
+  if sz > MAX_MAP_SIZE.bytes() as u64 {
+    sz = MAX_MAP_SIZE.bytes() as u64;
+  }
+
+  Ok(sz)
+}
+
+pub(crate) trait DBBackend {
+  fn page_size(&self) -> usize;
+  fn data_size(&self) -> u64;
+  fn meta(&self) -> Meta;
+  fn page<'tx>(&self, pg_id: PgId) -> RefPage<'tx>;
+
+  /// grow grows the size of the database to the given `size`.
+  fn grow(&mut self, size: u64) -> crate::Result<()>;
+
+  /// mmap opens the underlying memory-mapped file and initializes the meta references.
+  /// min_size is the minimum size that the new mmap can be.
+  fn mmap(&mut self, min_size: u64, tx: TxRwCell) -> crate::Result<()>;
+
+  fn fsync(&mut self) -> crate::Result<()>;
+  fn write_all_at(&mut self, buffer: &[u8], offset: u64) -> crate::Result<usize>;
+}
+
+struct MemBackend {}
+
+pub struct FileBackend {
   path: PathBuf,
   file: File,
   page_size: usize,
   mmap: Option<MmapRaw>,
   meta0: MappedMetaPage,
   meta1: MappedMetaPage,
-  page_pool: Vec<AlignedBytes<alignment::Page>>,
   alloc_size: u64,
   /// current on disk file size
   file_size: u64,
@@ -206,7 +250,7 @@ pub struct DBBackend {
   read_only: bool,
 }
 
-impl DBBackend {
+impl FileBackend {
   fn invalidate(&mut self) {
     self.data_size = 0;
   }
@@ -217,52 +261,8 @@ impl DBBackend {
     Ok(())
   }
 
-  pub(crate) fn meta(&self) -> Meta {
-    let (meta_a, meta_b) = {
-      if self.meta1.meta.txid() > self.meta0.meta.txid() {
-        (self.meta1.meta, self.meta0.meta)
-      } else {
-        (self.meta0.meta, self.meta1.meta)
-      }
-    };
-    if meta_a.validate().is_ok() {
-      return meta_a;
-    } else if meta_b.validate().is_ok() {
-      return meta_b;
-    }
-    panic!("bolt.db.meta: invalid meta page")
-  }
-
   fn has_synced_free_list(&self) -> bool {
     self.meta().free_list() != PGID_NO_FREE_LIST
-  }
-
-  fn mmap_size(page_size: usize, size: u64) -> crate::Result<u64> {
-    for i in 15..=30usize {
-      if size <= 1 << i {
-        return Ok(1 << i);
-      }
-    }
-    if size > MAX_MAP_SIZE.bytes() as u64 {
-      return Err(Error::MMapTooLarge);
-    }
-
-    let mut sz = size;
-    let remainder = sz % MAX_MMAP_STEP.bytes() as u64;
-    if remainder > 0 {
-      sz += MAX_MMAP_STEP.bytes() as u64 - remainder;
-    }
-
-    let ps = page_size as u64;
-    if sz % ps != 0 {
-      sz = ((sz / ps) + 1) * ps;
-    }
-
-    if sz > MAX_MAP_SIZE.bytes() as u64 {
-      sz = MAX_MAP_SIZE.bytes() as u64;
-    }
-
-    Ok(sz)
   }
 
   fn mmap_unlock(&mut self) -> crate::Result<()> {
@@ -365,6 +365,34 @@ impl DBBackend {
     }
     Err(Error::InvalidDatabase(meta_can_read))
   }
+}
+
+impl DBBackend for FileBackend {
+  fn page_size(&self) -> usize {
+    self.page_size
+  }
+
+  fn meta(&self) -> Meta {
+    let (meta_a, meta_b) = {
+      if self.meta1.meta.txid() > self.meta0.meta.txid() {
+        (self.meta1.meta, self.meta0.meta)
+      } else {
+        (self.meta0.meta, self.meta1.meta)
+      }
+    };
+    if meta_a.validate().is_ok() {
+      return meta_a;
+    } else if meta_b.validate().is_ok() {
+      return meta_b;
+    }
+    panic!("bolt.db.meta: invalid meta page")
+  }
+
+  fn page<'tx>(&self, pg_id: PgId) -> RefPage<'tx> {
+    let page_addr = pg_id.0 as usize * self.page_size;
+    let page_ptr = unsafe { self.mmap.as_ref().unwrap().as_ptr().add(page_addr) };
+    RefPage::new(page_ptr)
+  }
 
   /// mmap opens the underlying memory-mapped file and initializes the meta references.
   /// min_size is the minimum size that the new mmap can be.
@@ -376,7 +404,7 @@ impl DBBackend {
     let file_size = info.len();
     let mut size = file_size.max(min_size);
 
-    size = DBBackend::mmap_size(self.page_size, size)?;
+    size = mmap_size(self.page_size, size)?;
     if let Some(mmap) = self.mmap.take() {
       mmap.unlock()?;
       tx.cell.1.own_in();
@@ -402,19 +430,75 @@ impl DBBackend {
     self.data_size = size;
     Ok(())
   }
+  fn grow(&mut self, mut size: u64) -> crate::Result<()> {
+    // Ignore if the new size is less than available file size.
+    if size <= self.file_size {
+      return Ok(());
+    }
+    // If the data is smaller than the alloc size then only allocate what's needed.
+    // Once it goes over the allocation size then allocate in chunks.
+    if self.data_size <= self.alloc_size {
+      size = self.data_size;
+    } else {
+      size += self.alloc_size;
+    }
 
-  pub(crate) fn page<'tx>(&self, pg_id: PgId) -> RefPage<'tx> {
-    let page_addr = pg_id.0 as usize * self.page_size;
-    let page_ptr = unsafe { self.mmap.as_ref().unwrap().as_ptr().add(page_addr) };
-    RefPage::new(page_ptr)
+    // Truncate and fsync to ensure file size metadata is flushed.
+    // https://github.com/boltdb/bolt/issues/284
+    if let Some(mmap) = self.mmap.take() {
+      if self.use_mlock {
+        mmap.unlock()?;
+      }
+    }
+    self.file.set_len(size)?;
+    self.file.sync_all()?;
+    //By the time we hit this the dereference has already occurred during tx.spill
+    let mmap = MmapRaw::map_raw(&self.file)?;
+    mmap.advise(Advice::Random)?;
+    if self.use_mlock {
+      mmap.lock()?;
+    }
+    self.file_size = size;
+    self.mmap = Some(mmap);
+    Ok(())
   }
 
-  pub(crate) fn grow(&self, size: u64) -> crate::Result<()> {
-    todo!()
+  fn fsync(&mut self) -> crate::Result<()> {
+    self.file.sync_all().map_err(|e| Error::IO(e))
+  }
+
+  fn write_all_at(&mut self, buffer: &[u8], mut offset: u64) -> crate::Result<usize> {
+    let mut rem = buffer.len();
+    let mut written = 0;
+    loop {
+      let buf = &buffer[written..rem];
+      self
+        .file
+        .seek(SeekFrom::Start(offset))
+        .map_err(|e| Error::IO(e))?;
+      let bytes_written = self.file.write(buffer).map_err(|e| Error::IO(e))?;
+      rem -= bytes_written;
+      if rem == 0 {
+        break;
+      }
+      offset += bytes_written as u64;
+      written += bytes_written;
+    }
+    println!(
+      "Write at {} for {} bytes. Current size is {}",
+      offset,
+      written,
+      self.file.metadata()?.len()
+    );
+    Ok(written)
+  }
+
+  fn data_size(&self) -> u64 {
+    self.data_size
   }
 }
 
-impl Drop for DBBackend {
+impl Drop for FileBackend {
   fn drop(&mut self) {
     if !self.read_only {
       match self.file.unlock() {
@@ -499,7 +583,8 @@ impl<'tx> DbIAPI<'tx> for DbGuard<'tx> {
 pub struct DBShared {
   pub(crate) stats: Arc<RwLock<DbStats>>,
   pub(crate) records: Mutex<TxRecords>,
-  pub(crate) backend: DBBackend,
+  page_pool: Vec<AlignedBytes<alignment::Page>>,
+  pub(crate) backend: Box<dyn DBBackend>,
 }
 
 impl<'tx> DbIAPI<'tx> for DBShared {
@@ -534,7 +619,7 @@ impl<'tx> DbRwIAPI<'tx> for DBShared {
     // Free all pending pages prior to earliest open transaction.
 
     txs.sort();
-    let mut min_id= TxId(0xFFFFFFFFFFFFFFFF);
+    let mut min_id = TxId(0xFFFFFFFFFFFFFFFF);
     if !txs.is_empty() {
       min_id = *txs.first().unwrap();
     }
@@ -547,7 +632,9 @@ impl<'tx> DbRwIAPI<'tx> for DBShared {
       records.freelist.release_range(min_id, *t - 1);
       min_id = *t + 1;
     }
-    records.freelist.release_range(min_id, TxId(0xFFFFFFFFFFFFFFFF));
+    records
+      .freelist
+      .release_range(min_id, TxId(0xFFFFFFFFFFFFFFFF));
     // Any page both allocated and freed in an extent is safe to release.
 
     // set the records back as the tx owner
@@ -564,10 +651,10 @@ impl<'tx> DbRwIAPI<'tx> for DBShared {
     let tx_id = tx.api_id();
     let high_water = tx.meta().pgid();
     let mut r = self.records.lock();
-    let bytes = if count == 1 && !self.backend.page_pool.is_empty() {
-      self.backend.page_pool.pop().unwrap()
+    let bytes = if count == 1 && !self.page_pool.is_empty() {
+      self.page_pool.pop().unwrap()
     } else {
-      AlignedBytes::new_zeroed(count as usize * self.backend.page_size)
+      AlignedBytes::new_zeroed(count as usize * self.backend.page_size())
     };
 
     let mut mut_page = SelfOwned::new_with_map(bytes, |b| MutPage::new(b.as_mut_ptr()));
@@ -584,47 +671,13 @@ impl<'tx> DbRwIAPI<'tx> for DBShared {
 
     // Resize mmap() if we're at the end.
     mut_page.id = high_water;
-    let min_size = (high_water.0 + count + 1) * self.backend.page_size as u64;
-    if min_size > self.backend.data_size {
+    let min_size = (high_water.0 + count + 1) * self.backend.page_size() as u64;
+    if min_size > self.backend.data_size() {
       self.backend.mmap(min_size, tx)?;
     }
 
     tx.split_r_mut().meta.set_pgid(high_water + count);
     Ok(mut_page)
-  }
-
-  /// grow grows the size of the database to the given `size`.
-  fn grow(&mut self, mut size: u64) -> crate::Result<()> {
-    // Ignore if the new size is less than available file size.
-    if size <= self.backend.file_size {
-      return Ok(());
-    }
-    // If the data is smaller than the alloc size then only allocate what's needed.
-    // Once it goes over the allocation size then allocate in chunks.
-    if self.backend.data_size <= self.backend.alloc_size {
-      size = self.backend.data_size;
-    } else {
-      size += self.backend.alloc_size;
-    }
-
-    // Truncate and fsync to ensure file size metadata is flushed.
-    // https://github.com/boltdb/bolt/issues/284
-    if let Some(mmap) = self.backend.mmap.take() {
-      if self.backend.use_mlock {
-        mmap.unlock()?;
-      }
-    }
-    self.backend.file.set_len(size)?;
-    self.backend.file.sync_all()?;
-    //By the time we hit this the dereference has already occurred during tx.spill
-    let mmap = MmapRaw::map_raw(&self.backend.file)?;
-    mmap.advise(Advice::Random)?;
-    if self.backend.use_mlock {
-      mmap.lock()?;
-    }
-    self.backend.file_size = size;
-    self.backend.mmap = Some(mmap);
-    Ok(())
   }
 
   fn commit_freelist(
@@ -634,7 +687,7 @@ impl<'tx> DbRwIAPI<'tx> for DBShared {
     // the size of the freelist but not underestimate the size (which would be bad).
     let count = {
       let records = self.records.lock();
-      let page_size = self.backend.page_size;
+      let page_size = self.backend.page_size();
       let freelist_size = records.freelist.size();
       (freelist_size / page_size as u64) + 1
     };
@@ -652,7 +705,7 @@ impl<'tx> DbRwIAPI<'tx> for DBShared {
   fn remove_rw_tx(&mut self, rem_tx: TxId, tx_stats: TxStats) {
     let mut records = self.records.lock();
     let mut stats = self.stats.write();
-    let page_size = self.backend.page_size;
+    let page_size = self.backend.page_size();
 
     let free_list_free_n = records.freelist.free_count();
     let free_list_pending_n = records.freelist.pending_count();
@@ -668,28 +721,20 @@ impl<'tx> DbRwIAPI<'tx> for DBShared {
   }
 
   fn write_at(&mut self, buf: &[u8], offset: u64) -> crate::Result<usize> {
-    self
-      .backend
-      .file
-      .seek(SeekFrom::Start(offset))
-      .map_err(|e| Error::IO(e))?;
-    let r = self.backend.file.write(buf).map_err(|e| Error::IO(e));
-    println!(
-      "Write at {} for {} bytes. Current size is {}",
-      offset,
-      r.as_ref().unwrap(),
-      self.backend.file.metadata()?.len()
-    );
-    r
+    self.backend.write_all_at(buf, offset)
   }
 
   fn fsync(&mut self) -> crate::Result<()> {
-    self.backend.file.sync_all().map_err(|e| Error::IO(e))
+    self.backend.fsync()
   }
 
   fn repool_allocated(&mut self, mut page: AlignedBytes<alignment::Page>) {
     page.fill(0);
-    self.backend.page_pool.push(page);
+    self.page_pool.push(page);
+  }
+
+  fn grow(&mut self, size: u64) -> crate::Result<()> {
+    self.backend.grow(size)
   }
 }
 
@@ -721,7 +766,7 @@ impl DB {
       .open(&path)?;
     file.lock_exclusive()?;
 
-    let page_size = DBBackend::get_page_size(&mut file)?;
+    let page_size = FileBackend::get_page_size(&mut file)?;
     assert!(page_size > 0, "invalid page size");
 
     let file_size = file.metadata()?.len();
@@ -735,14 +780,13 @@ impl DB {
         MappedMetaPage::new(mmap.as_mut_ptr().add(page_size)),
       )
     };
-    let backend = DBBackend {
+    let backend = FileBackend {
       path,
       file,
       page_size,
       mmap: Some(mmap),
       meta0,
       meta1,
-      page_pool: vec![],
       alloc_size: DEFAULT_ALLOC_SIZE.bytes() as u64,
       file_size,
       data_size: 0,
@@ -764,7 +808,8 @@ impl DB {
       db: Arc::new(RwLock::new(DBShared {
         stats: arc_stats.clone(),
         records: Mutex::new(records),
-        backend,
+        backend: Box::new(backend),
+        page_pool: vec![],
       })),
       stats: arc_stats.clone(),
     })
@@ -849,7 +894,7 @@ impl DbRwAPI for DB {
   ) -> crate::Result<()> {
     let bump = self.bump_pool.pull_owned();
     let write_lock = self.db.write();
-    write_lock.free_pages();
+    //write_lock.free_pages();
     let txrw = TxRwImpl::new(bump, write_lock);
     let tx_ref = txrw.get_ref();
     match f(tx_ref) {
@@ -862,7 +907,7 @@ impl DbRwAPI for DB {
   }
 
   fn sync(&mut self) -> crate::Result<()> {
-    self.db.write().backend.file.sync_all()?;
+    self.db.write().backend.fsync()?;
     Ok(())
   }
 }
