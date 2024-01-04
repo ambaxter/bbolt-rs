@@ -778,13 +778,61 @@ mod tests {
   }
 
   #[test]
-  fn test_cursor_seek_large() {
-    todo!()
+  fn test_cursor_seek_large() -> crate::Result<()> {
+    let mut db = TestDb::new()?;
+    let count = 1000u64;
+    let value = [0u8; 100];
+    db.update(|mut tx| {
+      let mut b = tx.create_bucket(b"widgets")?;
+      for i in (0..count).step_by(100) {
+        for j in (i..i + 100).step_by(2) {
+          let k = j.to_be_bytes();
+          b.put(&k, &value)?;
+        }
+      }
+      Ok(())
+    })?;
+    db.view(|tx| {
+      let b = tx.bucket(b"widgets").unwrap();
+      let mut c = b.cursor();
+      for i in 0..count {
+        let seek = i.to_be_bytes();
+        let sought = c.seek(&seek);
+
+        if i == count -1 {
+          assert!(sought.is_none(), "expected None");
+          continue;
+        }
+        let k = sought.unwrap().0;
+        let num = u64::from_be_bytes(k.try_into().unwrap());
+        if i % 2 == 0 {
+          assert_eq!(num, i, "unexpected num: {}", num)
+        } else {
+          assert_eq!(num, i + 1, "unexpected num: {}", num)
+        }
+      }
+      Ok(())
+    })?;
+    Ok(())
   }
 
   #[test]
-  fn test_cursor_empty_bucket() {
-    todo!()
+  fn test_cursor_empty_bucket() -> crate::Result<()> {
+    let mut db = TestDb::new()?;
+    let count = 1000u64;
+    let value = [0u8; 100];
+    db.update(|mut tx| {
+      let _ = tx.create_bucket(b"widgets")?;
+      Ok(())
+    })?;
+    db.view(|tx| {
+      let b = tx.bucket(b"widgets").unwrap();
+      let mut c = b.cursor();
+      let kv = c.first();
+      assert_eq!(None, kv, "unexpected kv: {:?}", kv);
+      Ok(())
+    })?;
+    Ok(())
   }
 
   #[test]
