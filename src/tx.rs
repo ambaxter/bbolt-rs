@@ -789,7 +789,7 @@ impl<'tx> TxRwImpl<'tx> {
   ) -> TxRwImpl<'tx> {
     let mut meta = lock.backend.meta();
     meta.set_txid(meta.txid() + 1);
-    println!("trace~tx.new id: {:?}", meta.txid());
+    //println!("trace~tx.new id: {:?}", meta.txid());
     let page_size = meta.page_size() as usize;
     let inline_bucket = meta.root();
     let mut uninit: MaybeUninit<TxRwImpl<'tx>> = MaybeUninit::uninit();
@@ -908,10 +908,10 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
   }
 
   fn commit(mut self) -> crate::Result<()> {
-    println!(
+/*    println!(
       "trace~tx.commit id: {:?}",
       self.tx.cell.0.borrow().r.meta.txid()
-    );
+    );*/
     let start_time = Instant::now();
     self.tx.root_bucket().rebalance();
     {
@@ -975,8 +975,6 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
           println!("grow error: {:?}", e)
         }
       }
-    } else {
-      println!("No grow");
     }
     let start_time = Instant::now();
     match self.tx.write() {

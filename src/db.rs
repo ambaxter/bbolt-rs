@@ -324,12 +324,12 @@ impl DBBackend for MemBackend {
     let mut write_to = &mut self.mmap[offset as usize..offset as usize + buffer.len()];
     write_to.copy_from_slice(buffer);
     let written = write_to.len();
-    println!(
+/*    println!(
       "Write at {} for {} bytes. Current size is {}",
       offset,
       written,
       self.mmap.len()
-    );
+    );*/
     Ok(written)
   }
 }
@@ -585,12 +585,12 @@ impl DBBackend for FileBackend {
       offset += bytes_written as u64;
       written += bytes_written;
     }
-    println!(
+/*    println!(
       "Write at {} for {} bytes. Current size is {}",
       offset,
       written,
       self.file.metadata()?.len()
-    );
+    );*/
     Ok(written)
   }
 }
@@ -1021,7 +1021,7 @@ impl DbRwAPI for DB {
   ) -> crate::Result<()> {
     let bump = self.bump_pool.pull_owned();
     let write_lock = self.db.write();
-    //write_lock.free_pages();
+    write_lock.free_pages();
     let txrw = TxRwImpl::new(bump, write_lock);
     let tx_ref = txrw.get_ref();
     match f(tx_ref) {

@@ -194,13 +194,13 @@ impl<'tx> NodeW<'tx> {
 
   /// del removes a key from the node.
   fn del(&mut self, key: &[u8]) {
-    println!("trace~node.del - key {:?}", key);
+    //println!("trace~node.del - key {:?}", key);
     let inodes = self.inodes.as_slice();
     if let Ok(index) = self.inodes.binary_search_by(|probe| probe.key().cmp(key)) {
       self.inodes.remove(index);
       self.is_unbalanced = true;
     } else {
-      println!("trace~node.del - key {:?} not found", key);
+      //println!("trace~node.del - key {:?} not found", key);
     }
   }
 
@@ -320,11 +320,11 @@ impl<'tx> NodeRwCell<'tx> {
     flags: u32,
   ) {
     let mut self_borrow = self.cell.borrow_mut();
-    println!(
+    /*println!(
       "trace~node.put: key: {:?}, value len: {:?}",
       new_key,
       value.len()
-    );
+    );*/
     if pgid >= self_borrow.bucket.api_tx().meta().pgid() {
       panic!(
         "pgid {} above high water mark {}",
@@ -361,11 +361,11 @@ impl<'tx> NodeRwCell<'tx> {
 
   /// del removes a key from the node.
   pub(crate) fn del(self: NodeRwCell<'tx>, key: &[u8]) {
-    println!(
+/*    println!(
       "trace~node.del root: {:?}, key: {:?}",
       self.cell.borrow().pgid,
       self.cell.borrow().key
-    );
+    );*/
 
     self.cell.borrow_mut().del(key);
   }
@@ -395,11 +395,12 @@ impl<'tx> NodeRwCell<'tx> {
   pub(crate) fn spill(self) -> crate::Result<()> {
     let (tx, bump) = {
       let mut cell = self.cell.borrow_mut();
-      println!(
+/*      println!(
         "trace~node.spill: pgid: {:?}, key: {:?}",
         cell.pgid,
         cell.key()
-      );
+        cell.key()
+      );*/
       if cell.is_spilled {
         return Ok(());
       }
@@ -547,10 +548,10 @@ impl<'tx> NodeRwCell<'tx> {
   pub(crate) fn rebalance(self: NodeRwCell<'tx>) {
     let mut self_borrow = self.cell.borrow_mut();
     // tracing
-    println!(
+/*    println!(
       "trace~node.rebalance - page: {:?}, key: {:?}",
       self_borrow.pgid, self_borrow.key
-    );
+    );*/
     let bucket = self_borrow.bucket;
     if !self_borrow.is_unbalanced {
       return;
