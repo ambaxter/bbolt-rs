@@ -218,7 +218,28 @@ fn mmap_size(page_size: usize, size: u64) -> crate::Result<u64> {
 pub(crate) trait DBBackend {
   fn page_size(&self) -> usize;
   fn data_size(&self) -> u64;
-  fn meta(&self) -> Meta;
+  fn meta(&self) -> Meta {
+    let meta0 = self.meta0();
+    let meta1 = self.meta1();
+    let (meta_a, meta_b) = {
+      if meta1.meta.txid() > meta0.meta.txid() {
+        (meta1.meta, meta0.meta)
+      } else {
+        (meta0.meta, meta1.meta)
+      }
+    };
+    if meta_a.validate().is_ok() {
+      return meta_a;
+    } else if meta_b.validate().is_ok() {
+      return meta_b;
+    }
+    panic!("bolt.db.meta: invalid meta page")
+  }
+
+  fn meta0(&self) -> MappedMetaPage;
+
+  fn meta1(&self) -> MappedMetaPage;
+
   fn page<'tx>(&self, pg_id: PgId) -> RefPage<'tx>;
 
   /// grow grows the size of the database to the given `size`.
@@ -232,15 +253,92 @@ pub(crate) trait DBBackend {
   fn write_all_at(&mut self, buffer: &[u8], offset: u64) -> crate::Result<usize>;
 }
 
-struct MemBackend {}
+struct MemBackend {
+  mmap: AlignedBytes<alignment::Page>,
+  page_size: usize,
+  alloc_size: u64,
+  /// current on disk file size
+  file_size: u64,
+  data_size: u64,
+}
+
+impl DBBackend for MemBackend {
+  fn page_size(&self) -> usize {
+    self.page_size
+  }
+
+  fn data_size(&self) -> u64 {
+    self.data_size
+  }
+
+  fn meta0(&self) -> MappedMetaPage {
+    // Safe because we will never actually mutate this ptr
+    unsafe { MappedMetaPage::new(self.mmap.as_ptr().cast_mut()) }
+  }
+
+  fn meta1(&self) -> MappedMetaPage {
+    // Safe because we will never actually mutate this ptr
+    unsafe { MappedMetaPage::new(self.mmap.as_ptr().add(self.page_size).cast_mut()) }
+  }
+
+  fn page<'tx>(&self, pg_id: PgId) -> RefPage<'tx> {
+    unsafe {
+      RefPage::new(
+        self
+          .mmap
+          .as_ptr()
+          .offset(pg_id.0 as isize * self.page_size as isize),
+      )
+    }
+  }
+
+  fn grow(&mut self, size: u64) -> crate::Result<()> {
+    let mut new_mmap = AlignedBytes::new_zeroed(size as usize);
+    new_mmap.copy_from_slice(&self.mmap);
+    self.mmap = new_mmap;
+    Ok(())
+  }
+
+  fn mmap(&mut self, min_size: u64, tx: TxRwCell) -> crate::Result<()> {
+    if self.mmap.len() < self.page_size * 2 {
+      return Err(Error::MMapFileSizeTooSmall);
+    }
+    let mut size = (self.mmap.len() as u64).max(min_size);
+    size = mmap_size(self.page_size, size)?;
+    let r0 = self.meta0().meta.validate();
+    let r1 = self.meta1().meta.validate();
+
+    if r0.is_err() && r1.is_err() {
+      return r0;
+    }
+
+    self.data_size = size;
+    Ok(())
+  }
+
+  fn fsync(&mut self) -> crate::Result<()> {
+    Ok(())
+  }
+
+  fn write_all_at(&mut self, buffer: &[u8], offset: u64) -> crate::Result<usize> {
+    let mut write_to = &mut self.mmap[offset as usize..buffer.len()];
+    let written = write_to.write(buffer).map_err(|e| Error::IO(e))?;
+
+    println!(
+      "Write at {} for {} bytes. Current size is {}",
+      offset,
+      written,
+      self.mmap.len()
+    );
+    Ok(written)
+  }
+}
 
 pub struct FileBackend {
   path: PathBuf,
   file: File,
   page_size: usize,
   mmap: Option<MmapRaw>,
-  meta0: MappedMetaPage,
-  meta1: MappedMetaPage,
   alloc_size: u64,
   /// current on disk file size
   file_size: u64,
@@ -372,20 +470,24 @@ impl DBBackend for FileBackend {
     self.page_size
   }
 
-  fn meta(&self) -> Meta {
-    let (meta_a, meta_b) = {
-      if self.meta1.meta.txid() > self.meta0.meta.txid() {
-        (self.meta1.meta, self.meta0.meta)
-      } else {
-        (self.meta0.meta, self.meta1.meta)
-      }
-    };
-    if meta_a.validate().is_ok() {
-      return meta_a;
-    } else if meta_b.validate().is_ok() {
-      return meta_b;
-    }
-    panic!("bolt.db.meta: invalid meta page")
+  fn data_size(&self) -> u64 {
+    self.data_size
+  }
+
+  fn meta0(&self) -> MappedMetaPage {
+    self
+      .mmap
+      .as_ref()
+      .map(|mmap| unsafe { MappedMetaPage::new(mmap.as_mut_ptr()) })
+      .unwrap()
+  }
+
+  fn meta1(&self) -> MappedMetaPage {
+    self
+      .mmap
+      .as_ref()
+      .map(|mmap| unsafe { MappedMetaPage::new(mmap.as_mut_ptr().add(self.page_size)) })
+      .unwrap()
   }
 
   fn page<'tx>(&self, pg_id: PgId) -> RefPage<'tx> {
@@ -394,42 +496,6 @@ impl DBBackend for FileBackend {
     RefPage::new(page_ptr)
   }
 
-  /// mmap opens the underlying memory-mapped file and initializes the meta references.
-  /// min_size is the minimum size that the new mmap can be.
-  fn mmap(&mut self, min_size: u64, tx: TxRwCell) -> crate::Result<()> {
-    let info = self.file.metadata()?;
-    if info.len() < (self.page_size * 2) as u64 {
-      return Err(Error::MMapFileSizeTooSmall);
-    }
-    let file_size = info.len();
-    let mut size = file_size.max(min_size);
-
-    size = mmap_size(self.page_size, size)?;
-    if let Some(mmap) = self.mmap.take() {
-      mmap.unlock()?;
-      tx.cell.1.own_in();
-    }
-
-    let mmap = MmapOptions::new().len(size as usize).map_raw(&self.file)?;
-    mmap.advise(Advice::Random)?;
-    if self.use_mlock {
-      mmap.lock()?;
-    }
-
-    self.meta0 = unsafe { MappedMetaPage::new(mmap.as_mut_ptr()) };
-    self.meta1 = unsafe { MappedMetaPage::new(mmap.as_mut_ptr().add(self.page_size)) };
-
-    let r0 = self.meta0.meta.validate();
-    let r1 = self.meta1.meta.validate();
-
-    if r0.is_err() && r1.is_err() {
-      return r0;
-    }
-
-    self.mmap = Some(mmap);
-    self.data_size = size;
-    Ok(())
-  }
   fn grow(&mut self, mut size: u64) -> crate::Result<()> {
     // Ignore if the new size is less than available file size.
     if size <= self.file_size {
@@ -463,6 +529,41 @@ impl DBBackend for FileBackend {
     Ok(())
   }
 
+  /// mmap opens the underlying memory-mapped file and initializes the meta references.
+  /// min_size is the minimum size that the new mmap can be.
+  fn mmap(&mut self, min_size: u64, tx: TxRwCell) -> crate::Result<()> {
+    let info = self.file.metadata()?;
+    if info.len() < (self.page_size * 2) as u64 {
+      return Err(Error::MMapFileSizeTooSmall);
+    }
+    let file_size = info.len();
+    let mut size = file_size.max(min_size);
+
+    size = mmap_size(self.page_size, size)?;
+    if let Some(mmap) = self.mmap.take() {
+      mmap.unlock()?;
+      tx.cell.1.own_in();
+    }
+
+    let mmap = MmapOptions::new().len(size as usize).map_raw(&self.file)?;
+    mmap.advise(Advice::Random)?;
+    if self.use_mlock {
+      mmap.lock()?;
+    }
+
+    self.mmap = Some(mmap);
+
+    let r0 = self.meta0().meta.validate();
+    let r1 = self.meta1().meta.validate();
+
+    if r0.is_err() && r1.is_err() {
+      return r0;
+    }
+
+    self.data_size = size;
+    Ok(())
+  }
+
   fn fsync(&mut self) -> crate::Result<()> {
     self.file.sync_all().map_err(|e| Error::IO(e))
   }
@@ -491,10 +592,6 @@ impl DBBackend for FileBackend {
       self.file.metadata()?.len()
     );
     Ok(written)
-  }
-
-  fn data_size(&self) -> u64 {
-    self.data_size
   }
 }
 
@@ -610,6 +707,10 @@ impl<'tx> DbIAPI<'tx> for DBShared {
 }
 
 impl<'tx> DbRwIAPI<'tx> for DBShared {
+  fn free_page(&self, txid: TxId, p: &Page) {
+    self.records.lock().freelist.free(txid, p)
+  }
+
   fn free_pages(&self) {
     let mut records = self.records.lock();
     // Satisfy the borrow checker. We can't iterate txs and mutate freelist at the same time
@@ -639,10 +740,6 @@ impl<'tx> DbRwIAPI<'tx> for DBShared {
 
     // set the records back as the tx owner
     mem::swap(&mut txs, &mut records.txs);
-  }
-
-  fn free_page(&self, txid: TxId, p: &Page) {
-    self.records.lock().freelist.free(txid, p)
   }
 
   fn allocate(
@@ -678,6 +775,10 @@ impl<'tx> DbRwIAPI<'tx> for DBShared {
 
     tx.split_r_mut().meta.set_pgid(high_water + count);
     Ok(mut_page)
+  }
+
+  fn grow(&mut self, size: u64) -> crate::Result<()> {
+    self.backend.grow(size)
   }
 
   fn commit_freelist(
@@ -720,21 +821,17 @@ impl<'tx> DbRwIAPI<'tx> for DBShared {
     stats.tx_stats += tx_stats;
   }
 
-  fn write_at(&mut self, buf: &[u8], offset: u64) -> crate::Result<usize> {
-    self.backend.write_all_at(buf, offset)
+  fn repool_allocated(&mut self, mut page: AlignedBytes<alignment::Page>) {
+    page.fill(0);
+    self.page_pool.push(page);
   }
 
   fn fsync(&mut self) -> crate::Result<()> {
     self.backend.fsync()
   }
 
-  fn repool_allocated(&mut self, mut page: AlignedBytes<alignment::Page>) {
-    page.fill(0);
-    self.page_pool.push(page);
-  }
-
-  fn grow(&mut self, size: u64) -> crate::Result<()> {
-    self.backend.grow(size)
+  fn write_at(&mut self, buf: &[u8], offset: u64) -> crate::Result<usize> {
+    self.backend.write_all_at(buf, offset)
   }
 }
 
@@ -785,8 +882,6 @@ impl DB {
       file,
       page_size,
       mmap: Some(mmap),
-      meta0,
-      meta1,
       alloc_size: DEFAULT_ALLOC_SIZE.bytes() as u64,
       file_size,
       data_size: 0,

@@ -4,7 +4,9 @@ use crate::bucket::{
 };
 use crate::common::inode::INode;
 use crate::common::memory::{CodSlice, LCell};
-use crate::common::page::{CoerciblePage, MutPage, RefPage, MIN_KEYS_PER_PAGE, PAGE_HEADER_SIZE};
+use crate::common::page::{
+  CoerciblePage, MutPage, Page, RefPage, MIN_KEYS_PER_PAGE, PAGE_HEADER_SIZE,
+};
 use crate::common::tree::{
   MappedBranchPage, MappedLeafPage, TreePage, BRANCH_PAGE_ELEMENT_SIZE, LEAF_PAGE_ELEMENT_SIZE,
 };
@@ -79,6 +81,7 @@ impl<'tx> NodeW<'tx> {
     let bump = bucket.api_tx().bump();
     let mut inodes = BVec::with_capacity_in(page.count as usize, bump);
     INode::read_inodes_in(&mut inodes, page);
+    let _inodes = inodes.as_slice();
     let key = if inodes.len() > 0 {
       CodSlice::Mapped(inodes[0].key())
     } else {
@@ -190,10 +193,14 @@ impl<'tx> NodeW<'tx> {
   }
 
   /// del removes a key from the node.
-  fn del(&mut self, key: &'tx [u8]) {
+  fn del(&mut self, key: &[u8]) {
+    println!("trace~node.del - key {:?}", key);
+    let inodes = self.inodes.as_slice();
     if let Ok(index) = self.inodes.binary_search_by(|probe| probe.key().cmp(key)) {
       self.inodes.remove(index);
       self.is_unbalanced = true;
+    } else {
+      println!("trace~node.del - key {:?} not found", key);
     }
   }
 
@@ -266,11 +273,14 @@ impl<'tx> NodeRwCell<'tx> {
     let child_key = child.cell.borrow().key;
     let result = {
       let self_borrow = self.cell.borrow();
+      let inodes = self_borrow.inodes.as_slice();
       self_borrow
         .inodes
         .binary_search_by(|probe| probe.key().cmp(&child_key))
     };
-    result.unwrap_or_else(|next_closest| next_closest)
+    result
+      .map_err(|_| child_key.as_ref())
+      .expect("node not found")
   }
 
   /// num_children returns the number of children.
@@ -310,6 +320,11 @@ impl<'tx> NodeRwCell<'tx> {
     flags: u32,
   ) {
     let mut self_borrow = self.cell.borrow_mut();
+    println!(
+      "trace~node.put: key: {:?}, value len: {:?}",
+      new_key,
+      value.len()
+    );
     if pgid >= self_borrow.bucket.api_tx().meta().pgid() {
       panic!(
         "pgid {} above high water mark {}",
@@ -346,19 +361,13 @@ impl<'tx> NodeRwCell<'tx> {
 
   /// del removes a key from the node.
   pub(crate) fn del(self: NodeRwCell<'tx>, key: &[u8]) {
-    let mut self_borrow = self.cell.borrow_mut();
-    // Find index of key.
-    let index = self_borrow
-      .inodes
-      .binary_search_by(|probe| probe.key().cmp(key));
-    match index {
-      // Delete inode from the node.
-      Ok(exact) => self_borrow.inodes.remove(exact),
-      // Exit if the key isn't found.
-      Err(_) => return,
-    };
-    // Mark the node as needing rebalancing.
-    self_borrow.is_unbalanced = true;
+    println!(
+      "trace~node.del root: {:?}, key: {:?}",
+      self.cell.borrow().pgid,
+      self.cell.borrow().key
+    );
+
+    self.cell.borrow_mut().del(key);
   }
 
   pub(crate) fn size(self: NodeRwCell<'tx>) -> usize {
@@ -386,6 +395,11 @@ impl<'tx> NodeRwCell<'tx> {
   pub(crate) fn spill(self) -> crate::Result<()> {
     let (tx, bump) = {
       let mut cell = self.cell.borrow_mut();
+      println!(
+        "trace~node.spill: pgid: {:?}, key: {:?}",
+        cell.pgid,
+        cell.key()
+      );
       if cell.is_spilled {
         return Ok(());
       }
@@ -397,9 +411,14 @@ impl<'tx> NodeRwCell<'tx> {
     // the case of split-merge so we cannot use a range loop. We have to check
     // the children size on every loop iteration.
     let mut i = 0usize;
-    while let Some(child) = self.cell.borrow().children.get(i).cloned() {
+    // have to do this workaround as temporaries live for the entire statement
+    // https://users.rust-lang.org/t/why-is-this-refcell-borrow-not-dropped-inside-its-block/66134
+    // https://github.com/rust-lang/rust/issues/37612#issuecomment-258676414
+    let mut child_get = self.cell.borrow().children.get(i).cloned();
+    while let Some(child) = child_get {
       child.spill()?;
       i += 1;
+      child_get = self.cell.borrow().children.get(i).cloned();
     }
 
     // We no longer need the child list because it's only used for spill tracking.
@@ -413,7 +432,9 @@ impl<'tx> NodeRwCell<'tx> {
       let node_size = {
         let mut node_cell = node.cell.borrow_mut();
         if node_cell.pgid > ZERO_PGID {
-          tx.freelist_free_page(tx.api_id(), &tx.page(node_cell.pgid));
+          let ref_page = tx.page(node_cell.pgid);
+          let page: &Page = &ref_page;
+          tx.freelist_free_page(tx.api_id(), page);
           node_cell.pgid = ZERO_PGID;
         }
         node_cell.size()
@@ -449,7 +470,6 @@ impl<'tx> NodeRwCell<'tx> {
       tx.mut_stats().spill += 1;
     }
 
-
     // If the root node split and created a new root then we need to spill that
     // as well. We'll clear out the children to make sure it doesn't try to respill.
     let cell = self.cell.borrow();
@@ -479,7 +499,7 @@ impl<'tx> NodeRwCell<'tx> {
     nodes
   }
 
-  fn split_two(self, page_size: usize ) -> (NodeRwCell<'tx>, Option<NodeRwCell<'tx>>) {
+  fn split_two(self, page_size: usize) -> (NodeRwCell<'tx>, Option<NodeRwCell<'tx>>) {
     let mut cell = self.cell.borrow_mut();
     // Ignore the split if the page doesn't have at least enough nodes for
     // two pages or if the nodes can fit in a single page.
@@ -526,6 +546,11 @@ impl<'tx> NodeRwCell<'tx> {
   // TODO: Definitely needs optimizing
   pub(crate) fn rebalance(self: NodeRwCell<'tx>) {
     let mut self_borrow = self.cell.borrow_mut();
+    // tracing
+    println!(
+      "trace~node.rebalance - page: {:?}, key: {:?}",
+      self_borrow.pgid, self_borrow.key
+    );
     let bucket = self_borrow.bucket;
     if !self_borrow.is_unbalanced {
       return;
@@ -570,7 +595,6 @@ impl<'tx> NodeRwCell<'tx> {
       }
       return;
     }
-    let (r, _, w) = bucket.split_ref_mut();
     let parent = self_borrow.parent.unwrap();
     let mut parent_borrow = parent.cell.borrow_mut();
 
@@ -584,8 +608,6 @@ impl<'tx> NodeRwCell<'tx> {
       self.free();
       // drop parent_borrow, and bucket to rebalance the parent
       drop(parent_borrow);
-      drop(r);
-      drop(w);
       parent.rebalance();
       return;
     }

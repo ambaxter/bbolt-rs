@@ -13,7 +13,7 @@ use crate::cursor::{
   CursorApi, CursorIAPI, CursorImpl, CursorRwIAPI, CursorRwImpl, ElemRef, InnerCursor,
 };
 use crate::node::{NodeRwCell, NodeW};
-use crate::tx::{TxApi, TxCell, TxIAPI, TxImplTODORenameMe, TxR, TxRwCell, TxRwIAPI, TxW};
+use crate::tx::{TxApi, TxCell, TxIAPI, TxR, TxRwCell, TxRwIAPI, TxW};
 use crate::Error::{
   BucketExists, BucketNameRequired, BucketNotFound, IncompatibleValue, KeyRequired, KeyTooLarge,
   ValueTooLarge,
@@ -491,19 +491,22 @@ pub(crate) trait BucketIAPI<'tx, T: TxIAPI<'tx>>:
   }
 
   /// forEachPage iterates over every page in a bucket, including inline pages.
-  fn for_each_page<F: FnMut(&RefPage, usize, &[PgId])>(self, mut f: F) {
+  fn for_each_page<F: FnMut(&RefPage<'tx>, usize, &mut BVec<PgId>)>(self, f: &mut F) {
+    let tx = self.api_tx();
     let root = {
       let r = self.split_r();
       let root = r.bucket_header.root();
       // If we have an inline page then just use that.
       if let Some(page) = &r.inline_page {
-        f(page, 0, &[root]);
+        let mut v = BVec::with_capacity_in(1, tx.bump());
+        v.push(root);
+        f(page, 0, &mut v);
         return;
       }
       root
     };
     // Otherwise traverse the page hierarchy.
-    TxImplTODORenameMe::for_each_page(self.api_tx().deref(), root, f);
+    tx.for_each_page(root, f)
   }
 
   /// forEachPageNode iterates over every page (or node) in a bucket.
@@ -599,7 +602,7 @@ pub(crate) trait BucketIAPI<'tx, T: TxIAPI<'tx>>:
     if self.root() == ZERO_PGID {
       s.inline_bucket_n += 1;
     }
-    self.for_each_page(|p, depth, stack| {
+    self.for_each_page(&mut |p, depth, stack| {
       if let Some(leaf_page) = MappedLeafPage::coerce_ref(p) {
         s.key_n += p.count as i64;
 
@@ -1105,6 +1108,11 @@ impl<'tx> BucketRwIAPI<'tx> for BucketRwCell<'tx> {
 
   /// spill writes all the nodes for this bucket to dirty pages.
   fn spill(self, bump: &'tx Bump) -> crate::Result<()> {
+    // tracing
+    println!(
+      "trace~bucket.spill root: {:?}",
+      self.cell.0.borrow().r.bucket_header.root()
+    );
     // To keep with our rules we much copy the bucket entries to temporary storage first
     // This should be unnecessary, but working first *then* optimize
     let v = {
@@ -1120,6 +1128,7 @@ impl<'tx> BucketRwIAPI<'tx> for BucketRwCell<'tx> {
     };
 
     for (name, child) in v.into_iter() {
+      println!("trace~bucket.spill child: {:?}", name);
       let value = if child.inlineable() {
         child.free();
         child.write(bump)
@@ -1278,6 +1287,7 @@ impl<'tx> BucketRwIAPI<'tx> for BucketRwCell<'tx> {
       let buckets = BVec::from_iter_in(borrow.w.buckets.values().cloned(), bump);
       (nodes, buckets)
     };
+    let _nodes = nodes.as_slice();
     for node in nodes.into_iter() {
       node.rebalance();
     }

@@ -353,16 +353,6 @@ pub(crate) trait TxRwIAPI<'tx>: TxIAPI<'tx> {
   fn write_meta(self) -> crate::Result<()>;
 }
 
-pub(crate) struct TxImplTODORenameMe {}
-
-impl TxImplTODORenameMe {
-  pub(crate) fn for_each_page<'tx, T: TxIAPI<'tx>, F: FnMut(&RefPage, usize, &[PgId])>(
-    cell: &T, root: PgId, f: F,
-  ) {
-    todo!()
-  }
-}
-
 pub struct TxR<'tx> {
   b: &'tx Bump,
   page_size: usize,
@@ -794,7 +784,9 @@ impl<'tx> TxRwImpl<'tx> {
   pub(crate) fn new(
     bump: LinearOwnedReusable<Bump>, lock: RwLockWriteGuard<'tx, DBShared>,
   ) -> TxRwImpl<'tx> {
-    let meta = lock.backend.meta();
+    let mut meta = lock.backend.meta();
+    meta.set_txid(meta.txid() + 1);
+    println!("trace~tx.new id: {:?}", meta.txid());
     let page_size = meta.page_size() as usize;
     let inline_bucket = meta.root();
     let mut uninit: MaybeUninit<TxRwImpl<'tx>> = MaybeUninit::uninit();
@@ -913,6 +905,10 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
   }
 
   fn commit(mut self) -> crate::Result<()> {
+    println!(
+      "trace~tx.commit id: {:?}",
+      self.tx.cell.0.borrow().r.meta.txid()
+    );
     let start_time = Instant::now();
     self.tx.root_bucket().rebalance();
     {
@@ -960,7 +956,6 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
       let tx = self.tx.cell.0.borrow();
       for page in tx.w.pages.values() {
         assert!(page.id.0 > 1, "Invalid page id");
-        println!("id: {}", page.id);
       }
     }
     if new_pgid > opgid {
