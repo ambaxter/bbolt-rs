@@ -560,7 +560,7 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for InnerCursor
           let leaf_page = MappedLeafPage::coerce_ref(page).unwrap();
           leaf_page
             .elements()
-            .partition_point(|elem| elem.as_ref().key() < key)
+            .partition_point(|elem| unsafe {elem.key(leaf_page.page_ptr().cast_const())} < key)
         }
         // If we have a node then search its inodes.
         Either::Right(node) => node
@@ -607,7 +607,7 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for InnerCursor
     let branch_page = MappedBranchPage::coerce_ref(page).unwrap();
     let r = branch_page
       .elements()
-      .binary_search_by_key(&key, |elem| elem.as_ref().key());
+      .binary_search_by_key(&key, |elem| unsafe {elem.key(branch_page.page_ptr().cast_const())});
     let index = r.unwrap_or_else(|index| if index > 0 { index - 1 } else { index });
 
     if let Some(elem) = self.stack.last_mut() {

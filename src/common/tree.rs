@@ -83,26 +83,17 @@ impl LeafPageElement {
     }
   }
 
-  pub fn as_ref(&self) -> LeafElementRef {
-    unsafe {
+  pub(crate) unsafe fn key(&self, page_ptr: *const u8) -> &[u8] {
       let elem_ptr = self as *const LeafPageElement as *const u8;
-      let key_ptr = elem_ptr.add(self.pos as usize);
-      let key_ref = from_raw_parts(key_ptr, self.key_size as usize);
-      let value_ptr = key_ptr.add(self.key_size as usize);
-      let value_ref = from_raw_parts(value_ptr, self.value_size as usize);
-      LeafElementRef {
-        elem_ref: self,
-        key_ref,
-        value_ref,
-        unsend: PhantomData,
-      }
-    }
+      let dist =  usize::try_from(elem_ptr.offset_from(page_ptr)).unwrap_unchecked();
+      let key_ptr = page_ptr.add(dist + self.pos as usize);
+      from_raw_parts(key_ptr, self.key_size as usize)
   }
 }
 
 #[derive(Debug)]
 pub struct LeafElementRef<'tx> {
-  elem_ref: &'tx LeafPageElement,
+  elem: &'tx LeafPageElement,
   key_ref: &'tx [u8],
   value_ref: &'tx [u8],
   unsend: PhantomUnsend,
@@ -122,7 +113,7 @@ impl<'tx> Deref for LeafElementRef<'tx> {
   type Target = LeafPageElement;
 
   fn deref(&self) -> &Self::Target {
-    self.elem_ref
+    self.elem
   }
 }
 
@@ -178,23 +169,17 @@ pub struct BranchPageElement {
 }
 
 impl BranchPageElement {
-  pub(crate) fn as_ref(&self) -> BranchElementRef {
-    unsafe {
+  pub(crate) unsafe fn key(&self, page_ptr: *const u8) -> &[u8] {
       let elem_ptr = self as *const BranchPageElement as *const u8;
-      let key_ptr = elem_ptr.add(self.pos as usize);
-      let key_ref = from_raw_parts(key_ptr, self.key_size as usize);
-      BranchElementRef {
-        elem_ref: self,
-        key_ref,
-        unsend: PhantomData,
-      }
-    }
+      let dist =  usize::try_from(elem_ptr.offset_from(page_ptr)).unwrap_unchecked();
+      let key_ptr = page_ptr.add(dist + self.pos as usize);
+      from_raw_parts(key_ptr, self.key_size as usize)
   }
 }
 
 #[derive(Debug)]
 pub struct BranchElementRef<'tx> {
-  elem_ref: &'tx BranchPageElement,
+  elem: &'tx BranchPageElement,
   key_ref: &'tx [u8],
   unsend: PhantomUnsend,
 }
@@ -209,7 +194,7 @@ impl<'tx> Deref for BranchElementRef<'tx> {
   type Target = BranchPageElement;
 
   fn deref(&self) -> &Self::Target {
-    self.elem_ref
+    self.elem
   }
 }
 
@@ -320,7 +305,15 @@ impl<'tx> TreePage<'tx> for MappedLeafPage {
           .add(PAGE_HEADER_SIZE)
           .add(self.page_element_size() * i as usize);
         let elem = &*(elem_ptr as *const LeafPageElement);
-        Some(elem.as_ref())
+        let key_ptr = elem_ptr.add( elem.pos as usize);
+        let key_ref = from_raw_parts(key_ptr, elem.key_size as usize);
+        let value_ref = from_raw_parts(key_ptr.add(elem.key_size as usize), elem.value_size as usize);
+        Some(LeafElementRef {
+          elem,
+          key_ref: &[],
+          value_ref: &[],
+          unsend: Default::default(),
+        })
       }
     }
   }
@@ -357,7 +350,13 @@ impl<'tx> TreePage<'tx> for MappedBranchPage {
           .add(PAGE_HEADER_SIZE)
           .add(self.page_element_size() * i as usize);
         let elem = &*(elem_ptr as *const BranchPageElement);
-        Some(elem.as_ref())
+        let key_ptr = elem_ptr.add( elem.pos as usize);
+        let key_ref = from_raw_parts(key_ptr, elem.key_size as usize);
+        Some(BranchElementRef {
+          elem,
+          key_ref,
+          unsend: Default::default(),
+        })
       }
     }
   }

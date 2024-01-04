@@ -27,11 +27,11 @@ use std::alloc::Layout;
 use std::cell::{Ref, RefCell, RefMut};
 use std::io::BufRead;
 use std::marker::PhantomData;
-use std::mem;
+use std::{mem, ptr};
 use std::ops::{AddAssign, Deref, DerefMut};
 use std::ptr::slice_from_raw_parts_mut;
 use std::rc::{Rc, Weak};
-use std::slice::from_raw_parts;
+use std::slice::{from_raw_parts, from_raw_parts_mut};
 
 pub trait BucketApi<'tx>
 where
@@ -424,9 +424,9 @@ pub(crate) trait BucketIAPI<'tx, T: TxIAPI<'tx>>:
       // TODO: Shove this into a centralized function somewhere
       let layout = Layout::from_size_align(value.len(), INLINE_BUCKET_ALIGNMENT).unwrap();
       let new_value = unsafe {
-        let mut new_value = bump.alloc_layout(layout);
-        let new_value_ptr = new_value.as_mut() as *mut u8;
-        &mut *slice_from_raw_parts_mut(new_value_ptr, value.len())
+        let data = bump.alloc_layout(layout).as_ptr();
+        ptr::write_bytes(data, 0, value.len());
+        &mut *slice_from_raw_parts_mut(data, value.len())
       };
       new_value.copy_from_slice(value);
       value = new_value;
@@ -634,11 +634,11 @@ pub(crate) trait BucketIAPI<'tx, T: TxIAPI<'tx>>:
           // Collect stats from sub-buckets.
           // Do that by iterating over all element headers
           // looking for the ones with the bucketLeafFlag.
-          for leaf_elem in leaf_page.elements() {
+          for leaf_elem in leaf_page.iter() {
             if leaf_elem.is_bucket_entry() {
               // For any bucket element, open the element value
               // and recursively call Stats on the contained bucket.
-              sub_stats += self.open_bucket(leaf_elem.as_ref().value()).api_stats();
+              sub_stats += self.open_bucket(leaf_elem.value()).api_stats();
             }
           }
         }
@@ -981,9 +981,11 @@ impl<'tx> BucketRwIAPI<'tx> for BucketRwCell<'tx> {
     let inline_page = InlineBucket::default();
     let layout = Layout::from_size_align(INLINE_BUCKET_SIZE, INLINE_BUCKET_ALIGNMENT).unwrap();
     let bump = self.api_tx().bump();
+    let data = bump.alloc_layout(layout).as_ptr();
+
     let value = unsafe {
-      let mut data = bump.alloc_layout(layout);
-      &mut *slice_from_raw_parts_mut(data.as_mut() as *mut u8, INLINE_BUCKET_SIZE)
+      std::ptr::write_bytes(data, 0, INLINE_BUCKET_SIZE);
+      from_raw_parts_mut(data, INLINE_BUCKET_SIZE)
     };
     value.copy_from_slice(bytemuck::bytes_of(&inline_page));
     let key = bump.alloc_slice_clone(key) as &[u8];
