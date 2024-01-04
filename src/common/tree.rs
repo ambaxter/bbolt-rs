@@ -310,8 +310,8 @@ impl<'tx> TreePage<'tx> for MappedLeafPage {
         let value_ref = from_raw_parts(key_ptr.add(elem.key_size as usize), elem.value_size as usize);
         Some(LeafElementRef {
           elem,
-          key_ref: &[],
-          value_ref: &[],
+          key_ref,
+          value_ref,
           unsend: Default::default(),
         })
       }

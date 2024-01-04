@@ -322,8 +322,8 @@ impl DBBackend for MemBackend {
 
   fn write_all_at(&mut self, buffer: &[u8], offset: u64) -> crate::Result<usize> {
     let mut write_to = &mut self.mmap[offset as usize..offset as usize + buffer.len()];
-    let written = write_to.write(buffer).map_err(|e| Error::IO(e))?;
-
+    write_to.copy_from_slice(buffer);
+    let written = write_to.len();
     println!(
       "Write at {} for {} bytes. Current size is {}",
       offset,
