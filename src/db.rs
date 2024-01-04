@@ -871,12 +871,6 @@ impl DB {
     let open_options = options.clone();
     let mut mmap = open_options.map_raw(&file)?;
     mmap.advise(Advice::Random)?;
-    let (meta0, meta1) = unsafe {
-      (
-        MappedMetaPage::new(mmap.as_mut_ptr()),
-        MappedMetaPage::new(mmap.as_mut_ptr().add(page_size)),
-      )
-    };
     let backend = FileBackend {
       path,
       file,
@@ -910,7 +904,40 @@ impl DB {
     })
   }
 
-  fn init(path: &Path, page_size: usize) -> io::Result<usize> {
+  pub fn new_mem() -> crate::Result<Self> {
+    let page_size = DEFAULT_PAGE_SIZE.bytes() as usize;
+    let mmap = DB::init_page(page_size);
+    let file_size = mmap.len() as u64;
+    let backend = MemBackend {
+      mmap,
+      page_size,
+      alloc_size: DEFAULT_ALLOC_SIZE.bytes() as u64,
+      file_size,
+      data_size: 0,
+    };
+
+    let freelist_pgid = backend.meta().free_list();
+    let refpage = backend.page(freelist_pgid);
+    let freelist_page = MappedFreeListPage::coerce_ref(&refpage).unwrap();
+    let freelist = freelist_page.read();
+    let free_count = freelist.free_count();
+    let records = TxRecords::new(freelist);
+    let mut stats = DbStats::default();
+    stats.free_page_n = free_count as i64;
+    let arc_stats = Arc::new(RwLock::new(stats));
+    Ok(DB {
+      bump_pool: Arc::new(LinearObjectPool::new(|| Bump::new(), |b| b.reset())),
+      db: Arc::new(RwLock::new(DBShared {
+        stats: arc_stats.clone(),
+        records: Mutex::new(records),
+        backend: Box::new(backend),
+        page_pool: vec![],
+      })),
+      stats: arc_stats.clone(),
+    })
+  }
+
+  fn init_page(page_size: usize) -> AlignedBytes<alignment::Page> {
     let mut buffer = AlignedBytes::<alignment::Page>::new_zeroed(page_size * 4);
     for (i, page_bytes) in buffer.chunks_mut(page_size).enumerate() {
       let mut page = MutPage::new(page_bytes.as_mut_ptr());
@@ -936,6 +963,11 @@ impl DB {
         leaf_page.count = 0;
       }
     }
+    buffer
+  }
+
+  fn init(path: &Path, page_size: usize) -> io::Result<usize> {
+    let buffer = DB::init_page(page_size);
     let mut db = fs::OpenOptions::new()
       .write(true)
       .create(true)

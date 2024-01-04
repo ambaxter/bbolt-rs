@@ -42,7 +42,7 @@ impl<'tx> Unseal for TxRwRef<'tx> {
 }
 
 pub(crate) struct TestDb {
-  tmp_file: NamedTempFile,
+  tmp_file: Option<NamedTempFile>,
   db: DB,
 }
 
@@ -61,12 +61,20 @@ impl DerefMut for TestDb {
 }
 
 impl TestDb {
-  pub(crate) fn new() -> crate::Result<TestDb> {
+  pub(crate) fn new_tmp() -> crate::Result<TestDb> {
     let tmp_file = Builder::new()
       .prefix("bbolt-rs-")
       .suffix(".db")
       .tempfile()?;
     let db = DB::new(tmp_file.path())?;
-    Ok(TestDb { tmp_file, db })
+    Ok(TestDb {
+      tmp_file: Some(tmp_file),
+      db,
+    })
+  }
+
+  pub(crate) fn new() -> crate::Result<TestDb> {
+    let db = DB::new_mem()?;
+    Ok(TestDb { tmp_file: None, db })
   }
 }
