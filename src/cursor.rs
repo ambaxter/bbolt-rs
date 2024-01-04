@@ -195,7 +195,7 @@ pub(crate) trait CursorRwIAPI<'tx>: CursorIAPI<'tx> {
 #[derive(Clone)]
 pub struct ElemRef<'tx> {
   pn: Either<RefPage<'tx>, NodeRwCell<'tx>>,
-  index: u32,
+  index: i32,
 }
 
 impl<'tx> ElemRef<'tx> {
@@ -289,10 +289,15 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for InnerCursor
       // Move up the stack as we hit the end of each page in our stack.
       let mut stack_exhausted = true;
       let mut new_stack_depth = 0;
-      for (depth, elem) in self.stack.iter_mut().enumerate().rev() {
+      for (depth, elem) in self
+        .stack
+        .iter_mut()
+        .enumerate()
+        .filter(|(depth, _)| *depth > 0)
+        .rev()
+      {
         new_stack_depth = depth + 1;
-        assert_ne!(0, elem.count());
-        if elem.index < elem.count() - 1 {
+        if elem.index < elem.count() as i32 - 1 {
           elem.index += 1;
           stack_exhausted = false;
           break;
@@ -363,7 +368,7 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for InnerCursor
     let root = self.bucket.root();
     let pn = self.bucket.page_node(root);
     let mut elem_ref = ElemRef { pn, index: 0 };
-    elem_ref.index = elem_ref.count() - 1;
+    elem_ref.index = elem_ref.count() as i32 - 1;
     self.stack.push(elem_ref);
     self.i_last();
 
@@ -407,7 +412,7 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for InnerCursor
 
         let pn = self.bucket.page_node(pgid);
         let mut next_elem = ElemRef { pn, index: 0 };
-        next_elem.index = next_elem.count();
+        next_elem.index = next_elem.count() as i32;
         self.stack.push(next_elem);
       }
     }
@@ -420,7 +425,7 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for InnerCursor
     let pn_count = elem_ref.count();
 
     // If the cursor is pointing to the end of page/node then return nil.
-    if pn_count == 0 || elem_ref.index > pn_count {
+    if pn_count == 0 || elem_ref.index as u32 > pn_count {
       return None;
     }
 
@@ -452,7 +457,7 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for InnerCursor
     let mut vals = self.i_seek(seek);
 
     if let Some(elem_ref) = self.stack.last() {
-      if elem_ref.index >= elem_ref.count() {
+      if elem_ref.index >= elem_ref.count() as i32 {
         vals = self.i_next();
       }
     }
@@ -466,7 +471,7 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for InnerCursor
   }
 
   fn i_seek(&mut self, seek: &[u8]) -> Option<(&'tx [u8], &'tx [u8], u32)> {
-/*    println!(
+    /*    println!(
       "trace~cursor.seek root: {:?}, seek: {:?}",
       self.bucket.root(),
       seek
@@ -481,7 +486,7 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for InnerCursor
 
   /// first moves the cursor to the first leaf element under the last page in the stack.
   fn go_to_first_element_on_the_stack(&mut self) {
-/*    println!(
+    /*    println!(
       "trace~cursor.first_element_on_stack root: {:?}",
       self.bucket.root()
     );*/
@@ -514,7 +519,7 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for InnerCursor
 
   /// search recursively performs a binary search against a given page/node until it finds a given key.
   fn search(&mut self, key: &[u8], pgid: PgId) {
-/*    println!(
+    /*    println!(
       "trace~cursor.search root: {:?}, key: {:?}",
       self.bucket.root(),
       key
@@ -547,7 +552,7 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for InnerCursor
 
   /// search_inodes searches the leaf node on the top of the stack for a key.
   fn search_inodes(&mut self, key: &[u8]) {
-/*    println!(
+    /*    println!(
       "trace~cursor.search_inodes root: {:?}, key: {:?}",
       self.bucket.root(),
       key
@@ -560,7 +565,7 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for InnerCursor
           let leaf_page = MappedLeafPage::coerce_ref(page).unwrap();
           leaf_page
             .elements()
-            .partition_point(|elem| unsafe {elem.key(leaf_page.page_ptr().cast_const())} < key)
+            .partition_point(|elem| unsafe { elem.key(leaf_page.page_ptr().cast_const()) } < key)
         }
         // If we have a node then search its inodes.
         Either::Right(node) => node
@@ -569,12 +574,12 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for InnerCursor
           .inodes
           .partition_point(|inode| inode.key() < key),
       };
-      elem.index = index as u32;
+      elem.index = index as i32;
     }
   }
 
   fn search_node(&mut self, key: &[u8], node: NodeRwCell<'tx>) {
-/*    println!(
+    /*    println!(
       "trace~cursor.search_node root: {:?}, key: {:?}, node key: {:?}",
       self.bucket.root(),
       key,
@@ -589,7 +594,7 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for InnerCursor
     };
 
     if let Some(elem) = self.stack.last_mut() {
-      elem.index = index;
+      elem.index = index as i32;
     }
 
     // Recursively search to the next page.
@@ -597,7 +602,7 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for InnerCursor
   }
 
   fn search_page(&mut self, key: &[u8], page: &RefPage) {
-/*    println!(
+    /*    println!(
       "trace~cursor.search_page root: {:?}, key: {:?}, page id: {:?}",
       self.bucket.root(),
       key,
@@ -607,11 +612,13 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for InnerCursor
     let branch_page = MappedBranchPage::coerce_ref(page).unwrap();
     let r = branch_page
       .elements()
-      .binary_search_by_key(&key, |elem| unsafe {elem.key(branch_page.page_ptr().cast_const())});
+      .binary_search_by_key(&key, |elem| unsafe {
+        elem.key(branch_page.page_ptr().cast_const())
+      });
     let index = r.unwrap_or_else(|index| if index > 0 { index - 1 } else { index });
 
     if let Some(elem) = self.stack.last_mut() {
-      elem.index = index as u32;
+      elem.index = index as i32;
     }
     let pgid = branch_page.elements()[index].pgid();
 
@@ -649,7 +656,7 @@ impl<'tx, B: BucketRwIAPI<'tx>> CursorRwIAPI<'tx> for InnerCursor<'tx, TxRwCell<
     let _stack = &self.stack[0..self.stack.len() - 1];
     for elem in &self.stack[0..self.stack.len() - 1] {
       assert!(!n.cell.borrow().is_leaf, "expected branch node");
-      n = n.child_at(elem.index);
+      n = n.child_at(elem.index as u32);
     }
     assert!(n.cell.borrow().is_leaf, "expected leaf node");
     n
@@ -799,7 +806,7 @@ mod tests {
         let seek = i.to_be_bytes();
         let sought = c.seek(&seek);
 
-        if i == count -1 {
+        if i == count - 1 {
           assert!(sought.is_none(), "expected None");
           continue;
         }
@@ -819,8 +826,6 @@ mod tests {
   #[test]
   fn test_cursor_empty_bucket() -> crate::Result<()> {
     let mut db = TestDb::new()?;
-    let count = 1000u64;
-    let value = [0u8; 100];
     db.update(|mut tx| {
       let _ = tx.create_bucket(b"widgets")?;
       Ok(())
@@ -836,8 +841,20 @@ mod tests {
   }
 
   #[test]
-  fn test_cursor_empty_bucket_reverse() {
-    todo!()
+  fn test_cursor_empty_bucket_reverse() -> crate::Result<()> {
+    let mut db = TestDb::new()?;
+    db.update(|mut tx| {
+      let _ = tx.create_bucket(b"widgets")?;
+      Ok(())
+    })?;
+    db.view(|tx| {
+      let b = tx.bucket(b"widgets").unwrap();
+      let mut c = b.cursor();
+      let kv = c.last();
+      assert_eq!(None, kv, "unexpected kv: {:?}", kv);
+      Ok(())
+    })?;
+    Ok(())
   }
 
   #[test]

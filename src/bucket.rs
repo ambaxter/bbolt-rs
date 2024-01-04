@@ -27,11 +27,11 @@ use std::alloc::Layout;
 use std::cell::{Ref, RefCell, RefMut};
 use std::io::BufRead;
 use std::marker::PhantomData;
-use std::{mem, ptr};
 use std::ops::{AddAssign, Deref, DerefMut};
 use std::ptr::slice_from_raw_parts_mut;
 use std::rc::{Rc, Weak};
 use std::slice::{from_raw_parts, from_raw_parts_mut};
+use std::{mem, ptr};
 
 pub trait BucketApi<'tx>
 where
@@ -1111,7 +1111,7 @@ impl<'tx> BucketRwIAPI<'tx> for BucketRwCell<'tx> {
   /// spill writes all the nodes for this bucket to dirty pages.
   fn spill(self, bump: &'tx Bump) -> crate::Result<()> {
     // tracing
-/*    println!(
+    /*    println!(
       "trace~bucket.spill root: {:?}",
       self.cell.0.borrow().r.bucket_header.root()
     );*/

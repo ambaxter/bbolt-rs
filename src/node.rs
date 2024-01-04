@@ -361,7 +361,7 @@ impl<'tx> NodeRwCell<'tx> {
 
   /// del removes a key from the node.
   pub(crate) fn del(self: NodeRwCell<'tx>, key: &[u8]) {
-/*    println!(
+    /*    println!(
       "trace~node.del root: {:?}, key: {:?}",
       self.cell.borrow().pgid,
       self.cell.borrow().key
@@ -395,7 +395,7 @@ impl<'tx> NodeRwCell<'tx> {
   pub(crate) fn spill(self) -> crate::Result<()> {
     let (tx, bump) = {
       let mut cell = self.cell.borrow_mut();
-/*      println!(
+      /*      println!(
         "trace~node.spill: pgid: {:?}, key: {:?}",
         cell.pgid,
         cell.key()
@@ -548,7 +548,7 @@ impl<'tx> NodeRwCell<'tx> {
   pub(crate) fn rebalance(self: NodeRwCell<'tx>) {
     let mut self_borrow = self.cell.borrow_mut();
     // tracing
-/*    println!(
+    /*    println!(
       "trace~node.rebalance - page: {:?}, key: {:?}",
       self_borrow.pgid, self_borrow.key
     );*/

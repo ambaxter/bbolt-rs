@@ -324,7 +324,7 @@ impl DBBackend for MemBackend {
     let mut write_to = &mut self.mmap[offset as usize..offset as usize + buffer.len()];
     write_to.copy_from_slice(buffer);
     let written = write_to.len();
-/*    println!(
+    /*    println!(
       "Write at {} for {} bytes. Current size is {}",
       offset,
       written,
@@ -585,7 +585,7 @@ impl DBBackend for FileBackend {
       offset += bytes_written as u64;
       written += bytes_written;
     }
-/*    println!(
+    /*    println!(
       "Write at {} for {} bytes. Current size is {}",
       offset,
       written,

@@ -14,8 +14,8 @@ use crate::db::{DBShared, DbGuard, DbIAPI, DbRwIAPI};
 use crate::freelist::Freelist;
 use crate::node::NodeRwCell;
 use crate::{BucketApi, CursorApi, CursorRwApi};
-use aligners::{alignment, AlignedBytes};
 use aliasable::boxed::AliasableBox;
+use aligners::{alignment, AlignedBytes};
 use bumpalo::Bump;
 use lockfree_object_pool::LinearOwnedReusable;
 use parking_lot::{Mutex, RwLockReadGuard, RwLockWriteGuard};
@@ -630,7 +630,7 @@ pub struct TxImpl<'tx> {
   bump: Pin<Box<LinearOwnedReusable<Bump>>>,
   db: Pin<AliasableBox<DbGuard<'tx>>>,
   tx: Pin<Rc<TxCell<'tx>>>,
-  unpin: PhantomPinned
+  unpin: PhantomPinned,
 }
 
 impl<'tx> TxImpl<'tx> {
@@ -645,7 +645,9 @@ impl<'tx> TxImpl<'tx> {
     unsafe {
       addr_of_mut!((*ptr).bump).write(Box::pin(bump));
       let bump = &(**addr_of!((*ptr).bump));
-      addr_of_mut!((*ptr).db).write(Pin::new(AliasableBox::from_unique(Box::new(DbGuard::Read(lock)))));
+      addr_of_mut!((*ptr).db).write(Pin::new(AliasableBox::from_unique(Box::new(
+        DbGuard::Read(lock),
+      ))));
       let db = &(**addr_of!((*ptr).db));
       let tx = Rc::new_cyclic(|weak| {
         let r = TxR {
@@ -774,7 +776,7 @@ pub struct TxRwImpl<'tx> {
   bump: Pin<Box<LinearOwnedReusable<Bump>>>,
   db: Pin<AliasableBox<DbGuard<'tx>>>,
   pub(crate) tx: Pin<Rc<TxRwCell<'tx>>>,
-  unpin: PhantomPinned
+  unpin: PhantomPinned,
 }
 
 impl<'tx> TxRwImpl<'tx> {
@@ -797,7 +799,9 @@ impl<'tx> TxRwImpl<'tx> {
     unsafe {
       addr_of_mut!((*ptr).bump).write(Box::pin(bump));
       let bump = &(**addr_of!((*ptr).bump));
-      addr_of_mut!((*ptr).db).write(Pin::new(AliasableBox::from_unique(Box::new(DbGuard::Write(RefCell::new(lock))))));
+      addr_of_mut!((*ptr).db).write(Pin::new(AliasableBox::from_unique(Box::new(
+        DbGuard::Write(RefCell::new(lock)),
+      ))));
       let db = &(**addr_of!((*ptr).db));
       let tx = Rc::new_cyclic(|weak| {
         let r = TxR {
@@ -908,7 +912,7 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
   }
 
   fn commit(mut self) -> crate::Result<()> {
-/*    println!(
+    /*    println!(
       "trace~tx.commit id: {:?}",
       self.tx.cell.0.borrow().r.meta.txid()
     );*/
@@ -1251,7 +1255,11 @@ pub(crate) mod check {
         for (i, (pg_id, key)) in branch_page
           .elements()
           .iter()
-          .map(|e| (e.pgid(), unsafe {e.key(branch_page.page_ptr().cast_const())}))
+          .map(|e| {
+            (e.pgid(), unsafe {
+              e.key(branch_page.page_ptr().cast_const())
+            })
+          })
           .enumerate()
         {
           self.verify_key_order(
@@ -1268,20 +1276,20 @@ pub(crate) mod check {
           if i < elements_len - 1 {
             max_key = branch_page.get_elem(i as u16 + 1).unwrap().key();
           }
-          let max_key_in_subtree = self.recursively_check_pages_internal(
-            pg_id,
-            key,
-            max_key,
-            pageid_stack,
-            errors,
-          );
+          let max_key_in_subtree =
+            self.recursively_check_pages_internal(pg_id, key, max_key, pageid_stack, errors);
           pageid_stack.pop();
           return max_key_in_subtree;
         }
       } else if let Some(leaf_page) = MappedLeafPage::coerce_ref(&p) {
         let mut running_min = min_key_closed;
         let elements_len = leaf_page.elements().len();
-        for (i, key) in leaf_page.elements().iter().map(|e| unsafe {e.key(leaf_page.page_ptr().cast_const())}).enumerate() {
+        for (i, key) in leaf_page
+          .elements()
+          .iter()
+          .map(|e| unsafe { e.key(leaf_page.page_ptr().cast_const()) })
+          .enumerate()
+        {
           self.verify_key_order(
             pg_id,
             "leaf",
