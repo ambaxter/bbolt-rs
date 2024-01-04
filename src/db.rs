@@ -294,7 +294,7 @@ impl DBBackend for MemBackend {
 
   fn grow(&mut self, size: u64) -> crate::Result<()> {
     let mut new_mmap = AlignedBytes::new_zeroed(size as usize);
-    new_mmap.copy_from_slice(&self.mmap);
+    new_mmap[0..self.mmap.len()].copy_from_slice(&self.mmap);
     self.mmap = new_mmap;
     Ok(())
   }
@@ -321,7 +321,7 @@ impl DBBackend for MemBackend {
   }
 
   fn write_all_at(&mut self, buffer: &[u8], offset: u64) -> crate::Result<usize> {
-    let mut write_to = &mut self.mmap[offset as usize..buffer.len()];
+    let mut write_to = &mut self.mmap[offset as usize..offset as usize + buffer.len()];
     let written = write_to.write(buffer).map_err(|e| Error::IO(e))?;
 
     println!(
