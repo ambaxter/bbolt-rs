@@ -999,19 +999,11 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
       }
     }
     if new_pgid > opgid {
-      match self
+      self
         .db
         .get_rw()
         .unwrap()
-        .grow((new_pgid.0 + 1) * page_size as u64)
-      {
-        Ok(_) => {
-          println!("grow ok")
-        }
-        Err(e) => {
-          println!("grow error: {:?}", e)
-        }
-      }
+        .grow((new_pgid.0 + 1) * page_size as u64)?;
     }
     let start_time = Instant::now();
     match self.tx.write() {

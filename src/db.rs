@@ -580,11 +580,13 @@ impl DBBackend for FileBackend {
         .map_err(|e| Error::IO(e))?;
       let bytes_written = self.file.write(buffer).map_err(|e| Error::IO(e))?;
       rem -= bytes_written;
+      offset += bytes_written as u64;
+      written += bytes_written;
+
       if rem == 0 {
         break;
       }
-      offset += bytes_written as u64;
-      written += bytes_written;
+
     }
     /*    println!(
       "Write at {} for {} bytes. Current size is {}",
