@@ -289,12 +289,7 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for InnerCursor
       // Move up the stack as we hit the end of each page in our stack.
       let mut stack_exhausted = true;
       let mut new_stack_depth = 0;
-      for (depth, elem) in self
-        .stack
-        .iter_mut()
-        .enumerate()
-        .rev()
-      {
+      for (depth, elem) in self.stack.iter_mut().enumerate().rev() {
         new_stack_depth = depth + 1;
         if elem.index < elem.count() as i32 - 1 {
           elem.index += 1;
@@ -357,7 +352,6 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for InnerCursor
     } else {
       self.stack.truncate(new_stack_depth);
     }
-
 
     // If we've hit the end then return None
     if self.stack.is_empty() {
@@ -888,7 +882,7 @@ mod tests {
   }
 
   #[test]
-  fn test_cursor_leaf_root_reverse() -> crate::Result<()>  {
+  fn test_cursor_leaf_root_reverse() -> crate::Result<()> {
     let mut db = TestDb::new()?;
     db.update(|mut tx| {
       let mut b = tx.create_bucket(b"widgets")?;
@@ -909,8 +903,22 @@ mod tests {
   }
 
   #[test]
-  fn test_cursor_restart() {
-    todo!()
+  fn test_cursor_restart() -> crate::Result<()> {
+    let mut db = TestDb::new()?;
+    db.update(|mut tx| {
+      let mut b = tx.create_bucket(b"widgets")?;
+      b.put(b"foo", &[])?;
+      b.put(b"bar", &[])?;
+      Ok(())
+    })?;
+    let tx = db.begin();
+    let b = tx.bucket(b"widgets").unwrap();
+    let mut c = b.cursor();
+    assert_eq!(Some((b"bar".as_slice(), Some([].as_slice()))), c.first());
+    assert_eq!(Some((b"foo".as_slice(), Some([].as_slice()))), c.next());
+    assert_eq!(Some((b"bar".as_slice(), Some([].as_slice()))), c.first());
+    assert_eq!(Some((b"foo".as_slice(), Some([].as_slice()))), c.next());
+    tx.rollback()
   }
 
   #[test]
