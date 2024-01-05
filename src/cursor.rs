@@ -252,7 +252,6 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for InnerCursor
     // TODO: Optimize this a bit for the internal API. BucketImpl::root_page_node
     let root = self.bucket.root();
     let pn = self.bucket.page_node(root);
-    let page: &Page = &pn.left().unwrap();
     self.stack.push(ElemRef { pn, index: 0 });
 
     self.go_to_first_element_on_the_stack();
@@ -922,8 +921,30 @@ mod tests {
   }
 
   #[test]
-  fn test_cursor_first_empty_pages() {
-    todo!()
+  fn test_cursor_first_empty_pages() -> crate::Result<()> {
+    let mut db = TestDb::new()?;
+    db.update(|mut tx| {
+      let mut b = tx.create_bucket(b"widgets")?;
+      for i in 1..1000u64 {
+        b.put(bytemuck::bytes_of(&i), &[])?;
+      }
+      Ok(())
+    })?;
+    db.update(|mut tx| {
+      let mut b = tx.bucket(b"widgets").unwrap();
+      for i in 1..600u64 {
+        b.delete(bytemuck::bytes_of(&i))?;
+      }
+      let mut c = b.cursor();
+      let mut kv = c.first();
+      let mut n = 0;
+      while let Some((k, _)) = kv {
+        n += 1;
+        kv = c.next();
+      }
+      assert_eq!(400, n, "unexpected key count");
+      Ok(())
+    })
   }
 
   #[test]

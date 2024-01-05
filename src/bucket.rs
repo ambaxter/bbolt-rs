@@ -580,7 +580,7 @@ pub(crate) trait BucketIAPI<'tx, T: TxIAPI<'tx>>:
       }
     }
 
-    Either::Left(self.api_tx().page(id))
+    Either::Left(self.api_tx().mem_page(id))
   }
 
   /// See [BucketApi::sequence]
@@ -1260,7 +1260,7 @@ impl<'tx> BucketRwIAPI<'tx> for BucketRwCell<'tx> {
     // Otherwise create a node and cache it.
     // Use the inline page if this is an inline bucket.
     let page = match inline_page {
-      None => self.api_tx().page(pgid),
+      None => self.api_tx().mem_page(pgid),
       Some(page) => page,
     };
 

@@ -31,6 +31,7 @@ use std::rc::Rc;
 use std::slice::from_raw_parts_mut;
 use std::time::{Duration, Instant};
 use std::{cell, mem};
+use std::any::Any;
 
 pub trait TxApi<'tx> {
   type CursorType: CursorApi<'tx>;
@@ -183,6 +184,22 @@ impl Sub<TxStats> for TxStats {
   }
 }
 
+pub(crate) enum AnyPage<'a, 'tx: 'a> {
+  Ref(RefPage<'tx>),
+  Pending(Ref<'a, RefPage<'tx>>)
+}
+
+impl<'a, 'tx: 'a> Deref for AnyPage<'tx, 'a>{
+  type Target = RefPage<'a>;
+
+  fn deref(&self) -> &Self::Target {
+    match self {
+      AnyPage::Ref(r) => r,
+      AnyPage::Pending(p) => p
+    }
+  }
+}
+
 pub(crate) trait TxIAPI<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
   type BucketType: BucketIAPI<'tx, Self>;
 
@@ -201,8 +218,22 @@ pub(crate) trait TxIAPI<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
     Ref::map(self.split_r(), |tx| &tx.meta)
   }
 
-  fn page(self, id: PgId) -> RefPage<'tx> {
+  fn mem_page(self, id: PgId) -> RefPage<'tx> {
+    if let Some(tx) = self.split_ow() {
+      if let Some(page) = tx.pages.get(&id) {
+        return *page.as_ref()
+      }
+    }
     self.split_r().db.page(id)
+  }
+
+  fn any_page<'a>(&'a self, id: PgId) -> AnyPage<'a, 'tx> {
+    if let Some(tx) = self.split_ow() {
+      if tx.pages.contains_key(&id) {
+        return AnyPage::Pending(Ref::map(tx, |t| t.pages.get(&id).unwrap().as_ref()));
+      }
+    }
+    AnyPage::Ref(self.split_r().db.page(id))
   }
 
   /// See [TxApi::id]
@@ -269,7 +300,7 @@ pub(crate) trait TxIAPI<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
   fn for_each_page_internal<F: FnMut(&RefPage<'tx>, usize, &mut BVec<PgId>)>(
     self, pgid_stack: &mut BVec<PgId>, f: &mut F,
   ) {
-    let p = self.page(*pgid_stack.last().unwrap());
+    let p = self.mem_page(*pgid_stack.last().unwrap());
 
     // Execute function.
     f(&p, pgid_stack.len() - 1, pgid_stack);
@@ -525,7 +556,12 @@ impl<'tx> TxRwIAPI<'tx> for TxRwCell<'tx> {
   }
 
   fn queue_page(self, page: SelfOwned<AlignedBytes<alignment::Page>, MutPage<'tx>>) {
-    self.cell.0.borrow_mut().w.pages.insert(page.id, page);
+    let mut tx = self.cell.0.borrow_mut();
+    if let Some(pending) = tx.w.pages.insert(page.id, page) {
+      if pending.overflow == 0 {
+        tx.r.db.get_rw().unwrap().repool_allocated(pending.into_owner());
+      }
+    }
   }
 
   fn api_cursor_mut(self) -> Self::CursorRwType {
@@ -594,9 +630,7 @@ impl<'tx> TxRwIAPI<'tx> for TxRwCell<'tx> {
 
     for page in pages.into_iter() {
       if page.overflow == 0 {
-        let mut bytes = page.into_owner();
-        bytes.fill(0);
-        db.repool_allocated(bytes);
+        db.repool_allocated(page.into_owner());
       }
     }
     Ok(())
@@ -1161,12 +1195,12 @@ pub(crate) mod check {
 
       // Track every reachable page.
       let mut reachable = HashMap::new_in(bump);
-      reachable.insert(PgId(0), self.page(PgId(0))); //meta 0
-      reachable.insert(PgId(1), self.page(PgId(1))); // meta 1
+      reachable.insert(PgId(0), self.mem_page(PgId(0))); //meta 0
+      reachable.insert(PgId(1), self.mem_page(PgId(1))); // meta 1
       let freelist_pgid = self.meta().free_list();
-      for i in 0..=self.page(freelist_pgid).overflow {
+      for i in 0..=self.mem_page(freelist_pgid).overflow {
         let pg_id = freelist_pgid + i as u64;
-        reachable.insert(pg_id, self.page(freelist_pgid));
+        reachable.insert(pg_id, self.mem_page(freelist_pgid));
       }
 
       // Recursively check buckets.
@@ -1247,7 +1281,7 @@ pub(crate) mod check {
       self, pg_id: PgId, min_key_closed: &[u8], max_key_open: &[u8], pageid_stack: &mut BVec<PgId>,
       errors: &mut Vec<String>,
     ) -> &'tx [u8] {
-      let p = self.page(pg_id);
+      let p = self.mem_page(pg_id);
       pageid_stack.push(pg_id);
       if let Some(branch_page) = MappedBranchPage::coerce_ref(&p) {
         let running_min = min_key_closed;

@@ -282,6 +282,7 @@ impl DBBackend for MemBackend {
   }
 
   fn page<'tx>(&self, pg_id: PgId) -> RefPage<'tx> {
+    debug_assert!(((pg_id.0 as usize + 1) * self.page_size) <= self.mmap.len());
     unsafe {
       RefPage::new(
         self

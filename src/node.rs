@@ -433,9 +433,8 @@ impl<'tx> NodeRwCell<'tx> {
       let node_size = {
         let mut node_cell = node.cell.borrow_mut();
         if node_cell.pgid > ZERO_PGID {
-          let ref_page = tx.page(node_cell.pgid);
-          let page: &Page = &ref_page;
-          tx.freelist_free_page(tx.api_id(), page);
+          let any_page = tx.any_page(node_cell.pgid);
+          tx.freelist_free_page(tx.api_id(), &any_page);
           node_cell.pgid = ZERO_PGID;
         }
         node_cell.size()
@@ -650,6 +649,7 @@ impl<'tx> NodeRwCell<'tx> {
       parent.del(target_borrow.key());
       let target_pgid = target_borrow.pgid;
       drop(target_borrow);
+      drop(self_borrow);
       parent.cell.borrow_mut().remove_child(target);
       wb.nodes.remove(&target_pgid);
       target.free();
@@ -669,6 +669,7 @@ impl<'tx> NodeRwCell<'tx> {
       parent.del(self_borrow.key());
       let self_pgid = self_borrow.pgid;
       drop(self_borrow);
+      drop(target_borrow);
       parent.cell.borrow_mut().remove_child(self);
       wb.nodes.remove(&self_pgid);
       self.free();
@@ -707,7 +708,7 @@ impl<'tx> NodeRwCell<'tx> {
       }
       (self_borrow.pgid, self_borrow.bucket.api_tx())
     };
-    let page = api_tx.page(pgid);
+    let page = api_tx.mem_page(pgid);
     let txid = api_tx.meta().txid();
     api_tx.freelist_free_page(txid, &page);
   }
