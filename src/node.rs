@@ -213,6 +213,27 @@ impl<'tx> NodeW<'tx> {
   }
 }
 
+/// split breaks up a node into multiple smaller nodes, if appropriate.
+/// This should only be called from the spill() function.
+struct NodeSplit<'tx> {
+  page_size: usize,
+  next: Option<NodeRwCell<'tx>>
+}
+
+impl<'tx> Iterator for NodeSplit<'tx> {
+  type Item = NodeRwCell<'tx>;
+
+  fn next(&mut self) -> Option<Self::Item> {
+    if let Some(node) = self.next {
+      let (a, ob) = node.split_two(self.page_size);
+      self.next = ob;
+      return Some(a);
+    }
+    None
+  }
+}
+
+
 #[derive(Copy, Clone, Eq, PartialEq)]
 pub struct NodeRwCell<'tx> {
   pub(crate) cell: LCell<'tx, NodeW<'tx>>,
@@ -393,7 +414,7 @@ impl<'tx> NodeRwCell<'tx> {
   /// Returns an error if dirty pages cannot be allocated.
   /// The top-most spill function acts as if it is a parent
   pub(crate) fn spill(self) -> crate::Result<()> {
-    let (tx, bump) = {
+    let tx= {
       let mut cell = self.cell.borrow_mut();
       /*      println!(
         "trace~node.spill: pgid: {:?}, key: {:?}",
@@ -405,7 +426,7 @@ impl<'tx> NodeRwCell<'tx> {
         return Ok(());
       }
       cell.children.sort_by_key(|child| child.cell.borrow().key());
-      (cell.bucket.api_tx(), cell.children.bump())
+      cell.bucket.api_tx()
     };
 
     // Spill child nodes first. Child nodes can materialize sibling nodes in
@@ -428,8 +449,7 @@ impl<'tx> NodeRwCell<'tx> {
     let page_size = tx.page_size();
 
     // Split nodes into appropriate sizes. The first node will always be n.
-    let nodes = self.split(page_size, bump);
-    for node in nodes {
+    for node in self.split(page_size) {
       let node_size = {
         let mut node_cell = node.cell.borrow_mut();
         if node_cell.pgid > ZERO_PGID {
@@ -482,21 +502,11 @@ impl<'tx> NodeRwCell<'tx> {
 
   /// split breaks up a node into multiple smaller nodes, if appropriate.
   /// This should only be called from the spill() function.
-  fn split(self, page_size: usize, bump: &'tx Bump) -> BVec<'tx, NodeRwCell<'tx>> {
-    let mut nodes = BVec::new_in(bump);
-    let mut node = self;
-    loop {
-      // Split node into two.
-      let (a, ob) = node.split_two(page_size);
-      nodes.push(a);
-      match ob {
-        // If we can't split then exit the loop.
-        None => break,
-        // Set node to b so it gets split on the next iteration.
-        Some(b) => node = b,
-      }
+  fn split(self, page_size: usize) -> NodeSplit<'tx> {
+    NodeSplit {
+      page_size,
+      next: Some(self)
     }
-    nodes
   }
 
   fn split_two(self, page_size: usize) -> (NodeRwCell<'tx>, Option<NodeRwCell<'tx>>) {
@@ -726,6 +736,7 @@ mod test {
   use crate::DbRwAPI;
   use bumpalo::Bump;
   use std::ops::DerefMut;
+  use itertools::Itertools;
 
   #[test]
   fn test_node_put() -> crate::Result<()> {
@@ -784,7 +795,7 @@ mod test {
     n.put(b"00000003", b"00000003", b"0123456701234567", ZERO_PGID, 0);
     n.put(b"00000004", b"00000004", b"0123456701234567", ZERO_PGID, 0);
     n.put(b"00000005", b"00000005", b"0123456701234567", ZERO_PGID, 0);
-    let split_nodes = n.split(100, txrw.bump());
+    let split_nodes = n.split(100).collect_vec();
     let binding = n.cell.borrow().parent.unwrap();
     let parent_children = &binding.cell.borrow().children;
     assert_eq!(2, parent_children.len());
@@ -802,7 +813,7 @@ mod test {
     let n = root_bucket.materialize_root();
     n.put(b"00000001", b"00000001", b"0123456701234567", ZERO_PGID, 0);
     n.put(b"00000002", b"00000002", b"0123456701234567", ZERO_PGID, 0);
-    let split_nodes = n.split(20, txrw.bump());
+    let split_nodes = n.split(20).collect_vec();
     assert!(n.cell.borrow().parent.is_none(), "expected none parent");
     Ok(())
   }
@@ -819,7 +830,7 @@ mod test {
     n.put(b"00000003", b"00000003", b"0123456701234567", ZERO_PGID, 0);
     n.put(b"00000004", b"00000004", b"0123456701234567", ZERO_PGID, 0);
     n.put(b"00000005", b"00000005", b"0123456701234567", ZERO_PGID, 0);
-    let split_nodes = n.split(4096, txrw.bump());
+    let split_nodes = n.split(4096).collect_vec();
     assert!(n.cell.borrow().parent.is_none(), "expected none parent");
     Ok(())
   }
