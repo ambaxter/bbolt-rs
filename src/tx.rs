@@ -662,7 +662,7 @@ impl<'tx> TxRwIAPI<'tx> for TxRwCell<'tx> {
 pub struct TxImpl<'tx> {
   bump: Pin<Box<LinearOwnedReusable<Bump>>>,
   db: Pin<AliasableBox<DbGuard<'tx>>>,
-  tx: Pin<Rc<TxCell<'tx>>>,
+  pub(crate) tx: Pin<Rc<TxCell<'tx>>>,
   unpin: PhantomPinned,
 }
 
@@ -1146,8 +1146,46 @@ pub(crate) mod check {
   use crate::common::page::{CoerciblePage, RefPage};
   use crate::common::tree::{MappedBranchPage, MappedLeafPage, TreePage};
   use crate::common::{BVec, HashMap, HashSet, PgId, ZERO_PGID};
-  use crate::tx::{TxIAPI, TxRwCell, TxRwIAPI};
+  use crate::tx::{TxCell, TxIAPI, TxImpl, TxRef, TxRwCell, TxRwIAPI, TxRwImpl, TxRwRef};
   use std::io::Read;
+
+  pub(crate) trait UnsealTx<'tx> {
+    type Unsealed: TxICheck<'tx>;
+
+    fn unseal(&self) -> Self::Unsealed;
+  }
+
+  impl<'tx> UnsealTx<'tx> for TxImpl<'tx> {
+    type Unsealed = TxCell<'tx>;
+
+    fn unseal(&self) -> Self::Unsealed {
+      TxCell { cell: self.tx.cell }
+    }
+  }
+
+  impl<'tx> UnsealTx<'tx> for TxRef<'tx> {
+    type Unsealed = TxCell<'tx>;
+
+    fn unseal(&self) -> Self::Unsealed {
+      TxCell { cell: self.tx.cell }
+    }
+  }
+
+  impl<'tx> UnsealTx<'tx> for TxRwImpl<'tx> {
+    type Unsealed = TxRwCell<'tx>;
+
+    fn unseal(&self) -> Self::Unsealed {
+      TxRwCell { cell: self.tx.cell }
+    }
+  }
+
+  impl<'tx> UnsealTx<'tx> for TxRwRef<'tx> {
+    type Unsealed = TxRwCell<'tx>;
+
+    fn unseal(&self) -> Self::Unsealed {
+      self.tx
+    }
+  }
 
   /// Check performs several consistency checks on the database for this transaction.
   /// An error is returned if any inconsistency is found.
@@ -1157,7 +1195,14 @@ pub(crate) mod check {
   /// because of caching. This overhead can be removed if running on a read-only
   /// transaction, however, it is not safe to execute other writer transactions at
   /// the same time.
-  pub trait TxCheck<'tx>: TxRwIAPI<'tx> {
+  pub trait TxCheck<'tx>: UnsealTx<'tx> {
+    fn check(&self) -> Vec<String> {
+      let i_tx = self.unseal();
+      i_tx.check()
+    }
+  }
+
+  pub trait TxICheck<'tx>: TxIAPI<'tx> {
     fn check(self) -> Vec<String> {
       let mut errors = Vec::new();
       let bump = self.bump();
@@ -1364,13 +1409,14 @@ pub(crate) mod check {
     }
   }
 
-  impl<'tx> TxCheck<'tx> for TxRwCell<'tx> {}
+  impl<'tx> TxICheck<'tx> for TxRwCell<'tx> {}
+  impl<'tx> TxICheck<'tx> for TxCell<'tx> {}
 }
 
 #[cfg(test)]
 mod test {
-  use crate::test_support::{TestDb, Unseal};
-  use crate::tx::check::TxCheck;
+  use crate::test_support::TestDb;
+  use crate::tx::check::TxICheck;
   use crate::tx::create_cycle;
   use crate::{DbApi, DbRwAPI, Error, TxApi, TxRwApi};
   use bumpalo::Bump;

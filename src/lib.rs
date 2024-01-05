@@ -22,3 +22,4 @@ pub use common::errors::{Error, Result};
 pub use cursor::{CursorApi, CursorRwApi};
 pub use db::{DbApi, DbRwAPI, DB};
 pub use tx::{TxApi, TxRwApi};
+pub use tx::check::TxCheck;

@@ -586,7 +586,6 @@ impl DBBackend for FileBackend {
       if rem == 0 {
         break;
       }
-
     }
     /*    println!(
       "Write at {} for {} bytes. Current size is {}",

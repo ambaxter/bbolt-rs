@@ -5,7 +5,8 @@ use std::ops::{Deref, DerefMut};
 //use crate::freelist::MappedFreeListPage;
 use crate::common::page::{CoerciblePage, MutPage};
 use crate::common::tree::{MappedBranchPage, MappedLeafPage};
-use crate::tx::{TxRwCell, TxRwImpl, TxRwRef};
+use crate::tx::check::TxICheck;
+use crate::tx::{TxCell, TxIAPI, TxImpl, TxRwCell, TxRwImpl, TxRwRef};
 use crate::DB;
 use aligners::{alignment, AlignedBytes};
 use tempfile::{tempfile, Builder, NamedTempFile};
@@ -17,28 +18,6 @@ pub(crate) fn mapped_page<T: CoerciblePage + Sized>(
     AlignedBytes::<alignment::Page>::new_zeroed(bytes),
     |aligned_bytes| T::own(aligned_bytes.as_mut_ptr()),
   )
-}
-
-pub(crate) trait Unseal {
-  type Unsealed;
-
-  fn unseal(&self) -> Self::Unsealed;
-}
-
-impl<'tx> Unseal for TxRwImpl<'tx> {
-  type Unsealed = TxRwCell<'tx>;
-
-  fn unseal(&self) -> Self::Unsealed {
-    TxRwCell { cell: self.tx.cell }
-  }
-}
-
-impl<'tx> Unseal for TxRwRef<'tx> {
-  type Unsealed = TxRwCell<'tx>;
-
-  fn unseal(&self) -> Self::Unsealed {
-    self.tx
-  }
 }
 
 pub(crate) struct TestDb {
@@ -76,5 +55,9 @@ impl TestDb {
   pub(crate) fn new() -> crate::Result<TestDb> {
     let db = DB::new_mem()?;
     Ok(TestDb { tmp_file: None, db })
+  }
+
+  pub(crate) fn must_check_r(&self) {
+    //self.db.
   }
 }

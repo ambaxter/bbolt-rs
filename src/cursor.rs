@@ -674,8 +674,8 @@ impl<'tx, B: BucketRwIAPI<'tx>> CursorRwIAPI<'tx> for InnerCursor<'tx, TxRwCell<
 
 #[cfg(test)]
 mod tests {
-  use crate::test_support::{TestDb, Unseal};
-  use crate::tx::check::TxCheck;
+  use crate::test_support::{TestDb, UnsealTx};
+  use crate::tx::check::TxICheck;
   use crate::{
     BucketApi, BucketRwApi, CursorApi, CursorRwApi, DbApi, DbRwAPI, Error, TxApi, TxRwApi,
   };

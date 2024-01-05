@@ -1423,7 +1423,6 @@ mod tests {
     })
   }
 
-
   #[test]
   #[ignore]
   fn test_db_put_very_large() -> crate::Result<()> {
@@ -1446,212 +1445,214 @@ mod tests {
   }
 
   #[test]
-  fn test_bucket_put_incompatible_value() {
+  fn test_bucket_put_incompatible_value() -> crate::Result<()> {
+    let mut db = TestDb::new_tmp()?;
+
     todo!()
   }
 
   #[test]
-  fn test_bucket_put_closed() {
+  fn test_bucket_put_closed() -> crate::Result<()> {
     todo!()
   }
 
   #[test]
-  fn test_bucket_put_read_only() {
+  fn test_bucket_put_read_only() -> crate::Result<()> {
     todo!()
   }
 
   #[test]
-  fn test_bucket_delete() {
+  fn test_bucket_delete() -> crate::Result<()> {
     todo!()
   }
 
   #[test]
-  fn test_bucket_delete_large() {
+  fn test_bucket_delete_large() -> crate::Result<()> {
     todo!()
   }
 
   #[test]
-  fn test_bucket_delete_freelist_overflow() {
+  fn test_bucket_delete_freelist_overflow() -> crate::Result<()> {
     todo!()
   }
 
   #[test]
-  fn test_bucket_delete_non_existing() {
+  fn test_bucket_delete_non_existing() -> crate::Result<()> {
     todo!()
   }
 
   #[test]
-  fn test_bucket_nested() {
+  fn test_bucket_nested() -> crate::Result<()> {
     todo!()
   }
 
   #[test]
-  fn test_bucket_delete_bucket() {
+  fn test_bucket_delete_bucket() -> crate::Result<()> {
     todo!()
   }
 
   #[test]
-  fn test_bucket_delete_read_only() {
+  fn test_bucket_delete_read_only() -> crate::Result<()> {
     todo!()
   }
 
   #[test]
-  fn test_bucket_delete_closed() {
+  fn test_bucket_delete_closed() -> crate::Result<()> {
     todo!()
   }
 
   #[test]
-  fn test_bucket_delete_bucket_nested() {
+  fn test_bucket_delete_bucket_nested() -> crate::Result<()> {
     todo!()
   }
 
   #[test]
-  fn test_bucket_delete_bucket_nested2() {
+  fn test_bucket_delete_bucket_nested2() -> crate::Result<()> {
     todo!()
   }
 
   #[test]
-  fn test_bucket_delete_bucket_large() {
+  fn test_bucket_delete_bucket_large() -> crate::Result<()> {
     todo!()
   }
 
   #[test]
-  fn test_bucket_bucket_incompatible_value() {
+  fn test_bucket_bucket_incompatible_value() -> crate::Result<()> {
     todo!()
   }
 
   #[test]
-  fn test_bucket_create_bucket_incompatible_value() {
+  fn test_bucket_create_bucket_incompatible_value() -> crate::Result<()> {
     todo!()
   }
 
   #[test]
-  fn test_bucket_delete_bucket_incompatible_value() {
+  fn test_bucket_delete_bucket_incompatible_value() -> crate::Result<()> {
     todo!()
   }
 
   #[test]
-  fn test_bucket_sequence() {
+  fn test_bucket_sequence() -> crate::Result<()> {
     todo!()
   }
 
   #[test]
-  fn test_bucket_next_sequence() {
+  fn test_bucket_next_sequence() -> crate::Result<()> {
     todo!()
   }
 
   #[test]
-  fn test_bucket_next_sequence_persist() {
+  fn test_bucket_next_sequence_persist() -> crate::Result<()> {
     todo!()
   }
 
   #[test]
-  fn test_bucket_next_sequence_read_only() {
+  fn test_bucket_next_sequence_read_only() -> crate::Result<()> {
     todo!()
   }
 
   #[test]
-  fn test_bucket_next_sequence_closed() {
+  fn test_bucket_next_sequence_closed() -> crate::Result<()> {
     todo!()
   }
 
   #[test]
-  fn test_bucket_for_each() {
+  fn test_bucket_for_each() -> crate::Result<()> {
     todo!()
   }
 
   #[test]
-  fn test_bucket_for_each_bucket() {
+  fn test_bucket_for_each_bucket() -> crate::Result<()> {
     todo!()
   }
 
   #[test]
-  fn test_bucket_for_each_bucket_no_buckets() {
+  fn test_bucket_for_each_bucket_no_buckets() -> crate::Result<()> {
     todo!()
   }
 
   #[test]
-  fn test_bucket_for_each_short_circuit() {
+  fn test_bucket_for_each_short_circuit() -> crate::Result<()> {
     todo!()
   }
 
   #[test]
-  fn test_bucket_for_each_closed() {
+  fn test_bucket_for_each_closed() -> crate::Result<()> {
     todo!()
   }
 
   #[test]
-  fn test_bucket_put_empty_key() {
+  fn test_bucket_put_empty_key() -> crate::Result<()> {
     todo!()
   }
 
   #[test]
-  fn test_bucket_put_key_too_large() {
+  fn test_bucket_put_key_too_large() -> crate::Result<()> {
     todo!()
   }
 
   #[test]
-  fn test_bucket_put_value_too_large() {
+  fn test_bucket_put_value_too_large() -> crate::Result<()> {
     todo!()
   }
 
   #[test]
-  fn test_bucket_stats() {
+  fn test_bucket_stats() -> crate::Result<()> {
     todo!()
   }
 
   #[test]
-  fn test_bucket_stats_random_fill() {
+  fn test_bucket_stats_random_fill() -> crate::Result<()> {
     todo!()
   }
 
   #[test]
-  fn test_bucket_stats_small() {
+  fn test_bucket_stats_small() -> crate::Result<()> {
     todo!()
   }
 
   #[test]
-  fn test_bucket_stats_empty_bucket() {
+  fn test_bucket_stats_empty_bucket() -> crate::Result<()> {
     todo!()
   }
 
   #[test]
-  fn test_bucket_stats_nested() {
+  fn test_bucket_stats_nested() -> crate::Result<()> {
     todo!()
   }
 
   #[test]
-  fn test_bucket_stats_large() {
+  fn test_bucket_stats_large() -> crate::Result<()> {
     todo!()
   }
 
   #[test]
-  fn test_bucket_put_single() {
+  fn test_bucket_put_single() -> crate::Result<()> {
     todo!()
   }
 
   #[test]
-  fn test_bucket_put_multiple() {
+  fn test_bucket_put_multiple() -> crate::Result<()> {
     todo!()
   }
 
   #[test]
-  fn test_bucket_delete_quick() {
+  fn test_bucket_delete_quick() -> crate::Result<()> {
     todo!()
   }
 
   #[test]
-  fn example_bucket_put() {
+  fn example_bucket_put() -> crate::Result<()> {
     todo!()
   }
 
   #[test]
-  fn example_bucket_delete() {
+  fn example_bucket_delete() -> crate::Result<()> {
     todo!()
   }
 
   #[test]
-  fn example_bucket_for_each() {
+  fn example_bucket_for_each() -> crate::Result<()> {
     todo!()
   }
 }

@@ -217,7 +217,7 @@ impl<'tx> NodeW<'tx> {
 /// This should only be called from the spill() function.
 struct NodeSplit<'tx> {
   page_size: usize,
-  next: Option<NodeRwCell<'tx>>
+  next: Option<NodeRwCell<'tx>>,
 }
 
 impl<'tx> Iterator for NodeSplit<'tx> {
@@ -232,7 +232,6 @@ impl<'tx> Iterator for NodeSplit<'tx> {
     None
   }
 }
-
 
 #[derive(Copy, Clone, Eq, PartialEq)]
 pub struct NodeRwCell<'tx> {
@@ -414,7 +413,7 @@ impl<'tx> NodeRwCell<'tx> {
   /// Returns an error if dirty pages cannot be allocated.
   /// The top-most spill function acts as if it is a parent
   pub(crate) fn spill(self) -> crate::Result<()> {
-    let tx= {
+    let tx = {
       let mut cell = self.cell.borrow_mut();
       /*      println!(
         "trace~node.spill: pgid: {:?}, key: {:?}",
@@ -505,7 +504,7 @@ impl<'tx> NodeRwCell<'tx> {
   fn split(self, page_size: usize) -> NodeSplit<'tx> {
     NodeSplit {
       page_size,
-      next: Some(self)
+      next: Some(self),
     }
   }
 
@@ -731,12 +730,12 @@ mod test {
   use crate::common::page::LEAF_PAGE_FLAG;
   use crate::common::{BVec, SplitRef, ZERO_PGID};
   use crate::node::NodeW;
-  use crate::test_support::{TestDb, Unseal};
+  use crate::test_support::{TestDb, UnsealTx};
   use crate::tx::TxIAPI;
   use crate::DbRwAPI;
   use bumpalo::Bump;
-  use std::ops::DerefMut;
   use itertools::Itertools;
+  use std::ops::DerefMut;
 
   #[test]
   fn test_node_put() -> crate::Result<()> {
