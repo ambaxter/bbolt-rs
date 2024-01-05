@@ -372,10 +372,8 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for InnerCursor
     self.stack.push(elem_ref);
     self.i_last();
 
-    if let Some(elem) = self.stack.last() {
-      if elem.count() == 0 {
-        self.i_prev();
-      }
+    while self.stack.len() > 0 && self.stack.last().unwrap().count() == 0 {
+      self.i_prev();
     }
 
     if self.stack.is_empty() {
@@ -414,7 +412,7 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for InnerCursor
 
         let pn = self.bucket.page_node(pgid);
         let mut next_elem = ElemRef { pn, index: 0 };
-        next_elem.index = next_elem.count() as i32;
+        next_elem.index = next_elem.count() as i32 - 1;
         self.stack.push(next_elem);
       }
     }
@@ -948,8 +946,30 @@ mod tests {
   }
 
   #[test]
-  fn test_cursor_last_empty_pages() {
-    todo!()
+  fn test_cursor_last_empty_pages() -> crate::Result<()> {
+    let mut db = TestDb::new()?;
+    db.update(|mut tx| {
+      let mut b = tx.create_bucket(b"widgets")?;
+      for i in 0..1000u64 {
+        b.put(bytemuck::bytes_of(&i), &[])?;
+      }
+      Ok(())
+    })?;
+    db.update(|mut tx| {
+      let mut b = tx.bucket(b"widgets").unwrap();
+      for i in 200..1000u64 {
+        b.delete(bytemuck::bytes_of(&i))?;
+      }
+      let mut c = b.cursor();
+      let mut kv = c.last();
+      let mut n = 0;
+      while let Some((k, _)) = kv {
+        n += 1;
+        kv = c.prev();
+      }
+      assert_eq!(200, n, "unexpected key count");
+      Ok(())
+    })
   }
 
   #[test]
