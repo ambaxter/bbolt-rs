@@ -219,11 +219,6 @@ pub(crate) trait TxIAPI<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
   }
 
   fn mem_page(self, id: PgId) -> RefPage<'tx> {
-    if let Some(tx) = self.split_ow() {
-      if let Some(page) = tx.pages.get(&id) {
-        return *page.as_ref()
-      }
-    }
     self.split_r().db.page(id)
   }
 
