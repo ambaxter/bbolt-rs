@@ -293,7 +293,6 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for InnerCursor
         .stack
         .iter_mut()
         .enumerate()
-        .filter(|(depth, _)| *depth > 0)
         .rev()
       {
         new_stack_depth = depth + 1;
@@ -344,13 +343,21 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for InnerCursor
     // Attempt to move back one element until we're successful.
     // Move up the stack as we hit the beginning of each page in our stack.
     let mut new_stack_depth = 0;
+    let mut stack_exhausted = true;
     for (depth, elem) in self.stack.iter_mut().enumerate().rev() {
-      new_stack_depth = depth;
+      new_stack_depth = depth + 1;
       if elem.index > 0 {
         elem.index -= 1;
+        stack_exhausted = false;
+        break;
       }
     }
-    self.stack.truncate(new_stack_depth);
+    if stack_exhausted {
+      self.stack.truncate(0);
+    } else {
+      self.stack.truncate(new_stack_depth);
+    }
+
 
     // If we've hit the end then return None
     if self.stack.is_empty() {
@@ -372,8 +379,10 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for InnerCursor
     self.stack.push(elem_ref);
     self.i_last();
 
-    if let Some(_) = self.stack.last() {
-      self.i_prev();
+    if let Some(elem) = self.stack.last() {
+      if elem.count() == 0 {
+        self.i_prev();
+      }
     }
 
     if self.stack.is_empty() {
@@ -858,13 +867,45 @@ mod tests {
   }
 
   #[test]
-  fn test_cursor_iterate_leaf() {
-    todo!()
+  fn test_cursor_iterate_leaf() -> crate::Result<()> {
+    let mut db = TestDb::new()?;
+    db.update(|mut tx| {
+      let mut b = tx.create_bucket(b"widgets")?;
+      b.put(b"baz", &[])?;
+      b.put(b"foo", &[0])?;
+      b.put(b"bar", &[1])?;
+      Ok(())
+    })?;
+    let tx = db.begin();
+    let b = tx.bucket(b"widgets").unwrap();
+    let mut c = b.cursor();
+    assert_eq!(Some((b"bar".as_slice(), Some([1].as_slice()))), c.first());
+    assert_eq!(Some((b"baz".as_slice(), Some([].as_slice()))), c.next());
+    assert_eq!(Some((b"foo".as_slice(), Some([0].as_slice()))), c.next());
+    assert_eq!(None, c.next());
+    assert_eq!(None, c.next());
+    tx.rollback()
   }
 
   #[test]
-  fn test_cursor_leaf_root_reverse() {
-    todo!()
+  fn test_cursor_leaf_root_reverse() -> crate::Result<()>  {
+    let mut db = TestDb::new()?;
+    db.update(|mut tx| {
+      let mut b = tx.create_bucket(b"widgets")?;
+      b.put(b"baz", &[])?;
+      b.put(b"foo", &[0])?;
+      b.put(b"bar", &[1])?;
+      Ok(())
+    })?;
+    let tx = db.begin();
+    let b = tx.bucket(b"widgets").unwrap();
+    let mut c = b.cursor();
+    assert_eq!(Some((b"foo".as_slice(), Some([0].as_slice()))), c.last());
+    assert_eq!(Some((b"baz".as_slice(), Some([].as_slice()))), c.prev());
+    assert_eq!(Some((b"bar".as_slice(), Some([1].as_slice()))), c.prev());
+    assert_eq!(None, c.prev());
+    assert_eq!(None, c.prev());
+    tx.rollback()
   }
 
   #[test]
