@@ -1035,9 +1035,11 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
       }
     }
 
-    for f in &self.tx.split_r_ow().1.unwrap().commit_handlers {
+    let mut tx = self.tx.cell.0.borrow_mut();
+    for f in &tx.w.commit_handlers {
       f();
     }
+    tx.w.commit_handlers.clear();
 
     Ok(())
   }
