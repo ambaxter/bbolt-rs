@@ -4,7 +4,7 @@ use bbolt_rs::{DbApi, DbRwAPI, TxApi, TxRwApi, DB};
 
 fn main() -> bbolt_rs::Result<()> {
   println!("Hello, world!");
-  let mut db = DB::new("test.db")?;
+  let mut db = DB::open("test.db")?;
   db.view(|tx| {
     if let Some(b) = tx.bucket("test".as_bytes()) {
       println!("Ok");

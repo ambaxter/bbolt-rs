@@ -66,7 +66,7 @@ impl TestDb {
       .prefix("bbolt-rs-")
       .suffix(".db")
       .tempfile()?;
-    let db = DB::new(tmp_file.path())?;
+    let db = DB::open(tmp_file.path())?;
     Ok(TestDb {
       tmp_file: Some(tmp_file),
       db,

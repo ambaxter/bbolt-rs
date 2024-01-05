@@ -452,16 +452,19 @@ pub(crate) trait BucketIAPI<'tx, T: TxIAPI<'tx>>:
 
   /// See [BucketApi::get]
   fn api_get(self, key: &[u8]) -> Option<&'tx [u8]> {
-    let (k, v, flags) = self.i_cursor().i_seek(key).unwrap();
-    // Return None if this is a bucket.
-    if (flags & BUCKET_LEAF_FLAG) != 0 {
-      return None;
+    if let Some((k, v, flags)) = self.i_cursor().i_seek(key) {
+      // Return None if this is a bucket.
+      if (flags & BUCKET_LEAF_FLAG) != 0 {
+        return None;
+      }
+      // If our target node isn't the same key as what's passed in then return None.
+      if key != k {
+        return None;
+      }
+      Some(v)
+    } else {
+      None
     }
-    // If our target node isn't the same key as what's passed in then return None.
-    if key != k {
-      return None;
-    }
-    Some(v)
   }
 
   /// See [BucketApi::for_each]
@@ -1301,45 +1304,142 @@ impl<'tx> BucketRwIAPI<'tx> for BucketRwCell<'tx> {
 
 #[cfg(test)]
 mod tests {
+  use crate::test_support::TestDb;
+  use crate::{BucketApi, BucketRwApi, CursorApi, DbApi, DbRwAPI, TxApi, TxRwApi};
+  use itertools::Itertools;
 
   #[test]
-  fn test_bucket_get_non_existent() {
-    todo!()
+  fn test_bucket_get_non_existent() -> crate::Result<()> {
+    let mut db = TestDb::new()?;
+    db.update(|mut tx| {
+      let mut b = tx.create_bucket(b"widgets")?;
+      assert_eq!(None, b.get(b"foo"));
+      Ok(())
+    })?;
+    Ok(())
   }
 
   #[test]
-  fn test_bucket_get_from_node() {
-    todo!()
+  fn test_bucket_get_from_node() -> crate::Result<()> {
+    let mut db = TestDb::new()?;
+    db.update(|mut tx| {
+      let mut b = tx.create_bucket(b"widgets")?;
+      b.put(b"foo", b"bar")?;
+      assert_eq!(Some(b"bar".as_slice()), b.get(b"foo"));
+      Ok(())
+    })?;
+    Ok(())
   }
 
   #[test]
-  fn test_bucket_get_incompatible_value() {
-    todo!()
+  fn test_bucket_get_incompatible_value() -> crate::Result<()> {
+    let mut db = TestDb::new()?;
+    db.update(|mut tx| {
+      let _ = tx.create_bucket(b"widgets")?;
+      tx.bucket(b"widgets").unwrap().create_bucket(b"foo")?;
+      assert_eq!(None, tx.bucket(b"widgets").unwrap().get(b"foo"));
+      Ok(())
+    })?;
+    Ok(())
+  }
+
+  // Ensure that a slice returned from a bucket has a capacity equal to its length.
+  // This also allows slices to be appended to since it will require a realloc by Go.
+  //
+  // https://github.com/boltdb/bolt/issues/544
+  #[test]
+  fn test_bucket_get_capacity() -> crate::Result<()> {
+    let mut db = TestDb::new()?;
+    db.update(|mut tx| {
+      let mut b = tx.create_bucket(b"widgets")?;
+      b.put(b"key", b"val")?;
+      Ok(())
+    })?;
+    db.update(|mut tx| {
+      let b = tx.bucket(b"widgets").unwrap();
+      let mut c = b.cursor();
+      if let Some((k, Some(v))) = c.first() {
+        todo!("We don't allow modifying values in place for this first version");
+      }
+      Ok(())
+    })?;
+    Ok(())
   }
 
   #[test]
-  fn test_bucket_get_capacity() {
-    todo!()
+  fn test_bucket_put() -> crate::Result<()> {
+    let mut db = TestDb::new()?;
+    db.update(|mut tx| {
+      let mut b = tx.create_bucket(b"widgets")?;
+      b.put(b"foo", b"bar")?;
+
+      assert_eq!(
+        Some(b"bar".as_slice()),
+        tx.bucket(b"widgets").unwrap().get(b"foo")
+      );
+      Ok(())
+    })
   }
 
   #[test]
-  fn test_bucket_put() {
-    todo!()
+  fn test_bucket_put_repeat() -> crate::Result<()> {
+    let mut db = TestDb::new()?;
+    db.update(|mut tx| {
+      let mut b = tx.create_bucket(b"widgets")?;
+      b.put(b"foo", b"bar")?;
+      b.put(b"foo", b"baz")?;
+
+      assert_eq!(
+        Some(b"baz".as_slice()),
+        tx.bucket(b"widgets").unwrap().get(b"foo")
+      );
+      Ok(())
+    })
   }
 
   #[test]
-  fn test_bucket_put_repeat() {
-    todo!()
+  fn test_bucket_put_large() -> crate::Result<()> {
+    let mut db = TestDb::new()?;
+    let count = 100;
+    let factor = 200;
+    db.update(|mut tx| {
+      let mut b = tx.create_bucket(b"widgets")?;
+      for i in 1..count {
+        b.put(
+          "0".repeat(i * factor).as_bytes(),
+          "X".repeat((count - i) * factor).as_bytes(),
+        )?;
+      }
+      Ok(())
+    })?;
+    db.view(|tx| {
+      let b = tx.bucket(b"widgets").unwrap();
+      for i in 1..count {
+        let v = b.get("0".repeat(i * factor).as_bytes()).unwrap();
+        assert_eq!((count - i) * factor, v.len());
+        v.iter().all(|c| c == &b'X');
+      }
+      Ok(())
+    })
   }
 
   #[test]
-  fn test_bucket_put_large() {
-    todo!()
-  }
+  fn test_db_put_very_large() -> crate::Result<()> {
+    let mut db = TestDb::new_tmp()?;
+    let n = 400000u32;
+    let batch_n = 200000u32;
 
-  #[test]
-  fn test_db_put_very_large() {
-    todo!()
+    let v = [0u8; 500];
+    for i in (0..n).step_by(batch_n as usize) {
+      db.update(|mut tx| {
+        let mut b = tx.create_bucket_if_not_exists(b"widgets")?;
+        for j in 1..batch_n {
+          b.put((i + j).to_be_bytes().as_slice(), &v)?;
+        }
+        Ok(())
+      })?;
+    }
+    Ok(())
   }
 
   #[test]

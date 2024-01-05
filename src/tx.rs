@@ -20,6 +20,7 @@ use bumpalo::Bump;
 use lockfree_object_pool::LinearOwnedReusable;
 use parking_lot::{Mutex, RwLockReadGuard, RwLockWriteGuard};
 use std::alloc::Layout;
+use std::any::Any;
 use std::borrow::Cow;
 use std::cell::{Ref, RefCell, RefMut};
 use std::marker::{PhantomData, PhantomPinned};
@@ -31,7 +32,6 @@ use std::rc::Rc;
 use std::slice::from_raw_parts_mut;
 use std::time::{Duration, Instant};
 use std::{cell, mem};
-use std::any::Any;
 
 pub trait TxApi<'tx> {
   type CursorType: CursorApi<'tx>;
@@ -186,16 +186,16 @@ impl Sub<TxStats> for TxStats {
 
 pub(crate) enum AnyPage<'a, 'tx: 'a> {
   Ref(RefPage<'tx>),
-  Pending(Ref<'a, RefPage<'tx>>)
+  Pending(Ref<'a, RefPage<'tx>>),
 }
 
-impl<'a, 'tx: 'a> Deref for AnyPage<'tx, 'a>{
+impl<'a, 'tx: 'a> Deref for AnyPage<'tx, 'a> {
   type Target = RefPage<'a>;
 
   fn deref(&self) -> &Self::Target {
     match self {
       AnyPage::Ref(r) => r,
-      AnyPage::Pending(p) => p
+      AnyPage::Pending(p) => p,
     }
   }
 }
@@ -554,7 +554,11 @@ impl<'tx> TxRwIAPI<'tx> for TxRwCell<'tx> {
     let mut tx = self.cell.0.borrow_mut();
     if let Some(pending) = tx.w.pages.insert(page.id, page) {
       if pending.overflow == 0 {
-        tx.r.db.get_rw().unwrap().repool_allocated(pending.into_owner());
+        tx.r
+          .db
+          .get_rw()
+          .unwrap()
+          .repool_allocated(pending.into_owner());
       }
     }
   }
