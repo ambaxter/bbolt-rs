@@ -1305,7 +1305,7 @@ impl<'tx> BucketRwIAPI<'tx> for BucketRwCell<'tx> {
 #[cfg(test)]
 mod tests {
   use crate::test_support::TestDb;
-  use crate::{BucketApi, BucketRwApi, CursorApi, DbApi, DbRwAPI, TxApi, TxRwApi};
+  use crate::{BucketApi, BucketRwApi, CursorApi, DbApi, DbRwAPI, Error, TxApi, TxRwApi};
   use itertools::Itertools;
 
   #[test]
@@ -1449,28 +1449,64 @@ mod tests {
   #[test]
   fn test_bucket_put_incompatible_value() -> crate::Result<()> {
     let mut db = TestDb::new_tmp()?;
+    db.update(|mut tx| {
+      let mut b0 = tx.create_bucket(b"widgets")?;
+      tx.bucket(b"widgets").unwrap().create_bucket(b"foo")?;
 
-    todo!()
+      assert_eq!(Err(Error::IncompatibleValue) , b0.put(b"foo", b"bar"));
+      Ok(())
+    })
   }
+
 
   #[test]
   fn test_bucket_put_closed() -> crate::Result<()> {
-    todo!()
+    todo!("not necessary. Bucket can't exist after tx closed")
   }
 
   #[test]
   fn test_bucket_put_read_only() -> crate::Result<()> {
-    todo!()
+    todo!("needs read-only access")
   }
 
   #[test]
   fn test_bucket_delete() -> crate::Result<()> {
-    todo!()
+    let mut db = TestDb::new_tmp()?;
+    db.update(|mut tx| {
+      let mut b = tx.create_bucket(b"widgets")?;
+      b.put(b"foo", b"bar")?;
+      b.delete(b"foo")?;
+      assert_eq!(None , b.get(b"foo"));
+      Ok(())
+    })
   }
 
   #[test]
   fn test_bucket_delete_large() -> crate::Result<()> {
-    todo!()
+    let mut db = TestDb::new_tmp()?;
+    let var = [b'*'; 1024];
+    db.update(|mut tx| {
+      let mut b = tx.create_bucket(b"widgets")?;
+      for i in 0..100 {
+        b.put(format!("{}", i).as_bytes(), &var)?;
+      }
+      Ok(())
+    })?;
+    db.update(|mut tx| {
+      let mut b = tx.bucket(b"widgets").unwrap();
+      for i in 0..100 {
+        b.delete(format!("{}", i).as_bytes())?;
+      }
+      Ok(())
+    })?;
+    db.view(|tx| {
+      let b = tx.bucket(b"widgets").unwrap();
+      for i in 0..100 {
+        assert_eq!(None, b.get(format!("{}", i).as_bytes()));
+      }
+      Ok(())
+    })?;
+    Ok(())
   }
 
   #[test]

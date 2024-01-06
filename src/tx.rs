@@ -954,7 +954,7 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
     {
       let mut stats = self.tx.mut_stats();
       if stats.rebalance > 0 {
-        stats.rebalance_time += Instant::now().duration_since(start_time);
+        stats.rebalance_time += start_time.elapsed();
       }
     }
     let opgid = self.tx.meta().pgid();
@@ -963,7 +963,7 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
     match self.tx.root_bucket().spill(bump) {
       Ok(_) => {
         let mut stats = self.tx.mut_stats();
-        stats.spill_time += Instant::now().duration_since(start_time);
+        stats.spill_time += start_time.elapsed();
       }
       Err(e) => {
         let _ = self.rollback();
@@ -1019,7 +1019,7 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
     match self.tx.write_meta() {
       Ok(_) => {
         let mut stats = self.tx.mut_stats();
-        stats.write_time += Instant::now().duration_since(start_time);
+        stats.write_time += start_time.elapsed();
       }
       Err(e) => {
         let _ = self.rollback();

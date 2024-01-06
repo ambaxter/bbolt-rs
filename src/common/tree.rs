@@ -230,6 +230,7 @@ pub trait TreePage<'tx>: Deref<Target = Page> + DerefMut {
 
   fn write_element(element: &mut Self::Elem, pos: u32, node: &INode);
   fn write_elements(&mut self, inodes: &[INode]) -> u32 {
+    //debug_assert_ne!(0, inodes.len());
     self.count = inodes.len() as u16;
     if self.count == 0 {
       return 0;

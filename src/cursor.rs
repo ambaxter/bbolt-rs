@@ -610,6 +610,9 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for InnerCursor
     );*/
 
     let branch_page = MappedBranchPage::coerce_ref(page).unwrap();
+    let page: &Page = &branch_page;
+    let elements = branch_page.elements();
+    debug_assert_ne!(0, elements.len());
     let r = branch_page
       .elements()
       .binary_search_by_key(&key, |elem| unsafe {

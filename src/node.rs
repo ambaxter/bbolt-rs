@@ -195,7 +195,6 @@ impl<'tx> NodeW<'tx> {
   /// del removes a key from the node.
   fn del(&mut self, key: &[u8]) {
     //println!("trace~node.del - key {:?}", key);
-    let inodes = self.inodes.as_slice();
     if let Ok(index) = self.inodes.binary_search_by(|probe| probe.key().cmp(key)) {
       self.inodes.remove(index);
       self.is_unbalanced = true;
@@ -582,6 +581,7 @@ impl<'tx> NodeRwCell<'tx> {
           .bucket
           .node(self_borrow.inodes.first().unwrap().pgid(), Some(self));
         let mut child_borrow = child.cell.borrow_mut();
+        self_borrow.is_leaf = child_borrow.is_leaf;
         self_borrow.inodes.clear();
         mem::swap(&mut self_borrow.inodes, &mut child_borrow.inodes);
         self_borrow.children.clear();
@@ -600,6 +600,7 @@ impl<'tx> NodeRwCell<'tx> {
         // Remove old child.
         child_borrow.parent = None;
         wb.nodes.remove(&child_borrow.pgid);
+        drop(child_borrow);
         child.free()
       }
       return;
