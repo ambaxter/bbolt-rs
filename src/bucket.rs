@@ -1103,12 +1103,14 @@ impl<'tx> BucketRwIAPI<'tx> for BucketRwCell<'tx> {
       return;
     }
 
-    let txid = self.api_tx().meta().txid();
+    let tx = self.api_tx();
+    let txid = tx.meta().txid();
 
     self.for_each_page_node(|pn, depth| match pn {
-      Either::Left(page) => self.api_tx().freelist_free_page(txid, page),
+      Either::Left(page) => tx.freelist_free_page(txid, page),
       Either::Right(node) => node.free(),
     });
+    self.split_r_mut().bucket_header.set_root(ZERO_PGID);
   }
 
   /// spill writes all the nodes for this bucket to dirty pages.
