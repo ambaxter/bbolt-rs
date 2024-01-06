@@ -951,6 +951,7 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
     );*/
     let start_time = Instant::now();
     self.tx.root_bucket().rebalance();
+    let root = self.tx.root_bucket().api_bucket(b"widgets").unwrap();
     {
       let mut stats = self.tx.mut_stats();
       if stats.rebalance > 0 {

@@ -199,7 +199,7 @@ impl<'tx> NodeW<'tx> {
       self.inodes.remove(index);
       self.is_unbalanced = true;
     } else {
-      //println!("trace~node.del - key {:?} not found", key);
+      println!("trace~node.del - key {:?} not found", key);
     }
   }
 
@@ -424,6 +424,8 @@ impl<'tx> NodeRwCell<'tx> {
         return Ok(());
       }
       cell.children.sort_by_key(|child| child.cell.borrow().key());
+      let children = cell.children.as_slice();
+      let inodes = cell.inodes.as_slice();
       cell.bucket.api_tx()
     };
 
@@ -493,7 +495,9 @@ impl<'tx> NodeRwCell<'tx> {
     let cell = self.cell.borrow();
     if let Some(parent) = cell.parent {
       drop(cell);
-      return parent.spill();
+      if {parent.cell.borrow().pgid} == ZERO_PGID {
+        return parent.spill();
+      }
     }
     Ok(())
   }
@@ -613,8 +617,14 @@ impl<'tx> NodeRwCell<'tx> {
       parent_borrow.del(self_borrow.key());
       // drop self as we need to inspect self to remove child
       // TODO: rewrite remove child to do the equivalency a cheaper way
+      let bucket = self_borrow.bucket;
+      let pg_id = self_borrow.pgid;
       drop(self_borrow);
       parent_borrow.remove_child(self);
+      {
+        let mut bucket_borrow = bucket.cell.0.borrow_mut();
+        bucket_borrow.w.nodes.remove(&pg_id);
+      }
       self.free();
       // drop parent_borrow, and bucket to rebalance the parent
       drop(parent_borrow);

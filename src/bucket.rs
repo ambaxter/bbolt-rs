@@ -770,7 +770,7 @@ pub type BucketW<'tx> = InnerBucketW<'tx, TxRwCell<'tx>, BucketRwCell<'tx>>;
 
 pub struct BucketRW<'tx> {
   r: BucketR<'tx>,
-  w: BucketW<'tx>,
+  pub(crate) w: BucketW<'tx>,
 }
 
 impl<'tx> BucketRW<'tx> {
@@ -873,7 +873,7 @@ impl<'tx> SplitRef<BucketR<'tx>, Weak<TxCell<'tx>>, InnerBucketW<'tx, TxCell<'tx
 
 #[derive(Copy, Clone)]
 pub struct BucketRwCell<'tx> {
-  cell: BCell<'tx, BucketRW<'tx>, Weak<TxRwCell<'tx>>>,
+  pub(crate) cell: BCell<'tx, BucketRW<'tx>, Weak<TxRwCell<'tx>>>,
 }
 
 impl<'tx> SplitRef<BucketR<'tx>, Weak<TxRwCell<'tx>>, BucketW<'tx>> for BucketRwCell<'tx> {
