@@ -730,7 +730,8 @@ mod test {
   use crate::common::page::LEAF_PAGE_FLAG;
   use crate::common::{BVec, SplitRef, ZERO_PGID};
   use crate::node::NodeW;
-  use crate::test_support::{TestDb, UnsealTx};
+  use crate::test_support::TestDb;
+  use crate::tx::check::UnsealTx;
   use crate::tx::TxIAPI;
   use crate::DbRwAPI;
   use bumpalo::Bump;

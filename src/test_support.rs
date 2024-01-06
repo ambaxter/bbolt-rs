@@ -5,9 +5,10 @@ use std::ops::{Deref, DerefMut};
 //use crate::freelist::MappedFreeListPage;
 use crate::common::page::{CoerciblePage, MutPage};
 use crate::common::tree::{MappedBranchPage, MappedLeafPage};
+use crate::tx::check::TxCheck;
 use crate::tx::check::TxICheck;
 use crate::tx::{TxCell, TxIAPI, TxImpl, TxRwCell, TxRwImpl, TxRwRef};
-use crate::DB;
+use crate::{DbApi, DbRwAPI, DB};
 use aligners::{alignment, AlignedBytes};
 use tempfile::{tempfile, Builder, NamedTempFile};
 
@@ -57,7 +58,20 @@ impl TestDb {
     Ok(TestDb { tmp_file: None, db })
   }
 
-  pub(crate) fn must_check_r(&self) {
-    //self.db.
+  pub(crate) fn must_check_rw(&mut self) {
+    let tx = self.db.begin_mut();
+    let errors = tx.check();
+    if !errors.is_empty() {
+      for error in errors {
+        eprintln!("{}", error);
+      }
+      panic!()
+    }
+  }
+}
+
+impl Drop for TestDb {
+  fn drop(&mut self) {
+    self.must_check_rw()
   }
 }

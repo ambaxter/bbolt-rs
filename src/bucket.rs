@@ -1423,6 +1423,7 @@ mod tests {
     })
   }
 
+  // TODO: Something is very wrong here. Go code completes in 5.3s. This takes forever
   #[test]
   #[ignore]
   fn test_db_put_very_large() -> crate::Result<()> {
@@ -1441,6 +1442,7 @@ mod tests {
         Ok(())
       })?;
     }
+    db.must_check_rw();
     Ok(())
   }
 

@@ -1154,7 +1154,7 @@ pub(crate) mod check {
 
     fn unseal(&self) -> Self::Unsealed;
   }
-
+/*
   impl<'tx> UnsealTx<'tx> for TxImpl<'tx> {
     type Unsealed = TxCell<'tx>;
 
@@ -1169,7 +1169,7 @@ pub(crate) mod check {
     fn unseal(&self) -> Self::Unsealed {
       TxCell { cell: self.tx.cell }
     }
-  }
+  }*/
 
   impl<'tx> UnsealTx<'tx> for TxRwImpl<'tx> {
     type Unsealed = TxRwCell<'tx>;
@@ -1202,7 +1202,9 @@ pub(crate) mod check {
     }
   }
 
-  pub trait TxICheck<'tx>: TxIAPI<'tx> {
+  impl<'tx, T> TxCheck<'tx> for T where T: UnsealTx<'tx> {}
+
+  pub(crate) trait TxICheck<'tx>: TxIAPI<'tx> {
     fn check(self) -> Vec<String> {
       let mut errors = Vec::new();
       let bump = self.bump();
@@ -1489,6 +1491,7 @@ mod test {
       assert!(bucket.is_some(), "expected bucket");
       Ok(())
     })
+
   }
 
   #[test]
