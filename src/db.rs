@@ -1027,7 +1027,11 @@ impl DbRwAPI for DB {
     let txrw = TxRwImpl::new(bump, write_lock);
     let tx_ref = txrw.get_ref();
     match f(tx_ref) {
-      Ok(_) => txrw.commit(),
+      Ok(_) => {
+        let bytes = txrw.tx.bump().allocated_bytes();
+        txrw.commit()?;
+        Ok(())
+      },
       Err(e) => {
         let _ = txrw.rollback();
         Err(e)

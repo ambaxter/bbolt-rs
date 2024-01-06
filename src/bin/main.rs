@@ -5,10 +5,9 @@ use bbolt_rs::{DbApi, DbRwAPI, TxApi, TxRwApi, DB, BucketRwApi, TxCheck};
 
 fn main() -> bbolt_rs::Result<()> {
   println!("Hello, world!");
-  let mut db = DB::open("test.db")?;
+  let mut db = DB::new_mem()?;
   let n = 400000u32;
-  // TODO: when batch is 200k memory balloons to a huge amount. Why?
-  let batch_n = 20000u32;
+  let batch_n = 200000u32;
 
   let v = [0u8; 500];
   let total = Instant::now();

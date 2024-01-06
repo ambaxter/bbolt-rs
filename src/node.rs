@@ -125,70 +125,26 @@ impl<'tx> NodeW<'tx> {
 
   /// size returns the size of the node after serialization.
   pub(crate) fn size(&self) -> usize {
+    self.size_inodes(&self.inodes)
+  }
+
+  fn size_inodes(&self, inodes: &[INode]) -> usize {
     let mut size = PAGE_HEADER_SIZE;
     let elem_size = self.page_element_size();
-    for inode in &self.inodes {
+    for inode in inodes {
       size += elem_size + inode.key().len() + inode.value().len();
     }
     size
   }
 
-  /// size_less_than returns true if the node is less than a given size.
-  /// This is an optimization to avoid calculating a large node when we only need
-  /// to know if it fits inside a certain page size.
-  pub(crate) fn size_less_than(&self, v: usize) -> bool {
-    let mut size = PAGE_HEADER_SIZE;
-    let elem_size = self.page_element_size();
-    for inode in &self.inodes {
-      size += elem_size + inode.key().len() + inode.value().len();
-      if size > v {
-        return false;
-      }
-    }
-    true
-  }
-
-  /// splitIndex finds the position where a page will fill a given threshold.
-  /// It returns the index as well as the size of the first page.
-  /// This is only be called from split().
-  pub(crate) fn split_index(&self, threshold: usize) -> (usize, usize) {
-    let mut size = PAGE_HEADER_SIZE;
-    let mut index = 0;
-    if self.inodes.len() <= MIN_KEYS_PER_PAGE {
-      return (index, size);
-    }
-
-    // Loop until we only have the minimum number of keys required for the second page.
-    for (idx, inode) in self
-      .inodes
-      .split_at(self.inodes.len() - MIN_KEYS_PER_PAGE)
-      .0
-      .iter()
-      .enumerate()
-    {
-      index = idx;
-      let elsize = self.page_element_size() + inode.key().len() + inode.value().len();
-
-      // If we have at least the minimum number of keys and adding another
-      // node would put us over the threshold then exit and return.
-      if index >= MIN_KEYS_PER_PAGE && size + elsize > threshold {
-        break;
-      }
-
-      // Add the element size to the total size.
-      size += elsize;
-    }
-    (index, size)
-  }
-
-  fn write(&self, p: &mut MutPage) {
-    if self.inodes.len() >= 0xFFFF {
-      panic!("inode overflow: {} (pgid={})", self.inodes.len(), p.id);
+  fn write(&self, inodes: &[INode], p: &mut MutPage) {
+    if inodes.len() >= 0xFFFF {
+      panic!("inode overflow: {} (pgid={})", inodes.len(), p.id);
     }
     if self.is_leaf {
-      MappedLeafPage::mut_into(p).write_elements(&self.inodes);
+      MappedLeafPage::mut_into(p).write_elements(inodes);
     } else {
-      MappedBranchPage::mut_into(p).write_elements(&self.inodes);
+      MappedBranchPage::mut_into(p).write_elements(inodes);
     }
   }
 
@@ -216,17 +172,110 @@ impl<'tx> NodeW<'tx> {
 /// This should only be called from the spill() function.
 struct NodeSplit<'tx> {
   page_size: usize,
+  offset: usize,
+  threshold: usize,
+  page_element_size: usize,
+  inodes: BVec<'tx, INode<'tx>>,
   next: Option<NodeRwCell<'tx>>,
 }
 
+impl<'tx> NodeSplit<'tx> {
+
+  fn split_two<'a>(&'a self, node: NodeRwCell<'tx>) -> ((NodeRwCell<'tx>, usize), Option<NodeRwCell<'tx>>) where 'tx: 'a{
+    let rem = &self.inodes[self.offset..];
+
+    let mut cell = node.cell.borrow_mut();
+    // Ignore the split if the page doesn't have at least enough nodes for
+    // two pages or if the nodes can fit in a single page.
+    if rem.len() <= MIN_KEYS_PER_PAGE * 2 || self.size_less_than(rem) {
+      return ((node, rem.len()), None);
+    }
+
+    // Determine split position and sizes of the two pages.
+    let (split_index, _) = self.split_index(rem);
+
+    // Split node into two separate nodes.
+    // If there's no parent then we'll need to create one.
+    let parent = {
+      if let Some(parent) = cell.parent {
+        parent
+      } else {
+        let parent = NodeRwCell::new_parent_in(cell.bucket);
+        cell.parent = Some(parent);
+        parent.cell.borrow_mut().children.push(node);
+        parent
+      }
+    };
+
+    // Create a new node and add it to the parent.
+    let next = NodeRwCell::new_child_in(cell.bucket, cell.is_leaf, parent);
+    parent.cell.borrow_mut().children.push(next);
+
+    // Update the statistics
+    cell.bucket.api_tx().mut_stats().split += 1;
+
+    ((node, split_index), Some(next))
+  }
+
+  /// splitIndex finds the position where a page will fill a given threshold.
+  /// It returns the index as well as the size of the first page.
+  /// This is only be called from split().
+  fn split_index(&self, rem: &[INode]) -> (usize, usize) {
+    let mut size = PAGE_HEADER_SIZE;
+    let mut index = 0;
+    if rem.len() <= MIN_KEYS_PER_PAGE {
+      return (index, size);
+    }
+
+    // Loop until we only have the minimum number of keys required for the second page.
+    for (idx, inode) in rem
+      .split_at(rem.len() - MIN_KEYS_PER_PAGE)
+      .0
+      .iter()
+      .enumerate()
+    {
+      index = idx;
+      let elsize = self.page_element_size + inode.key().len() + inode.value().len();
+
+      // If we have at least the minimum number of keys and adding another
+      // node would put us over the threshold then exit and return.
+      if index >= MIN_KEYS_PER_PAGE && size + elsize > self.threshold {
+        break;
+      }
+
+      // Add the element size to the total size.
+      size += elsize;
+    }
+    (index, size)
+  }
+
+  /// size_less_than returns true if the node is less than a given size.
+  /// This is an optimization to avoid calculating a large node when we only need
+  /// to know if it fits inside a certain page size.
+  fn size_less_than(&self, rem: &[INode]) -> bool {
+    let mut size = PAGE_HEADER_SIZE;
+    let elem_size = self.page_element_size;
+    for inode in rem {
+      size += elem_size + inode.key().len() + inode.value().len();
+      if size > self.page_size {
+        return false;
+      }
+    }
+    true
+  }
+}
+
 impl<'tx> Iterator for NodeSplit<'tx> {
-  type Item = NodeRwCell<'tx>;
+  type Item = (NodeRwCell<'tx>, &'tx [INode<'tx>]);
 
   fn next(&mut self) -> Option<Self::Item> {
     if let Some(node) = self.next {
-      let (a, ob) = node.split_two(self.page_size);
+      let ((a, size), ob) = self.split_two(node);
       self.next = ob;
-      return Some(a);
+      let rem = &self.inodes[self.offset..self.offset + size];
+      self.offset += size;
+      // Safe because the BVec is owned by the Bumpalo.
+      return Some((a, unsafe {mem::transmute(rem)}));
     }
     None
   }
@@ -408,6 +457,10 @@ impl<'tx> NodeRwCell<'tx> {
     }
   }
 
+  fn write_inodes(self, inodes: &[INode], page: &mut MutPage<'tx>) {
+
+  }
+
   /// spill writes the nodes to dirty pages and splits nodes as it goes.
   /// Returns an error if dirty pages cannot be allocated.
   /// The top-most spill function acts as if it is a parent
@@ -449,7 +502,7 @@ impl<'tx> NodeRwCell<'tx> {
     let page_size = tx.page_size();
 
     // Split nodes into appropriate sizes. The first node will always be n.
-    for node in self.split(page_size) {
+    for (node, inodes) in self.split(page_size) {
       let node_size = {
         let mut node_cell = node.cell.borrow_mut();
         if node_cell.pgid > ZERO_PGID {
@@ -457,7 +510,7 @@ impl<'tx> NodeRwCell<'tx> {
           tx.freelist_free_page(tx.api_id(), &any_page);
           node_cell.pgid = ZERO_PGID;
         }
-        node_cell.size()
+        node_cell.size_inodes(inodes)
       };
 
       // Allocate contiguous space for the node.
@@ -470,21 +523,22 @@ impl<'tx> NodeRwCell<'tx> {
       let mut node_cell = node.cell.borrow_mut();
 
       node_cell.pgid = p.id;
-      node_cell.write(&mut p);
+      node_cell.write(inodes, &mut p);
       tx.queue_page(p);
+      // TODO: node is spilled here so the inodes shouldn't be touched anymore?
       node_cell.is_spilled = true;
 
       // Insert into parent inodes.
       if let Some(parent) = node_cell.parent {
         let key: &'tx [u8] = {
           if node_cell.key.len() == 0 {
-            node_cell.inodes[0].key()
+            inodes[0].key()
           } else {
             node_cell.key()
           }
         };
-        parent.put(key, node_cell.inodes[0].key(), &[], node_cell.pgid, 0);
-        node_cell.key = node_cell.inodes[0].cod_key();
+        parent.put(key, inodes[0].key(), &[], node_cell.pgid, 0);
+        node_cell.key = inodes[0].cod_key();
       }
 
       tx.mut_stats().spill += 1;
@@ -505,53 +559,25 @@ impl<'tx> NodeRwCell<'tx> {
   /// split breaks up a node into multiple smaller nodes, if appropriate.
   /// This should only be called from the spill() function.
   fn split(self, page_size: usize) -> NodeSplit<'tx> {
+    // Determine the threshold before starting a new node.
+    let mut fill_percent = self.cell.borrow().bucket.split_ow().unwrap().fill_percent;
+    fill_percent = fill_percent.max(MIN_FILL_PERCENT).min(MAX_FILL_PERCENT);
+    let threshold = (page_size as f64 * fill_percent) as usize;
+
+    let mut self_borrow = self.cell.borrow_mut();
+
+    let mut inodes = BVec::with_capacity_in(0, self_borrow.inodes.bump());
+    mem::swap(&mut inodes, &mut self_borrow.inodes);
     NodeSplit {
       page_size,
+      offset: 0,
+      threshold,
+      inodes,
+      page_element_size: self_borrow.page_element_size(),
       next: Some(self),
     }
   }
 
-  fn split_two(self, page_size: usize) -> (NodeRwCell<'tx>, Option<NodeRwCell<'tx>>) {
-    let mut cell = self.cell.borrow_mut();
-    // Ignore the split if the page doesn't have at least enough nodes for
-    // two pages or if the nodes can fit in a single page.
-    if cell.inodes.len() <= MIN_KEYS_PER_PAGE * 2 || cell.size_less_than(page_size) {
-      return (self, None);
-    }
-    // Determine the threshold before starting a new node.
-    let mut fill_percent = cell.bucket.split_ow().unwrap().fill_percent;
-    fill_percent = fill_percent.max(MIN_FILL_PERCENT).min(MAX_FILL_PERCENT);
-    let threshold = (page_size as f64 * fill_percent) as usize;
-
-    // Determine split position and sizes of the two pages.
-    let (split_index, _) = cell.split_index(threshold);
-
-    // Split node into two separate nodes.
-    // If there's no parent then we'll need to create one.
-    let parent = {
-      if let Some(parent) = cell.parent {
-        parent
-      } else {
-        let parent = NodeRwCell::new_parent_in(cell.bucket);
-        cell.parent = Some(parent);
-        parent.cell.borrow_mut().children.push(self);
-        parent
-      }
-    };
-
-    // Create a new node and add it to the parent.
-    let next = NodeRwCell::new_child_in(cell.bucket, cell.is_leaf, parent);
-    parent.cell.borrow_mut().children.push(next);
-
-    let mut next_borrow = next.cell.borrow_mut();
-    // Split inodes across two nodes.
-    next_borrow.inodes = cell.inodes.split_off(split_index);
-
-    // Update the statistics
-    cell.bucket.api_tx().mut_stats().split += 1;
-
-    (self, Some(next))
-  }
 
   /// rebalance attempts to combine the node with sibling nodes if the node fill
   /// size is below a threshold or if there are not enough keys.
@@ -810,8 +836,8 @@ mod test {
     let binding = n.cell.borrow().parent.unwrap();
     let parent_children = &binding.cell.borrow().children;
     assert_eq!(2, parent_children.len());
-    assert_eq!(2, parent_children[0].cell.borrow().inodes.len());
-    assert_eq!(3, parent_children[1].cell.borrow().inodes.len());
+    assert_eq!(2, split_nodes[0].1.len());
+    assert_eq!(3, split_nodes[1].1.len());
     Ok(())
   }
 

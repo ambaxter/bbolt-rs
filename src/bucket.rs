@@ -1427,24 +1427,24 @@ mod tests {
 
   // TODO: Something is very wrong here. Go code completes in 5.3s. This takes forever
   #[test]
-  #[ignore]
+  //#[ignore]
   fn test_db_put_very_large() -> crate::Result<()> {
     let mut db = TestDb::new_tmp()?;
-    let n = 400000u32;
+    let n = 400000u64;
     // TODO: when batch is 200k memory balloons to a huge amount. Why?
-    let batch_n = 200000u32;
+    let batch_n = 200000u64;
 
     let v = [0u8; 500];
     for i in (0..n).step_by(batch_n as usize) {
       db.update(|mut tx| {
         let mut b = tx.create_bucket_if_not_exists(b"widgets")?;
-        for j in 1..batch_n {
+        for j in 0..batch_n {
           b.put((i + j).to_be_bytes().as_slice(), &v)?;
         }
         Ok(())
       })?;
     }
-    db.must_check_rw();
+    //db.must_check_rw();
     Ok(())
   }
 

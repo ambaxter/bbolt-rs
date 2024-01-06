@@ -950,8 +950,9 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
       self.tx.cell.0.borrow().r.meta.txid()
     );*/
     let start_time = Instant::now();
+    let root = self.tx.root_bucket();
+    let widgets = self.tx.root_bucket().api_bucket(b"widgets").unwrap();
     self.tx.root_bucket().rebalance();
-    let root = self.tx.root_bucket().api_bucket(b"widgets").unwrap();
     {
       let mut stats = self.tx.mut_stats();
       if stats.rebalance > 0 {
@@ -1033,7 +1034,7 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
       f();
     }
     tx.w.commit_handlers.clear();
-
+    let bytes = tx.r.b.allocated_bytes();
     Ok(())
   }
 }
