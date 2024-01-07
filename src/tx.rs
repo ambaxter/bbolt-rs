@@ -1156,7 +1156,7 @@ pub(crate) mod check {
 
     fn unseal(&self) -> Self::Unsealed;
   }
-/*
+  /*
   impl<'tx> UnsealTx<'tx> for TxImpl<'tx> {
     type Unsealed = TxCell<'tx>;
 
@@ -1260,15 +1260,15 @@ pub(crate) mod check {
     }
 
     fn check_bucket(
-      &self, root: Self::BucketType, reachable: &mut HashMap<PgId, RefPage<'tx>>,
+      &self, bucket: Self::BucketType, reachable: &mut HashMap<PgId, RefPage<'tx>>,
       freed: &mut HashSet<PgId>, errors: &mut Vec<String>,
     ) {
       // ignore inline buckets
-      if root.root() == ZERO_PGID {
+      if bucket.root() == ZERO_PGID {
         return;
       }
 
-      self.for_each_page(root.root(), &mut |p, _, pgid_stack| {
+      self.for_each_page(bucket.root(), &mut |p, _, pgid_stack| {
         if p.id > self.meta().pgid() {
           errors.push(format!(
             "page {}: out of bounds: {} (stack: {:?})",
@@ -1300,11 +1300,11 @@ pub(crate) mod check {
           ));
         }
 
-        self.recursively_check_pages(root.root(), errors);
+        self.recursively_check_pages(bucket.root(), errors);
 
-        root
+        bucket
           .api_for_each_bucket(|key| {
-            if let Some(child) = root.api_bucket(key) {
+            if let Some(child) = bucket.api_bucket(key) {
               self.check_bucket(child, reachable, freed, errors);
             }
             Ok(())
@@ -1493,7 +1493,6 @@ mod test {
       assert!(bucket.is_some(), "expected bucket");
       Ok(())
     })
-
   }
 
   #[test]

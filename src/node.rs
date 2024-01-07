@@ -180,8 +180,12 @@ struct NodeSplit<'tx> {
 }
 
 impl<'tx> NodeSplit<'tx> {
-
-  fn split_two<'a>(&'a self, node: NodeRwCell<'tx>) -> ((NodeRwCell<'tx>, usize), Option<NodeRwCell<'tx>>) where 'tx: 'a{
+  fn split_two<'a>(
+    &'a self, node: NodeRwCell<'tx>,
+  ) -> ((NodeRwCell<'tx>, usize), Option<NodeRwCell<'tx>>)
+  where
+    'tx: 'a,
+  {
     let rem = &self.inodes[self.offset..];
 
     let mut cell = node.cell.borrow_mut();
@@ -275,7 +279,7 @@ impl<'tx> Iterator for NodeSplit<'tx> {
       let rem = &self.inodes[self.offset..self.offset + size];
       self.offset += size;
       // Safe because the BVec is owned by the Bumpalo.
-      return Some((a, unsafe {mem::transmute(rem)}));
+      return Some((a, unsafe { mem::transmute(rem) }));
     }
     None
   }
@@ -545,7 +549,7 @@ impl<'tx> NodeRwCell<'tx> {
     let cell = self.cell.borrow();
     if let Some(parent) = cell.parent {
       drop(cell);
-      if {parent.cell.borrow().pgid} == ZERO_PGID {
+      if { parent.cell.borrow().pgid } == ZERO_PGID {
         return parent.spill();
       }
     }
@@ -573,7 +577,6 @@ impl<'tx> NodeRwCell<'tx> {
       next: Some(self),
     }
   }
-
 
   /// rebalance attempts to combine the node with sibling nodes if the node fill
   /// size is below a threshold or if there are not enough keys.

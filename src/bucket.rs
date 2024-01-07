@@ -1455,11 +1455,10 @@ mod tests {
       let mut b0 = tx.create_bucket(b"widgets")?;
       tx.bucket(b"widgets").unwrap().create_bucket(b"foo")?;
 
-      assert_eq!(Err(Error::IncompatibleValue) , b0.put(b"foo", b"bar"));
+      assert_eq!(Err(Error::IncompatibleValue), b0.put(b"foo", b"bar"));
       Ok(())
     })
   }
-
 
   #[test]
   fn test_bucket_put_closed() -> crate::Result<()> {
@@ -1478,7 +1477,7 @@ mod tests {
       let mut b = tx.create_bucket(b"widgets")?;
       b.put(b"foo", b"bar")?;
       b.delete(b"foo")?;
-      assert_eq!(None , b.get(b"foo"));
+      assert_eq!(None, b.get(b"foo"));
       Ok(())
     })
   }

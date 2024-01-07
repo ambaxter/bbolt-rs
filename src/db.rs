@@ -1031,7 +1031,7 @@ impl DbRwAPI for DB {
         let bytes = txrw.tx.bump().allocated_bytes();
         txrw.commit()?;
         Ok(())
-      },
+      }
       Err(e) => {
         let _ = txrw.rollback();
         Err(e)
