@@ -758,8 +758,8 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> InnerBucketW<'tx, T, B> {
   pub fn new_in(bump: &'tx Bump) -> InnerBucketW<'tx, T, B> {
     InnerBucketW {
       root_node: None,
-      buckets: HashMap::new_in(bump),
-      nodes: HashMap::new_in(bump),
+      buckets: HashMap::with_capacity_in(0, bump),
+      nodes: HashMap::with_capacity_in(0, bump),
       fill_percent: DEFAULT_FILL_PERCENT,
       phantom_t: PhantomData,
     }

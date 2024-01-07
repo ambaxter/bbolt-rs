@@ -229,7 +229,7 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> InnerCursor<'tx, T, B> {
 
     InnerCursor {
       bucket: cell,
-      stack: BVec::new_in(bump),
+      stack: BVec::with_capacity_in(0, bump),
       phantom_t: PhantomData,
     }
   }

@@ -847,8 +847,8 @@ impl<'tx> TxRwImpl<'tx> {
           p: Default::default(),
         };
         let w = TxW {
-          pages: HashMap::new_in(bump),
-          commit_handlers: BVec::new_in(bump),
+          pages: HashMap::with_capacity_in(0, bump),
+          commit_handlers: BVec::with_capacity_in(0, bump),
           p: Default::default(),
         };
         let bucket = BucketRwCell::new_in(bump, inline_bucket, weak.clone(), None);

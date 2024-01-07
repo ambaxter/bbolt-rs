@@ -49,7 +49,7 @@ impl<'tx> NodeW<'tx> {
       key: CodSlice::Owned(&[]),
       //TODO: this usually defines an inline page
       pgid: Default::default(),
-      inodes: BVec::new_in(bump),
+      inodes: BVec::with_capacity_in(0, bump),
       bucket,
       parent: None,
       is_unbalanced: false,
@@ -65,7 +65,7 @@ impl<'tx> NodeW<'tx> {
       key: CodSlice::Owned(&[]),
       //TODO: this usually defines an inline page
       pgid: Default::default(),
-      inodes: BVec::new_in(bump),
+      inodes: BVec::with_capacity_in(0, bump),
       bucket,
       parent: Some(parent),
       is_unbalanced: false,
@@ -455,10 +455,6 @@ impl<'tx> NodeRwCell<'tx> {
       let mpage = MappedBranchPage::mut_into(page);
       mpage.write_elements(&self_borrow.inodes);
     }
-  }
-
-  fn write_inodes(self, inodes: &[INode], page: &mut MutPage<'tx>) {
-
   }
 
   /// spill writes the nodes to dirty pages and splits nodes as it goes.

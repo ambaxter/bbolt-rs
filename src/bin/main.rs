@@ -5,7 +5,7 @@ use bbolt_rs::{DbApi, DbRwAPI, TxApi, TxRwApi, DB, BucketRwApi, TxCheck};
 
 fn main() -> bbolt_rs::Result<()> {
   println!("Hello, world!");
-  let mut db = DB::new_mem()?;
+  let mut db = DB::open("test.db")?;
   let n = 400000u32;
   let batch_n = 200000u32;
 
@@ -25,7 +25,7 @@ fn main() -> bbolt_rs::Result<()> {
   println!("Updated total in {:?}ms", total.elapsed().as_millis());
 
   let check = Instant::now();
-  db.update(|mut tx| {
+/*  db.update(|mut tx| {
     let errors = tx.check();
     if !errors.is_empty() {
       for error in errors {
@@ -34,7 +34,7 @@ fn main() -> bbolt_rs::Result<()> {
       panic!()
     }
     Ok(())
-  })?;
+  })?;*/
   println!("Checked in {:?}s", check.elapsed().as_secs_f32());
 
   println!("Goodbye, world!");
