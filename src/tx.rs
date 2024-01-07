@@ -1299,18 +1299,17 @@ pub(crate) mod check {
             pgid_stack
           ));
         }
-
-        self.recursively_check_pages(bucket.root(), errors);
-
-        bucket
-          .api_for_each_bucket(|key| {
-            if let Some(child) = bucket.api_bucket(key) {
-              self.check_bucket(child, reachable, freed, errors);
-            }
-            Ok(())
-          })
-          .unwrap();
       });
+
+      self.recursively_check_pages(bucket.root(), errors);
+
+      bucket
+        .api_for_each_bucket(|key| {
+          let child = bucket.api_bucket(key).unwrap();
+          self.check_bucket(child, reachable, freed, errors);
+          Ok(())
+        })
+        .unwrap();
     }
 
     fn recursively_check_pages(self, pg_id: PgId, errors: &mut Vec<String>) {
@@ -1325,8 +1324,9 @@ pub(crate) mod check {
     ) -> &'tx [u8] {
       let p = self.mem_page(pg_id);
       pageid_stack.push(pg_id);
+      let mut max_key_in_subtree = [].as_slice();
       if let Some(branch_page) = MappedBranchPage::coerce_ref(&p) {
-        let running_min = min_key_closed;
+        let mut running_min = min_key_closed;
         let elements_len = branch_page.elements().len();
         for (i, (pg_id, key)) in branch_page
           .elements()
@@ -1352,11 +1352,12 @@ pub(crate) mod check {
           if i < elements_len - 1 {
             max_key = branch_page.get_elem(i as u16 + 1).unwrap().key();
           }
-          let max_key_in_subtree =
+          max_key_in_subtree =
             self.recursively_check_pages_internal(pg_id, key, max_key, pageid_stack, errors);
-          pageid_stack.pop();
-          return max_key_in_subtree;
+          running_min = max_key_in_subtree;
         }
+        pageid_stack.pop();
+        return max_key_in_subtree;
       } else if let Some(leaf_page) = MappedLeafPage::coerce_ref(&p) {
         let mut running_min = min_key_closed;
         let elements_len = leaf_page.elements().len();

@@ -25,7 +25,7 @@ fn main() -> bbolt_rs::Result<()> {
   println!("Updated total in {:?}ms", total.elapsed().as_millis());
 
   let check = Instant::now();
-  /*  db.update(|mut tx| {
+  db.update(|mut tx| {
     let errors = tx.check();
     if !errors.is_empty() {
       for error in errors {
@@ -34,7 +34,7 @@ fn main() -> bbolt_rs::Result<()> {
       panic!()
     }
     Ok(())
-  })?;*/
+  })?;
   println!("Checked in {:?}s", check.elapsed().as_secs_f32());
 
   println!("Goodbye, world!");
