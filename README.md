@@ -15,6 +15,7 @@ bbolt-rs is a work in progress implementation of the etcd-io/bbolt database in R
 * Optional mlock
 * Strict mode
 * impl trait for public apis?
+* blag post
 
 ### Open Questions
 * How do we properly pin memory for the transactions?
