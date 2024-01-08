@@ -5,7 +5,9 @@ bbolt-rs is a work in progress implementation of the [etcd-io/bbolt](https://git
 
 I'm rather pleased with my work as I believe the public API I've created has substantially fewer footguns than the Go code has. The database can't be dropped until all sessions are dropped. No resources from the transaction can escape the transaction. You can't deadlock the database by opening up a RW transaction and then opening up a R transaction right afterwards.
 
-It also is interesting that, despite the increased memory usage, this code is about 40% faster in a synthetic large transactions than the equivalent Go code. 
+It also is interesting that, despite the increased memory usage, this code is about 40% faster in a synthetic large transaction than the equivalent Go code. Further benchmarking is postponed until the database is fully feature complete and we can have a proper duel.
+
+Lastly, I must express my eternal gratitude to the bbolt developers who have created such a simple and easy to understand project to learn from.
 
 Features:
 * Arena memory allocation per transaction
