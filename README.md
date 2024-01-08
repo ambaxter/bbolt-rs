@@ -10,7 +10,8 @@ bbolt-rs is a work in progress implementation of the etcd-io/bbolt database in R
 - [ ] Update layout to match current bbolt directory structure
 - [ ] Quick Check analog
 - [ ] Logging capabilities
-- [ ] Follow Clippy guidance
+- [x] Follow Clippy guidance
+- [x] Remove commented out trace
 - [ ] Optional fsync
 - [ ] Optional mlock
 - [ ] Strict mode

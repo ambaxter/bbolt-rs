@@ -1109,11 +1109,6 @@ impl<'tx> BucketRwIAPI<'tx> for BucketRwCell<'tx> {
 
   /// spill writes all the nodes for this bucket to dirty pages.
   fn spill(self, bump: &'tx Bump) -> crate::Result<()> {
-    // tracing
-    /*    println!(
-      "trace~bucket.spill root: {:?}",
-      self.cell.0.borrow().r.bucket_header.root()
-    );*/
     // To keep with our rules we much copy the bucket entries to temporary storage first
     // This should be unnecessary, but working first *then* optimize
     let v = {
@@ -1129,7 +1124,6 @@ impl<'tx> BucketRwIAPI<'tx> for BucketRwCell<'tx> {
     };
 
     for (name, child) in v.into_iter() {
-      //println!("trace~bucket.spill child: {:?}", name);
       let value = if child.inlineable() {
         child.free();
         child.write(bump)
