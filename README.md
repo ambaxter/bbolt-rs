@@ -22,7 +22,7 @@ bbolt-rs is a work in progress implementation of the etcd-io/bbolt database in R
 - [ ] How do we properly pin memory for the transactions?
 - [ ] How do we properly set up sync and send for the database?
 - [ ] Why do I need to transmute the key deref in key(&'a self) -> &'tx [u8] in inode.rs?
-- [ ] Why do we leak memory when dropping TxW?
+- [ ] Why do we leak memory when dropping TxRwImpl?
 - [ ] Why do we need so much memory on large commits? Almost 3x the Go version
 - [ ] Can we squeeze performance by moving the leaf keys all next to each other?
 
@@ -61,6 +61,7 @@ bbolt-rs is a work in progress implementation of the etcd-io/bbolt database in R
 - [ ] TxIAPI Double check api_for_each -> api_for_each_bucket call 
 - [ ] TxIAPI.\*rollback\*
 - [ ] TxApi.for_each
+- [ ] TxCheck for TxImpl, TxRef
 - [ ] Copy file
 - [ ] test_tx_check_read_only
 - [ ] test_tx_commit_err_tx_closed
