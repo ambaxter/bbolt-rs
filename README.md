@@ -60,8 +60,10 @@ Features:
 - [ ] Proper error chaining (BucketIApi.api_delete_bucket)
 - [ ] Bucket tests: test_bucket_get_capacity - allow editing values?
 
-### src/common/page.rs
+### src/common/mod.rs
 - [ ] Remove unnecessary functions for SplitRef
+
+### src/common/page.rs
 - [ ] CoerciblePage API needs cleanup and renaming
 - [ ] Make setting overflow unsafe
 
