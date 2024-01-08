@@ -19,6 +19,7 @@ bbolt-rs is a work in progress implementation of the etcd-io/bbolt database in R
 
 ### Open Questions
 - [ ] How do we properly pin memory for the transactions?
+- [ ] How do we properly set up sync and send for the database?
 - [ ] Why do I need to transmute the key deref in key(&'a self) -> &'tx [u8] in inode.rs?
 - [ ] Why do we leak memory when dropping TxW?
 - [ ] Why do we need so much memory on large commits? Almost 3x the Go version
