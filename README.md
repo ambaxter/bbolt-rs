@@ -1,7 +1,11 @@
 bbolt-rs
 =====
 
-bbolt-rs is a work in progress implementation of the etcd-io/bbolt database in Rust. 
+bbolt-rs is a work in progress implementation of the [etcd-io/bbolt](https://github.com/etcd-io/bbolt) database in Rust. It successfully reads and commits, but it has many rough edges.
+
+I'm rather pleased with my work as I believe the public API I've created has substantially fewer footguns than the Go code has. The database can't be dropped until all sessions are dropped. No resources from the transaction can escape the transaction. You can't deadlock the database by opening up a RW transaction and then opening up a R transaction right afterwards.
+
+It also is interesting that, despite the increased memory usage, this code is about 40% faster in a synthetic large transactions than the equivalent Go code. 
 
 ## TODO
 
