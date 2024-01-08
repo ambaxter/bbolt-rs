@@ -7,6 +7,15 @@ I'm rather pleased with my work as I believe the public API I've created has sub
 
 It also is interesting that, despite the increased memory usage, this code is about 40% faster in a synthetic large transactions than the equivalent Go code. 
 
+Features:
+* Arena memory allocation per transaction
+* Explicitly designed to prevent transaction dependant resources from escaping the transaction.
+* RwLock based transactions
+* File backed database
+* Memory backed database for Miri to use
+* Simple and straightforward public APIs
+
+
 ## TODO
 
 ### General
