@@ -249,7 +249,7 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for InnerCursor
 
     self.stack.clear();
 
-    // TODO: Optimize this a bit for the internal API. BucketImpl::root_page_node
+    // TODO: Optimize this a bit for the internal API. BucketImpl::root_page_node?
     let root = self.bucket.root();
     let pn = self.bucket.page_node(root);
     self.stack.push(ElemRef { pn, index: 0 });

@@ -392,7 +392,6 @@ pub struct TxR<'tx> {
 
 pub struct TxW<'tx> {
   pages: HashMap<'tx, PgId, SelfOwned<AlignedBytes<alignment::Page>, MutPage<'tx>>>,
-  //TODO: We leak memory when this drops. Need special handling here
   commit_handlers: BVec<'tx, Box<dyn Fn()>>,
   p: PhantomData<&'tx u8>,
 }

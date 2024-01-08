@@ -764,10 +764,6 @@ impl<'tx> DbRwIAPI<'tx> for DBShared {
       return Ok(mut_page);
     }
 
-    // TODO: How do we signal back that the file is at a new high water mark?
-    // TODO: When remapping the file how do we signal that we should own/dereference before we go further?
-    // I think we can just pass in the tx when we grow the db size
-
     // Resize mmap() if we're at the end.
     mut_page.id = high_water;
     let min_size = (high_water.0 + count + 1) * self.backend.page_size() as u64;

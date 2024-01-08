@@ -1,9 +1,3 @@
-// TODO: Remove once code creation is completed
-#![cfg_attr(
-  debug_assertions,
-  allow(unused_variables, private_bounds, dead_code, unused_imports)
-)]
-
 mod arch;
 mod bucket;
 mod common;

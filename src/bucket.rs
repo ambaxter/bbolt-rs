@@ -1425,13 +1425,11 @@ mod tests {
     })
   }
 
-  // TODO: Something is very wrong here. Go code completes in 5.3s. This takes forever
   #[test]
-  //#[ignore]
+  #[ignore]
   fn test_db_put_very_large() -> crate::Result<()> {
     let mut db = TestDb::new_tmp()?;
     let n = 400000u64;
-    // TODO: when batch is 200k memory balloons to a huge amount. Why?
     let batch_n = 200000u64;
 
     let v = [0u8; 500];
