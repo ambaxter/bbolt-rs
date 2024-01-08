@@ -1,7 +1,5 @@
 use crate::common::bucket::{InBucket, IN_BUCKET_SIZE};
-use crate::common::defaults::PGID_NO_FREE_LIST;
-use crate::common::memory::{BCell, IsAligned, LCell};
-use crate::common::meta::MetaPage;
+use crate::common::memory::{BCell, IsAligned};
 use crate::common::page::{
   CoerciblePage, MutPage, Page, RefPage, BUCKET_LEAF_FLAG, LEAF_PAGE_FLAG, PAGE_HEADER_SIZE,
 };
@@ -9,25 +7,21 @@ use crate::common::tree::{
   MappedBranchPage, MappedLeafPage, TreePage, BRANCH_PAGE_ELEMENT_SIZE, LEAF_PAGE_ELEMENT_SIZE,
 };
 use crate::common::{BVec, HashMap, PgId, SplitRef, ZERO_PGID};
-use crate::cursor::{
-  CursorApi, CursorIAPI, CursorImpl, CursorRwIAPI, CursorRwImpl, ElemRef, InnerCursor,
-};
-use crate::node::{NodeRwCell, NodeW};
-use crate::tx::{TxApi, TxCell, TxIAPI, TxR, TxRwCell, TxRwIAPI, TxW};
+use crate::cursor::{CursorApi, CursorIAPI, CursorImpl, CursorRwIAPI, CursorRwImpl, InnerCursor};
+use crate::node::NodeRwCell;
+use crate::tx::{TxCell, TxIAPI, TxRwCell, TxRwIAPI};
 use crate::Error::{
   BucketExists, BucketNameRequired, BucketNotFound, IncompatibleValue, KeyRequired, KeyTooLarge,
   ValueTooLarge,
 };
-use crate::{CursorRwApi, Error, TxRwApi};
-use aligners::{alignment, AlignedBytes};
+use crate::{CursorRwApi, Error};
 use bumpalo::Bump;
 use bytemuck::{Pod, Zeroable};
 use either::Either;
 use std::alloc::Layout;
-use std::cell::{Ref, RefCell, RefMut};
-use std::io::BufRead;
+use std::cell::{Ref, RefMut};
 use std::marker::PhantomData;
-use std::ops::{AddAssign, Deref, DerefMut};
+use std::ops::AddAssign;
 use std::ptr::slice_from_raw_parts_mut;
 use std::rc::{Rc, Weak};
 use std::slice::{from_raw_parts, from_raw_parts_mut};
@@ -397,7 +391,7 @@ pub(crate) trait BucketIAPI<'tx, T: TxIAPI<'tx>>:
     // Move cursor to key.
     let (k, v, flags) = c.i_seek(name)?;
     // Return None if the key doesn't exist or it is not a bucket.
-    if !(name == k) || (flags & BUCKET_LEAF_FLAG) == 0 {
+    if name != k || (flags & BUCKET_LEAF_FLAG) == 0 {
       return None;
     }
 
@@ -569,7 +563,7 @@ pub(crate) trait BucketIAPI<'tx, T: TxIAPI<'tx>>:
       if id != ZERO_PGID {
         panic!("inline bucket non-zero page access(2): {} != 0", id)
       }
-      return if let Some(root_node) = &w.map(|wb| wb.root_node).flatten() {
+      return if let Some(root_node) = &w.and_then(|wb| wb.root_node) {
         Either::Right(*root_node)
       } else {
         Either::Left(r.inline_page.unwrap())
@@ -987,7 +981,7 @@ impl<'tx> BucketRwIAPI<'tx> for BucketRwCell<'tx> {
     let data = bump.alloc_layout(layout).as_ptr();
 
     let value = unsafe {
-      std::ptr::write_bytes(data, 0, INLINE_BUCKET_SIZE);
+      ptr::write_bytes(data, 0, INLINE_BUCKET_SIZE);
       from_raw_parts_mut(data, INLINE_BUCKET_SIZE)
     };
     value.copy_from_slice(bytemuck::bytes_of(&inline_page));
@@ -997,7 +991,7 @@ impl<'tx> BucketRwIAPI<'tx> for BucketRwCell<'tx> {
 
     self.split_r_mut().inline_page = None;
 
-    return Ok(self.api_bucket(key).unwrap());
+    Ok(self.api_bucket(key).unwrap())
   }
 
   fn api_create_bucket_if_not_exists(self, key: &[u8]) -> crate::Result<Self> {
@@ -1005,9 +999,9 @@ impl<'tx> BucketRwIAPI<'tx> for BucketRwCell<'tx> {
       Ok(child) => Ok(child),
       Err(error) => {
         if error == BucketExists {
-          return Ok(self.api_bucket(key).unwrap());
+          Ok(self.api_bucket(key).unwrap())
         } else {
-          return Err(error);
+          Err(error)
         }
       }
     }
@@ -1172,9 +1166,9 @@ impl<'tx> BucketRwIAPI<'tx> for BucketRwCell<'tx> {
 
     root_node.spill()?;
     if let (mut r, Some(mut w)) = self.split_r_ow_mut() {
-      let mut new_root = root_node.root();
+      let new_root = root_node.root();
       w.root_node = Some(new_root);
-      let mut borrow_root = new_root.cell.borrow_mut();
+      let borrow_root = new_root.cell.borrow_mut();
       let new_pgid = borrow_root.pgid;
       let tx_pgid = self.cell.1.upgrade().unwrap().meta().pgid();
       if new_pgid >= tx_pgid {
@@ -1221,9 +1215,7 @@ impl<'tx> BucketRwIAPI<'tx> for BucketRwCell<'tx> {
     for inode in &node_ref.inodes {
       size += LEAF_PAGE_ELEMENT_SIZE + inode.key().len() + inode.value().len();
 
-      if inode.flags() & BUCKET_LEAF_FLAG != 0 {
-        return false;
-      } else if size > self.max_inline_bucket_size() {
+      if inode.flags() & BUCKET_LEAF_FLAG != 0 || size > self.max_inline_bucket_size() {
         return false;
       }
     }

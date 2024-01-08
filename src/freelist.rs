@@ -2,8 +2,7 @@ use crate::common::page::Page;
 use crate::common::page::{CoerciblePage, FREE_LIST_PAGE_FLAG, PAGE_HEADER_SIZE};
 use crate::common::utility::is_sorted;
 use crate::common::{PgId, TxId};
-use crate::freelist;
-use bytemuck::{bytes_of, Contiguous};
+use bytemuck::Contiguous;
 use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
 use std::iter::{repeat, zip};
@@ -143,7 +142,7 @@ pub struct TxPending {
   pub last_release_begin: TxId,
 }
 
-impl<'tx> TxPending {
+impl TxPending {
   pub(crate) fn new() -> TxPending {
     TxPending {
       ids: Vec::new(),
@@ -234,11 +233,7 @@ impl Freelist {
   pub(crate) fn add_span(&mut self, start: PgId, size: u64) {
     self.backward_map.insert(start - 1 + size, size);
     self.forward_map.insert(start, size);
-    self
-      .free_maps
-      .entry(size)
-      .or_insert_with(|| HashSet::new())
-      .insert(start);
+    self.free_maps.entry(size).or_default().insert(start);
   }
 
   pub(crate) fn allocate(&mut self, txid: TxId, n: u64) -> Option<PgId> {
@@ -291,7 +286,7 @@ impl Freelist {
     assert!(u64::from(p.id) > 1, "Cannot free page 0 or 1: {}", p.id);
 
     // Free page and all its overflow pages.
-    let txp = self.pending.entry(txid).or_insert_with(|| TxPending::new());
+    let txp = self.pending.entry(txid).or_insert_with(TxPending::new);
     let alloc_tx_id = {
       if let Some(allocs_tx_id) = self.allocs.remove(&p.id) {
         allocs_tx_id
@@ -454,7 +449,7 @@ impl Freelist {
   pub(crate) fn write(&self, page: &mut MappedFreeListPage) {
     // Combine the old free pgids and pgids waiting on an open transaction.
     let data = page.page_ids_mut(self.count());
-    if data.len() > 0 {
+    if !data.is_empty() {
       self.copy_all(data);
     }
   }
@@ -514,12 +509,10 @@ mod tests {
   use crate::common::{PgId, TxId};
   use crate::freelist::{Freelist, MappedFreeListPage, TxPending};
   use crate::test_support::mapped_page;
-  use aligners::{alignment, AlignedBytes};
   use bumpalo::Bump;
   use itertools::Itertools;
-  use std::collections::{HashMap, HashSet};
+  use std::collections::HashSet;
   use std::default::Default;
-  use std::hash::Hash;
 
   const fn pg(id: u64) -> PgId {
     PgId(id)

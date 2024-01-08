@@ -4,27 +4,24 @@ use crate::common::bucket::InBucket;
 use crate::common::defaults::{
   DEFAULT_ALLOC_SIZE, DEFAULT_PAGE_SIZE, MAGIC, MAX_MMAP_STEP, PGID_NO_FREE_LIST, VERSION,
 };
-use crate::common::memory::LCell;
 use crate::common::meta::{MappedMetaPage, Meta};
-use crate::common::page::{CoerciblePage, MutPage, Page, RefPage, FREE_LIST_PAGE_FLAG};
+use crate::common::page::{CoerciblePage, MutPage, Page, RefPage};
 use crate::common::self_owned::SelfOwned;
 use crate::common::tree::MappedLeafPage;
 use crate::common::{PgId, SplitRef, TxId};
 use crate::freelist::{Freelist, MappedFreeListPage};
-use crate::tx::{TxCell, TxIAPI, TxImpl, TxRef, TxRwCell, TxRwImpl, TxRwRef, TxStats};
+use crate::tx::{TxIAPI, TxImpl, TxRef, TxRwCell, TxRwImpl, TxRwRef, TxStats};
 use crate::{Error, TxApi, TxRwApi};
-use aligners::{alignment, Aligned, AlignedBytes};
+use aligners::{alignment, AlignedBytes};
 use bumpalo::Bump;
 use fs4::FileExt;
-use itertools::{min, Itertools};
 use lockfree_object_pool::LinearObjectPool;
 use memmap2::{Advice, MmapOptions, MmapRaw};
 use parking_lot::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
-use size::consts::MEGABYTE;
 use std::cell::{RefCell, RefMut};
 use std::fs::File;
-use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
-use std::ops::{Deref, DerefMut, Sub};
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::ops::Sub;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::{fs, io, mem};
@@ -59,7 +56,7 @@ where
   ///
   /// IMPORTANT: You must close read-only transactions after you are finished or
   /// else the database will not reclaim old pages.
-  fn begin<'tx>(&'tx self) -> Self::TxType<'tx>;
+  fn begin(&self) -> Self::TxType<'_>;
 
   /// View executes a function within the context of a managed read-only transaction.
   /// Any error that is returned from the function is returned from the View() method.
@@ -94,7 +91,7 @@ pub trait DbRwAPI: DbApi {
   ///
   /// IMPORTANT: You must close read-only transactions after you are finished or
   /// else the database will not reclaim old pages.
-  fn begin_mut<'tx>(&'tx mut self) -> Self::TxRwType<'tx>;
+  fn begin_mut(&mut self) -> Self::TxRwType<'_>;
 
   /// Update executes a function within the context of a read-write managed transaction.
   /// If no error is returned from the function then the transaction is committed.
@@ -166,24 +163,6 @@ impl TxRecords {
       rwtx: None,
       freelist,
     }
-  }
-
-  /// freePages releases any pages associated with closed read-only transactions.
-  fn free_pages(&mut self) {
-    self.txs.sort();
-    let mut minid = TxId(0xFFFFFFFFFFFFFFFF);
-    if self.txs.len() > 0 {
-      minid = *self.txs.first().unwrap();
-    }
-    if minid.0 > 0 {
-      self.freelist.release(minid - 1);
-    }
-
-    for txid in &self.txs {
-      self.freelist.release_range(minid, *txid - 1);
-      minid = *txid + 1;
-    }
-    self.freelist.release_range(minid, TxId(0xFFFFFFFFFFFFFFFF));
   }
 }
 
@@ -300,7 +279,7 @@ impl DBBackend for MemBackend {
     Ok(())
   }
 
-  fn mmap(&mut self, min_size: u64, tx: TxRwCell) -> crate::Result<()> {
+  fn mmap(&mut self, min_size: u64, _tx: TxRwCell) -> crate::Result<()> {
     if self.mmap.len() < self.page_size * 2 {
       return Err(Error::MMapFileSizeTooSmall);
     }
@@ -322,15 +301,9 @@ impl DBBackend for MemBackend {
   }
 
   fn write_all_at(&mut self, buffer: &[u8], offset: u64) -> crate::Result<usize> {
-    let mut write_to = &mut self.mmap[offset as usize..offset as usize + buffer.len()];
+    let write_to = &mut self.mmap[offset as usize..offset as usize + buffer.len()];
     write_to.copy_from_slice(buffer);
     let written = write_to.len();
-    /*    println!(
-      "Write at {} for {} bytes. Current size is {}",
-      offset,
-      written,
-      self.mmap.len()
-    );*/
     Ok(written)
   }
 }
@@ -566,19 +539,15 @@ impl DBBackend for FileBackend {
   }
 
   fn fsync(&mut self) -> crate::Result<()> {
-    self.file.sync_all().map_err(|e| Error::IO(e))
+    self.file.sync_all().map_err(Error::IO)
   }
 
   fn write_all_at(&mut self, buffer: &[u8], mut offset: u64) -> crate::Result<usize> {
     let mut rem = buffer.len();
     let mut written = 0;
     loop {
-      let buf = &buffer[written..rem];
-      self
-        .file
-        .seek(SeekFrom::Start(offset))
-        .map_err(|e| Error::IO(e))?;
-      let bytes_written = self.file.write(buffer).map_err(|e| Error::IO(e))?;
+      self.file.seek(SeekFrom::Start(offset)).map_err(Error::IO)?;
+      let bytes_written = self.file.write(buffer).map_err(Error::IO)?;
       rem -= bytes_written;
       offset += bytes_written as u64;
       written += bytes_written;
@@ -587,12 +556,6 @@ impl DBBackend for FileBackend {
         break;
       }
     }
-    /*    println!(
-      "Write at {} for {} bytes. Current size is {}",
-      offset,
-      written,
-      self.file.metadata()?.len()
-    );*/
     Ok(written)
   }
 }
@@ -603,7 +566,7 @@ impl Drop for FileBackend {
       match self.file.unlock() {
         Ok(_) => {}
         // TODO: log error
-        Err(e) => {
+        Err(_) => {
           todo!("log unlock error")
         }
       }
@@ -634,7 +597,7 @@ pub(crate) trait DbRwIAPI<'tx>: DbIAPI<'tx> {
     &mut self, tx: TxRwCell<'tx>,
   ) -> crate::Result<SelfOwned<AlignedBytes<alignment::Page>, MutPage<'tx>>>;
 
-  fn remove_rw_tx(&mut self, rem_tx: TxId, tx_stats: TxStats);
+  fn remove_rw_tx(&mut self, tx_stats: TxStats);
 
   fn repool_allocated(&mut self, page: AlignedBytes<alignment::Page>);
   fn fsync(&mut self) -> crate::Result<()>;
@@ -801,7 +764,7 @@ impl<'tx> DbRwIAPI<'tx> for DBShared {
     Ok(freelist_page)
   }
 
-  fn remove_rw_tx(&mut self, rem_tx: TxId, tx_stats: TxStats) {
+  fn remove_rw_tx(&mut self, tx_stats: TxStats) {
     let mut records = self.records.lock();
     let mut stats = self.stats.write();
     let page_size = self.backend.page_size();
@@ -886,12 +849,14 @@ impl DB {
     let freelist_page = MappedFreeListPage::coerce_ref(&refpage).unwrap();
     let freelist = freelist_page.read();
     let free_count = freelist.free_count();
-    let mut records = TxRecords::new(freelist);
-    let mut stats = DbStats::default();
-    stats.free_page_n = free_count as i64;
+    let records = TxRecords::new(freelist);
+    let stats = DbStats {
+      free_page_n: free_count as i64,
+      ..Default::default()
+    };
     let arc_stats = Arc::new(RwLock::new(stats));
     Ok(DB {
-      bump_pool: Arc::new(LinearObjectPool::new(|| Bump::new(), |b| b.reset())),
+      bump_pool: Arc::new(LinearObjectPool::new(Bump::new, |b| b.reset())),
       db: Arc::new(RwLock::new(DBShared {
         stats: arc_stats.clone(),
         records: Mutex::new(records),
@@ -920,11 +885,13 @@ impl DB {
     let freelist = freelist_page.read();
     let free_count = freelist.free_count();
     let records = TxRecords::new(freelist);
-    let mut stats = DbStats::default();
-    stats.free_page_n = free_count as i64;
+    let stats = DbStats {
+      free_page_n: free_count as i64,
+      ..Default::default()
+    };
     let arc_stats = Arc::new(RwLock::new(stats));
     Ok(DB {
-      bump_pool: Arc::new(LinearObjectPool::new(|| Bump::new(), |b| b.reset())),
+      bump_pool: Arc::new(LinearObjectPool::new(Bump::new, |b| b.reset())),
       db: Arc::new(RwLock::new(DBShared {
         stats: arc_stats.clone(),
         records: Mutex::new(records),
@@ -940,7 +907,7 @@ impl DB {
     for (i, page_bytes) in buffer.chunks_mut(page_size).enumerate() {
       let mut page = MutPage::new(page_bytes.as_mut_ptr());
       if i < 2 {
-        let mut meta_page = MappedMetaPage::mut_into(&mut page);
+        let meta_page = MappedMetaPage::mut_into(&mut page);
         meta_page.page.id = PgId(i as u64);
         let meta = &mut meta_page.meta;
         meta.set_magic(MAGIC);
@@ -970,7 +937,7 @@ impl DB {
       .write(true)
       .create(true)
       .read(true)
-      .open(&path)?;
+      .open(path)?;
     db.write_all(&buffer)?;
     db.flush()?;
     Ok(buffer.len())
@@ -984,7 +951,7 @@ impl DbApi for DB {
     todo!()
   }
 
-  fn begin<'tx>(&'tx self) -> Self::TxType<'tx> {
+  fn begin(&self) -> Self::TxType<'_> {
     let bump = self.bump_pool.pull_owned();
     TxImpl::new(bump, self.db.read())
   }
@@ -1008,7 +975,7 @@ impl DbApi for DB {
 impl DbRwAPI for DB {
   type TxRwType<'tx> = TxRwImpl<'tx> where Self: 'tx;
 
-  fn begin_mut<'tx>(&'tx mut self) -> Self::TxRwType<'tx> {
+  fn begin_mut(&mut self) -> Self::TxRwType<'_> {
     let bump = self.bump_pool.pull_owned();
     let write_lock = self.db.write();
     TxRwImpl::new(bump, write_lock)

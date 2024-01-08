@@ -2,7 +2,7 @@ use std::marker::PhantomPinned;
 use std::mem::MaybeUninit;
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
-use std::ptr::{addr_of, addr_of_mut};
+use std::ptr::addr_of_mut;
 
 // Modified version of https://github.com/noamtashma/owning-ref-rs
 // It's note quite as fully featured, but is minimally exactly what I need

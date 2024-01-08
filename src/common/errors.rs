@@ -89,29 +89,29 @@ pub enum Error {
 
 impl PartialEq for Error {
   fn eq(&self, other: &Self) -> bool {
-    match (self, other) {
-      (&Error::DatabaseNotOpen, &Error::DatabaseNotOpen) => true,
-      (Error::DatabaseOpen, Error::DatabaseOpen) => true,
-      (Error::InvalidDatabase(_), Error::InvalidDatabase(_)) => true,
-      (Error::InvalidMapping, Error::InvalidMapping) => true,
-      (Error::VersionMismatch, Error::VersionMismatch) => true,
-      (Error::ChecksumMismatch, Error::ChecksumMismatch) => true,
-      (Error::Timeout, Error::Timeout) => true,
-      (Error::TxNotWritable, Error::TxNotWritable) => true,
-      (Error::TxClosed, Error::TxClosed) => true,
-      (Error::DatabaseReadOnly, Error::DatabaseReadOnly) => true,
-      (Error::FreePagesNotLoaded, Error::FreePagesNotLoaded) => true,
-      (Error::BucketNotFound, Error::BucketNotFound) => true,
-      (Error::BucketExists, Error::BucketExists) => true,
-      (Error::BucketNameRequired, Error::BucketNameRequired) => true,
-      (Error::KeyRequired, Error::KeyRequired) => true,
-      (Error::KeyTooLarge, Error::KeyTooLarge) => true,
-      (Error::ValueTooLarge, Error::ValueTooLarge) => true,
-      (Error::IncompatibleValue, Error::IncompatibleValue) => true,
-      (Error::MMapTooLarge, Error::MMapTooLarge) => true,
-      (Error::MMapFileSizeTooSmall, Error::MMapFileSizeTooSmall) => true,
-      _ => false,
-    }
+    matches!(
+      (self, other),
+      (&Error::DatabaseNotOpen, &Error::DatabaseNotOpen)
+        | (Error::DatabaseOpen, Error::DatabaseOpen)
+        | (Error::InvalidDatabase(_), Error::InvalidDatabase(_))
+        | (Error::InvalidMapping, Error::InvalidMapping)
+        | (Error::VersionMismatch, Error::VersionMismatch)
+        | (Error::ChecksumMismatch, Error::ChecksumMismatch)
+        | (Error::Timeout, Error::Timeout)
+        | (Error::TxNotWritable, Error::TxNotWritable)
+        | (Error::TxClosed, Error::TxClosed)
+        | (Error::DatabaseReadOnly, Error::DatabaseReadOnly)
+        | (Error::FreePagesNotLoaded, Error::FreePagesNotLoaded)
+        | (Error::BucketNotFound, Error::BucketNotFound)
+        | (Error::BucketExists, Error::BucketExists)
+        | (Error::BucketNameRequired, Error::BucketNameRequired)
+        | (Error::KeyRequired, Error::KeyRequired)
+        | (Error::KeyTooLarge, Error::KeyTooLarge)
+        | (Error::ValueTooLarge, Error::ValueTooLarge)
+        | (Error::IncompatibleValue, Error::IncompatibleValue)
+        | (Error::MMapTooLarge, Error::MMapTooLarge)
+        | (Error::MMapFileSizeTooSmall, Error::MMapFileSizeTooSmall)
+    )
   }
 }
 

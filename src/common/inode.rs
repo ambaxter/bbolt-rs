@@ -45,8 +45,8 @@ impl<'tx> INode<'tx> {
     INode {
       flags,
       pgid,
-      key: CodSlice::Owned(bump.alloc_slice_copy(&key.as_ref())),
-      value: CodSlice::Owned(bump.alloc_slice_copy(&value.as_ref())),
+      key: CodSlice::Owned(bump.alloc_slice_copy(key.as_ref())),
+      value: CodSlice::Owned(bump.alloc_slice_copy(value.as_ref())),
       unsend: PhantomData,
     }
   }
@@ -99,11 +99,11 @@ impl<'tx> INode<'tx> {
 
   pub fn read_inodes_in(inodes: &mut BVec<'tx, INode<'tx>>, page: &RefPage<'tx>) {
     if let Some(leaf_page) = MappedLeafPage::coerce_ref(page) {
-      let i = leaf_page.iter().map(|elem| INode::from_leaf_in(elem));
+      let i = leaf_page.iter().map(INode::from_leaf_in);
       inodes.extend(i);
       assert_eq!(leaf_page.count as usize, inodes.len())
     } else if let Some(branch_page) = MappedBranchPage::coerce_ref(page) {
-      let i = branch_page.iter().map(|elem| INode::from_branch_in(elem));
+      let i = branch_page.iter().map(INode::from_branch_in);
       inodes.extend(i);
       assert_eq!(branch_page.count as usize, inodes.len())
     } else {

@@ -125,8 +125,8 @@ impl<'tx, T: Pod> Deref for CodSlice<'tx, T> {
   #[inline]
   fn deref(&self) -> &'tx Self::Target {
     match self {
-      CodSlice::Owned(s) => *s,
-      CodSlice::Mapped(m) => *m,
+      CodSlice::Owned(s) => s,
+      CodSlice::Mapped(m) => m,
     }
   }
 }

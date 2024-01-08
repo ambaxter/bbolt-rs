@@ -1,9 +1,8 @@
 use crate::common::PgId;
 use once_cell::sync::Lazy;
 use size;
-use size::consts::{GiB, KiB, MiB};
+use size::consts::{GiB, MiB};
 use size::Size;
-use std::convert::Into;
 use std::time::Duration;
 
 pub const MAX_MMAP_STEP: Size = Size::from_const(1 * GiB);

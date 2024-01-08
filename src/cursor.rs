@@ -1,14 +1,12 @@
-use crate::bucket::{BucketApi, BucketCell, BucketIAPI, BucketR, BucketRwCell, BucketRwIAPI};
-use crate::common::memory::LCell;
-use crate::common::page::{CoerciblePage, Page, RefPage, BUCKET_LEAF_FLAG};
+use crate::bucket::{BucketIAPI, BucketRwIAPI};
+use crate::common::page::{CoerciblePage, RefPage, BUCKET_LEAF_FLAG};
 use crate::common::tree::{MappedBranchPage, MappedLeafPage, TreePage};
-use crate::common::{BVec, PgId, SplitRef};
+use crate::common::{BVec, PgId};
 use crate::node::NodeRwCell;
-use crate::tx::{TxApi, TxCell, TxIAPI, TxRwCell};
+use crate::tx::{TxIAPI, TxRwCell};
 use crate::Error::IncompatibleValue;
 use bumpalo::Bump;
 use either::Either;
-use std::io;
 use std::marker::PhantomData;
 
 pub trait CursorApi<'tx> {
@@ -372,7 +370,7 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for InnerCursor
     self.stack.push(elem_ref);
     self.i_last();
 
-    while self.stack.len() > 0 && self.stack.last().unwrap().count() == 0 {
+    while !self.stack.is_empty() && self.stack.last().unwrap().count() == 0 {
       self.i_prev();
     }
 
@@ -433,22 +431,16 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for InnerCursor
       // Retrieve value from page.
       Either::Left(r) => {
         let l = MappedLeafPage::coerce_ref(r).unwrap();
-        if let Some(inode) = l.get_elem(elem_ref.index as u16) {
-          //println!("trace~cursor.key_value page key: {:?}", inode.key());
-          Some((inode.key(), inode.value(), inode.flags()))
-        } else {
-          None
-        }
+        l.get_elem(elem_ref.index as u16)
+          .map(|inode| (inode.key(), inode.value(), inode.flags()))
       }
       // Retrieve value from node.
       Either::Right(n) => {
         let ref_node = n.cell.borrow();
-        if let Some(inode) = ref_node.inodes.get(elem_ref.index as usize) {
-          //println!("trace~cursor.key_value inode key: {:?}", inode.key());
-          Some((inode.key(), inode.value(), inode.flags()))
-        } else {
-          None
-        }
+        ref_node
+          .inodes
+          .get(elem_ref.index as usize)
+          .map(|inode| (inode.key(), inode.value(), inode.flags()))
       }
     }
   }
@@ -610,7 +602,6 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for InnerCursor
     );*/
 
     let branch_page = MappedBranchPage::coerce_ref(page).unwrap();
-    let page: &Page = &branch_page;
     let elements = branch_page.elements();
     debug_assert_ne!(0, elements.len());
     let r = branch_page
@@ -650,7 +641,6 @@ impl<'tx, B: BucketRwIAPI<'tx>> CursorRwIAPI<'tx> for InnerCursor<'tx, TxRwCell<
 
     // Start from root and traverse down the hierarchy.
     let mut n = {
-      let first = self.stack.first().unwrap();
       match &self.stack.first().unwrap().pn {
         Either::Left(page) => self.bucket.node(page.id, None),
         Either::Right(node) => *node,

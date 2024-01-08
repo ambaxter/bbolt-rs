@@ -1,22 +1,13 @@
-use crate::bucket::{
-  BucketApi, BucketCell, BucketIAPI, BucketRwApi, BucketRwCell, BucketRwIAPI, MAX_FILL_PERCENT,
-  MIN_FILL_PERCENT,
-};
+use crate::bucket::{BucketIAPI, BucketRwCell, BucketRwIAPI, MAX_FILL_PERCENT, MIN_FILL_PERCENT};
 use crate::common::inode::INode;
 use crate::common::memory::{CodSlice, LCell};
-use crate::common::page::{
-  CoerciblePage, MutPage, Page, RefPage, MIN_KEYS_PER_PAGE, PAGE_HEADER_SIZE,
-};
+use crate::common::page::{CoerciblePage, MutPage, RefPage, MIN_KEYS_PER_PAGE, PAGE_HEADER_SIZE};
 use crate::common::tree::{
   MappedBranchPage, MappedLeafPage, TreePage, BRANCH_PAGE_ELEMENT_SIZE, LEAF_PAGE_ELEMENT_SIZE,
 };
 use crate::common::{BVec, PgId, SplitRef, ZERO_PGID};
-use crate::tx::{TxApi, TxCell, TxIAPI, TxRwCell, TxRwIAPI};
+use crate::tx::{TxIAPI, TxRwIAPI};
 use bumpalo::Bump;
-use hashbrown::Equivalent;
-use std::cell;
-use std::cell::{Ref, RefCell, RefMut};
-use std::marker::PhantomData;
 use std::mem;
 use std::ops::Deref;
 
@@ -74,7 +65,7 @@ impl<'tx> NodeW<'tx> {
     }
   }
 
-  pub(crate) fn read_in<'a>(
+  pub(crate) fn read_in(
     bucket: BucketRwCell<'tx>, parent: Option<NodeRwCell<'tx>>, page: &RefPage<'tx>,
   ) -> NodeW<'tx> {
     assert!(page.is_leaf() || page.is_branch(), "Non-tree page read");
@@ -82,7 +73,7 @@ impl<'tx> NodeW<'tx> {
     let mut inodes = BVec::with_capacity_in(page.count as usize, bump);
     INode::read_inodes_in(&mut inodes, page);
     let _inodes = inodes.as_slice();
-    let key = if inodes.len() > 0 {
+    let key = if !inodes.is_empty() {
       CodSlice::Mapped(inodes[0].key())
     } else {
       CodSlice::Mapped(&[])
@@ -120,7 +111,7 @@ impl<'tx> NodeW<'tx> {
 
   pub(crate) fn key(&self) -> &'tx [u8] {
     // I solemnly swear the key is owned by the transaction, not by the node
-    unsafe { std::mem::transmute(self.key.deref()) }
+    unsafe { mem::transmute(self.key.deref()) }
   }
 
   /// size returns the size of the node after serialization.
@@ -150,12 +141,9 @@ impl<'tx> NodeW<'tx> {
 
   /// del removes a key from the node.
   fn del(&mut self, key: &[u8]) {
-    //println!("trace~node.del - key {:?}", key);
     if let Ok(index) = self.inodes.binary_search_by(|probe| probe.key().cmp(key)) {
       self.inodes.remove(index);
       self.is_unbalanced = true;
-    } else {
-      println!("trace~node.del - key {:?} not found", key);
     }
   }
 
@@ -345,7 +333,6 @@ impl<'tx> NodeRwCell<'tx> {
     let child_key = child.cell.borrow().key;
     let result = {
       let self_borrow = self.cell.borrow();
-      let inodes = self_borrow.inodes.as_slice();
       self_borrow
         .inodes
         .binary_search_by(|probe| probe.key().cmp(&child_key))
@@ -392,11 +379,6 @@ impl<'tx> NodeRwCell<'tx> {
     flags: u32,
   ) {
     let mut self_borrow = self.cell.borrow_mut();
-    /*println!(
-      "trace~node.put: key: {:?}, value len: {:?}",
-      new_key,
-      value.len()
-    );*/
     if pgid >= self_borrow.bucket.api_tx().meta().pgid() {
       panic!(
         "pgid {} above high water mark {}",
@@ -433,12 +415,6 @@ impl<'tx> NodeRwCell<'tx> {
 
   /// del removes a key from the node.
   pub(crate) fn del(self: NodeRwCell<'tx>, key: &[u8]) {
-    /*    println!(
-      "trace~node.del root: {:?}, key: {:?}",
-      self.cell.borrow().pgid,
-      self.cell.borrow().key
-    );*/
-
     self.cell.borrow_mut().del(key);
   }
 
@@ -467,18 +443,10 @@ impl<'tx> NodeRwCell<'tx> {
   pub(crate) fn spill(self) -> crate::Result<()> {
     let tx = {
       let mut cell = self.cell.borrow_mut();
-      /*      println!(
-        "trace~node.spill: pgid: {:?}, key: {:?}",
-        cell.pgid,
-        cell.key()
-        cell.key()
-      );*/
       if cell.is_spilled {
         return Ok(());
       }
       cell.children.sort_by_key(|child| child.cell.borrow().key());
-      let children = cell.children.as_slice();
-      let inodes = cell.inodes.as_slice();
       cell.bucket.api_tx()
     };
 
@@ -583,11 +551,6 @@ impl<'tx> NodeRwCell<'tx> {
   // TODO: Definitely needs optimizing
   pub(crate) fn rebalance(self: NodeRwCell<'tx>) {
     let mut self_borrow = self.cell.borrow_mut();
-    // tracing
-    /*    println!(
-      "trace~node.rebalance - page: {:?}, key: {:?}",
-      self_borrow.pgid, self_borrow.key
-    );*/
     let bucket = self_borrow.bucket;
     if !self_borrow.is_unbalanced {
       return;
@@ -761,18 +724,14 @@ impl<'tx> NodeRwCell<'tx> {
 
 #[cfg(test)]
 mod test {
-  use crate::bucket::{BucketRwCell, BucketRwIAPI};
-  use crate::common::memory::CodSlice;
+  use crate::bucket::BucketRwIAPI;
   use crate::common::page::LEAF_PAGE_FLAG;
-  use crate::common::{BVec, SplitRef, ZERO_PGID};
-  use crate::node::NodeW;
+  use crate::common::{SplitRef, ZERO_PGID};
   use crate::test_support::TestDb;
   use crate::tx::check::UnsealTx;
   use crate::tx::TxIAPI;
   use crate::DbRwAPI;
-  use bumpalo::Bump;
   use itertools::Itertools;
-  use std::ops::DerefMut;
 
   #[test]
   fn test_node_put() -> crate::Result<()> {

@@ -208,7 +208,7 @@ pub trait TreePage<'tx>: Deref<Target = Page> + DerefMut {
   where
     Self: Sized,
   {
-    TreeIterator::new(&self)
+    TreeIterator::new(self)
   }
 
   fn get_elem(&self, i: u16) -> Option<Self::ElemRef>;

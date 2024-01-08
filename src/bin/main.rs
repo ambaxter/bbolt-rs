@@ -1,7 +1,5 @@
-#![cfg_attr(debug_assertions, allow(dead_code, unused_imports))]
-
-use bbolt_rs::{BucketRwApi, DbApi, DbRwAPI, TxApi, TxCheck, TxRwApi, DB};
-use std::time::{Duration, Instant};
+use bbolt_rs::{BucketRwApi, DbRwAPI, TxCheck, TxRwApi, DB};
+use std::time::Instant;
 
 fn main() -> bbolt_rs::Result<()> {
   println!("Hello, world!");
@@ -25,7 +23,7 @@ fn main() -> bbolt_rs::Result<()> {
   println!("Updated total in {:?}ms", total.elapsed().as_millis());
 
   let check = Instant::now();
-  db.update(|mut tx| {
+  db.update(|tx| {
     let errors = tx.check();
     if !errors.is_empty() {
       for error in errors {

@@ -1,29 +1,24 @@
 use crate::arch::size::MAX_ALLOC_SIZE;
-use crate::bucket::{
-  BucketCell, BucketIAPI, BucketImpl, BucketRW, BucketRwCell, BucketRwIAPI, BucketRwImpl,
-};
-use crate::common::defaults::DEFAULT_PAGE_SIZE;
-use crate::common::memory::{BCell, LCell};
+use crate::bucket::{BucketCell, BucketIAPI, BucketImpl, BucketRwCell, BucketRwIAPI, BucketRwImpl};
+use crate::common::memory::BCell;
 use crate::common::meta::{MappedMetaPage, Meta, MetaPage};
 use crate::common::page::{CoerciblePage, MutPage, Page, PageInfo, RefPage};
 use crate::common::self_owned::SelfOwned;
 use crate::common::tree::{MappedBranchPage, TreePage};
-use crate::common::{BVec, HashMap, PgId, SplitRef, TxId, ZERO_PGID};
+use crate::common::{BVec, HashMap, PgId, SplitRef, TxId};
 use crate::cursor::{CursorImpl, CursorRwIAPI, CursorRwImpl, InnerCursor};
 use crate::db::{DBShared, DbGuard, DbIAPI, DbRwIAPI};
-use crate::freelist::Freelist;
-use crate::node::NodeRwCell;
 use crate::{BucketApi, CursorApi, CursorRwApi};
 use aliasable::boxed::AliasableBox;
 use aligners::{alignment, AlignedBytes};
 use bumpalo::Bump;
 use lockfree_object_pool::LinearOwnedReusable;
-use parking_lot::{Mutex, RwLockReadGuard, RwLockWriteGuard};
+use parking_lot::{RwLockReadGuard, RwLockWriteGuard};
 use std::alloc::Layout;
-use std::any::Any;
 use std::borrow::Cow;
 use std::cell::{Ref, RefCell, RefMut};
 use std::marker::{PhantomData, PhantomPinned};
+use std::mem;
 use std::mem::MaybeUninit;
 use std::ops::{AddAssign, Deref, DerefMut, Sub};
 use std::pin::Pin;
@@ -31,7 +26,6 @@ use std::ptr::{addr_of, addr_of_mut};
 use std::rc::Rc;
 use std::slice::from_raw_parts_mut;
 use std::time::{Duration, Instant};
-use std::{cell, mem};
 
 pub trait TxApi<'tx> {
   type CursorType: CursorApi<'tx>;
@@ -281,7 +275,8 @@ pub(crate) trait TxIAPI<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
     // TODO: Are we calling the right function?
     root_bucket.api_for_each_bucket(|k| {
       let bucket = root_bucket.api_bucket(k).unwrap();
-      Ok(f(k, bucket))
+      f(k, bucket);
+      Ok(())
     })
   }
 
@@ -541,7 +536,6 @@ impl<'tx> TxRwIAPI<'tx> for TxRwCell<'tx> {
   ) -> crate::Result<SelfOwned<AlignedBytes<alignment::Page>, MutPage<'tx>>> {
     let mut db = { self.cell.0.borrow().r.db.get_rw().unwrap() };
     let page = db.allocate(self, count as u64)?;
-    let pg_id = page.id;
 
     let mut tx = self.cell.0.borrow_mut();
     tx.r.stats.page_count += 1;
@@ -823,7 +817,6 @@ impl<'tx> TxRwImpl<'tx> {
   ) -> TxRwImpl<'tx> {
     let mut meta = lock.backend.meta();
     meta.set_txid(meta.txid() + 1);
-    //println!("trace~tx.new id: {:?}", meta.txid());
     let page_size = meta.page_size() as usize;
     let inline_bucket = meta.root();
     let mut uninit: MaybeUninit<TxRwImpl<'tx>> = MaybeUninit::uninit();
@@ -872,9 +865,8 @@ impl<'tx> TxRwImpl<'tx> {
 
 impl<'tx> Drop for TxRwImpl<'tx> {
   fn drop(&mut self) {
-    let tx_id = self.id();
     let stats = self.stats();
-    self.db.get_rw().unwrap().remove_rw_tx(tx_id, stats);
+    self.db.get_rw().unwrap().remove_rw_tx(stats);
   }
 }
 
@@ -944,13 +936,7 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
   }
 
   fn commit(mut self) -> crate::Result<()> {
-    /*    println!(
-      "trace~tx.commit id: {:?}",
-      self.tx.cell.0.borrow().r.meta.txid()
-    );*/
     let start_time = Instant::now();
-    let root = self.tx.root_bucket();
-    let widgets = self.tx.root_bucket().api_bucket(b"widgets").unwrap();
     self.tx.root_bucket().rebalance();
     {
       let mut stats = self.tx.mut_stats();
@@ -1110,45 +1096,12 @@ impl<'tx> TxRwApi<'tx> for TxRwRef<'tx> {
   }
 }
 
-pub(crate) struct TypeA<'a> {
-  pub b: &'a RefCell<TypeB<'a>>,
-  pub i: usize,
-}
-
-pub(crate) struct TypeB<'a> {
-  pub a: &'a RefCell<TypeA<'a>>,
-  pub i: usize,
-}
-
-pub(crate) fn create_cycle<'a>(bump: &'a Bump) -> (&RefCell<TypeA<'a>>, &RefCell<TypeB<'a>>) {
-  let mut uninit_a: MaybeUninit<TypeA<'a>> = MaybeUninit::uninit();
-  println!("uninit: {}", mem::size_of::<MaybeUninit<TypeA<'a>>>());
-  let mut uninit_b: MaybeUninit<TypeB<'a>> = MaybeUninit::uninit();
-  let cell_a = bump.alloc(RefCell::new(uninit_a));
-  let ptr_a = cell_a.borrow_mut().as_mut_ptr();
-  let cell_b = bump.alloc(RefCell::new(uninit_b));
-  let ptr_b = cell_b.borrow_mut().as_mut_ptr();
-  unsafe {
-    let cell_a_t = mem::transmute::<&mut RefCell<MaybeUninit<TypeA>>, &RefCell<TypeA>>(cell_a);
-    println!("uninit: {}", mem::size_of::<TypeA>());
-    let cell_b_t = mem::transmute::<&mut RefCell<MaybeUninit<TypeB>>, &RefCell<TypeB>>(cell_b);
-    addr_of_mut!((*ptr_a).b).write(cell_b_t);
-    addr_of_mut!((*ptr_a).i).write(1);
-    addr_of_mut!((*ptr_b).a).write(cell_a_t);
-    addr_of_mut!((*ptr_b).i).write(100);
-    cell_a.borrow_mut().assume_init_mut();
-    cell_b.borrow_mut().assume_init_mut();
-    (cell_a_t, cell_b_t)
-  }
-}
-
 pub(crate) mod check {
   use crate::bucket::BucketIAPI;
   use crate::common::page::{CoerciblePage, RefPage};
   use crate::common::tree::{MappedBranchPage, MappedLeafPage, TreePage};
   use crate::common::{BVec, HashMap, HashSet, PgId, ZERO_PGID};
-  use crate::tx::{TxCell, TxIAPI, TxImpl, TxRef, TxRwCell, TxRwIAPI, TxRwImpl, TxRwRef};
-  use std::io::Read;
+  use crate::tx::{TxCell, TxIAPI, TxRwCell, TxRwImpl, TxRwRef};
 
   pub(crate) trait UnsealTx<'tx> {
     type Unsealed: TxICheck<'tx>;
@@ -1276,7 +1229,6 @@ pub(crate) mod check {
             pgid_stack
           ));
         }
-        let pg_id = p.id;
         for i in 0..=p.overflow {
           let id = p.id + i as u64;
           if reachable.contains_key(&id) {
@@ -1359,7 +1311,6 @@ pub(crate) mod check {
         return max_key_in_subtree;
       } else if let Some(leaf_page) = MappedLeafPage::coerce_ref(&p) {
         let mut running_min = min_key_closed;
-        let elements_len = leaf_page.elements().len();
         for (i, key) in leaf_page
           .elements()
           .iter()
@@ -1420,21 +1371,8 @@ pub(crate) mod check {
 #[cfg(test)]
 mod test {
   use crate::test_support::TestDb;
-  use crate::tx::check::TxICheck;
-  use crate::tx::create_cycle;
-  use crate::{DbApi, DbRwAPI, Error, TxApi, TxRwApi};
+  use crate::{DbApi, DbRwAPI, TxApi, TxRwApi};
   use bumpalo::Bump;
-
-  // This is to prove out the memory safety of creating a cycle in a bump
-  // using only MaybeUninit
-  #[test]
-  fn create_cycle_test() -> crate::Result<()> {
-    let bump = Bump::new();
-    let (a, b) = create_cycle(&bump);
-    assert_eq!(100, a.borrow().b.borrow().i);
-    assert_eq!(1, b.borrow().a.borrow().i);
-    Ok(())
-  }
 
   #[test]
   fn test_tx_check_read_only() {

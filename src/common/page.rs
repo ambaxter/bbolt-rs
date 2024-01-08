@@ -36,7 +36,7 @@ pub trait CoerciblePage {
 
   /// Const cast a `RefPage` into a specific page type
   #[inline]
-  unsafe fn unchecked_ref<'tx, 'a>(mapped_page: &'a RefPage<'tx>) -> &'a Self
+  unsafe fn unchecked_ref<'a>(mapped_page: &'a RefPage<'_>) -> &'a Self
   where
     Self: Sized,
   {
@@ -45,16 +45,16 @@ pub trait CoerciblePage {
 
   /// Mut cast a `MutPage` into a specific page type
   #[inline]
-  unsafe fn unchecked_mut<'tx, 'a>(mapped_page: &'a mut MutPage<'tx>) -> &'a mut Self
+  unsafe fn unchecked_mut<'a>(mapped_page: &'a mut MutPage<'_>) -> &'a mut Self
   where
     Self: Sized,
   {
-    &mut *(mapped_page as *mut MutPage<'tx> as *mut Self)
+    &mut *(mapped_page as *mut MutPage<'_> as *mut Self)
   }
 
   /// Mutate a `MutPage` into a specific page type.
   #[inline]
-  fn mut_into<'tx, 'a>(mapped_page: &'a mut MutPage<'tx>) -> &'a mut Self
+  fn mut_into<'a>(mapped_page: &'a mut MutPage<'_>) -> &'a mut Self
   where
     Self: Sized,
   {
@@ -64,7 +64,7 @@ pub trait CoerciblePage {
 
   /// Const cast a `RefPage` into a specific page type if the type matches
   #[inline]
-  fn coerce_ref<'tx, 'a>(mapped_page: &'a RefPage<'tx>) -> Option<&'a Self>
+  fn coerce_ref<'a>(mapped_page: &'a RefPage<'_>) -> Option<&'a Self>
   where
     Self: Sized,
   {
@@ -77,7 +77,7 @@ pub trait CoerciblePage {
 
   /// Mut cast a `MutPage` into a specific page type if the type matches
   #[inline]
-  fn coerce_mut<'tx, 'a>(mapped_page: &'a mut MutPage<'tx>) -> Option<&'a mut Self>
+  fn coerce_mut<'a>(mapped_page: &'a mut MutPage<'_>) -> Option<&'a mut Self>
   where
     Self: Sized,
   {

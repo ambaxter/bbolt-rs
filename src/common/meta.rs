@@ -1,16 +1,15 @@
 use crate::common::bucket::InBucket;
 use crate::common::defaults::{MAGIC, PGID_NO_FREE_LIST, VERSION};
 use crate::common::page::{CoerciblePage, Page, META_PAGE_FLAG};
-use crate::common::{errors, PgId, TxId};
+use crate::common::{PgId, TxId};
 use crate::Error::{ChecksumMismatch, InvalidDatabase, VersionMismatch};
 use bytemuck::{Pod, Zeroable};
 use fnv_rs::{Fnv64, FnvHasher};
 use getset::{CopyGetters, Setters};
 use std::hash::Hasher;
 use std::marker::PhantomData;
+use std::mem;
 use std::ops::{Deref, DerefMut};
-use std::slice::from_raw_parts;
-use std::{io, mem};
 
 pub const META_HEADER_SIZE: usize = mem::size_of::<Meta>();
 
@@ -126,7 +125,6 @@ impl DerefMut for MappedMetaPage {
 mod test {
   use super::*;
   use crate::common::defaults::DEFAULT_PAGE_SIZE;
-  use crate::common::page::RefPage;
   use crate::test_support::mapped_page;
 
   #[test]
