@@ -610,7 +610,7 @@ impl<'tx> NodeRwCell<'tx> {
       drop(self_borrow);
       parent_borrow.remove_child(self);
       {
-        let mut bucket_borrow = bucket.cell.0.borrow_mut();
+        let mut bucket_borrow = bucket.cell.borrow_mut();
         bucket_borrow.w.nodes.remove(&pg_id);
       }
       self.free();

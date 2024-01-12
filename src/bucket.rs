@@ -807,7 +807,7 @@ impl<'tx> SplitRef<BucketR<'tx>, Weak<TxCell<'tx>>, InnerBucketW<'tx, TxCell<'tx
   for BucketCell<'tx>
 {
   fn split_r(&self) -> Ref<BucketR<'tx>> {
-    self.cell.0.borrow()
+    self.cell.borrow()
   }
 
   fn split_r_ow(
@@ -816,7 +816,7 @@ impl<'tx> SplitRef<BucketR<'tx>, Weak<TxCell<'tx>>, InnerBucketW<'tx, TxCell<'tx
     Ref<BucketR<'tx>>,
     Option<Ref<InnerBucketW<'tx, TxCell<'tx>, BucketCell<'tx>>>>,
   ) {
-    (self.cell.0.borrow(), None)
+    (self.cell.borrow(), None)
   }
 
   fn split_ow(&self) -> Option<Ref<InnerBucketW<'tx, TxCell<'tx>, BucketCell<'tx>>>> {
@@ -824,7 +824,7 @@ impl<'tx> SplitRef<BucketR<'tx>, Weak<TxCell<'tx>>, InnerBucketW<'tx, TxCell<'tx
   }
 
   fn split_bound(&self) -> Weak<TxCell<'tx>> {
-    self.cell.1.clone()
+    self.cell.bound()
   }
 
   fn split_ref(
@@ -834,11 +834,11 @@ impl<'tx> SplitRef<BucketR<'tx>, Weak<TxCell<'tx>>, InnerBucketW<'tx, TxCell<'tx
     Weak<TxCell<'tx>>,
     Option<Ref<InnerBucketW<'tx, TxCell<'tx>, BucketCell<'tx>>>>,
   ) {
-    (self.cell.0.borrow(), self.cell.1.clone(), None)
+    (self.cell.borrow(), self.cell.bound(), None)
   }
 
   fn split_r_mut(&self) -> RefMut<BucketR<'tx>> {
-    self.cell.0.borrow_mut()
+    self.cell.borrow_mut()
   }
 
   fn split_r_ow_mut(
@@ -847,7 +847,7 @@ impl<'tx> SplitRef<BucketR<'tx>, Weak<TxCell<'tx>>, InnerBucketW<'tx, TxCell<'tx
     RefMut<BucketR<'tx>>,
     Option<RefMut<InnerBucketW<'tx, TxCell<'tx>, BucketCell<'tx>>>>,
   ) {
-    (self.cell.0.borrow_mut(), None)
+    (self.cell.borrow_mut(), None)
   }
 
   fn split_ow_mut(&self) -> Option<RefMut<InnerBucketW<'tx, TxCell<'tx>, BucketCell<'tx>>>> {
@@ -861,7 +861,7 @@ impl<'tx> SplitRef<BucketR<'tx>, Weak<TxCell<'tx>>, InnerBucketW<'tx, TxCell<'tx
     Weak<TxCell<'tx>>,
     Option<RefMut<InnerBucketW<'tx, TxCell<'tx>, BucketCell<'tx>>>>,
   ) {
-    (self.cell.0.borrow_mut(), self.cell.1.clone(), None)
+    (self.cell.borrow_mut(), self.cell.bound(), None)
   }
 }
 
@@ -872,20 +872,20 @@ pub struct BucketRwCell<'tx> {
 
 impl<'tx> SplitRef<BucketR<'tx>, Weak<TxRwCell<'tx>>, BucketW<'tx>> for BucketRwCell<'tx> {
   fn split_r(&self) -> Ref<BucketR<'tx>> {
-    Ref::map(self.cell.0.borrow(), |b| &b.r)
+    Ref::map(self.cell.borrow(), |b| &b.r)
   }
 
   fn split_r_ow(&self) -> (Ref<BucketR<'tx>>, Option<Ref<BucketW<'tx>>>) {
-    let (r, w) = Ref::map_split(self.cell.0.borrow(), |b| (&b.r, &b.w));
+    let (r, w) = Ref::map_split(self.cell.borrow(), |b| (&b.r, &b.w));
     (r, Some(w))
   }
 
   fn split_ow(&self) -> Option<Ref<BucketW<'tx>>> {
-    Some(Ref::map(self.cell.0.borrow(), |b| &b.w))
+    Some(Ref::map(self.cell.borrow(), |b| &b.w))
   }
 
   fn split_bound(&self) -> Weak<TxRwCell<'tx>> {
-    self.cell.1.clone()
+    self.cell.bound()
   }
 
   fn split_ref(
@@ -895,21 +895,21 @@ impl<'tx> SplitRef<BucketR<'tx>, Weak<TxRwCell<'tx>>, BucketW<'tx>> for BucketRw
     Weak<TxRwCell<'tx>>,
     Option<Ref<BucketW<'tx>>>,
   ) {
-    let (r, w) = Ref::map_split(self.cell.0.borrow(), |b| (&b.r, &b.w));
-    (r, self.cell.1.clone(), Some(w))
+    let (r, w) = Ref::map_split(self.cell.borrow(), |b| (&b.r, &b.w));
+    (r, self.cell.bound(), Some(w))
   }
 
   fn split_r_mut(&self) -> RefMut<BucketR<'tx>> {
-    RefMut::map(self.cell.0.borrow_mut(), |b| &mut b.r)
+    RefMut::map(self.cell.borrow_mut(), |b| &mut b.r)
   }
 
   fn split_r_ow_mut(&self) -> (RefMut<BucketR<'tx>>, Option<RefMut<BucketW<'tx>>>) {
-    let (r, w) = RefMut::map_split(self.cell.0.borrow_mut(), |b| (&mut b.r, &mut b.w));
+    let (r, w) = RefMut::map_split(self.cell.borrow_mut(), |b| (&mut b.r, &mut b.w));
     (r, Some(w))
   }
 
   fn split_ow_mut(&self) -> Option<RefMut<BucketW<'tx>>> {
-    Some(RefMut::map(self.cell.0.borrow_mut(), |b| &mut b.w))
+    Some(RefMut::map(self.cell.borrow_mut(), |b| &mut b.w))
   }
 
   fn split_ref_mut(
@@ -919,8 +919,8 @@ impl<'tx> SplitRef<BucketR<'tx>, Weak<TxRwCell<'tx>>, BucketW<'tx>> for BucketRw
     Weak<TxRwCell<'tx>>,
     Option<RefMut<BucketW<'tx>>>,
   ) {
-    let (r, w) = RefMut::map_split(self.cell.0.borrow_mut(), |b| (&mut b.r, &mut b.w));
-    (r, self.cell.1.clone(), Some(w))
+    let (r, w) = RefMut::map_split(self.cell.borrow_mut(), |b| (&mut b.r, &mut b.w));
+    (r, self.cell.bound(), Some(w))
   }
 }
 
@@ -1164,7 +1164,7 @@ impl<'tx> BucketRwIAPI<'tx> for BucketRwCell<'tx> {
       w.root_node = Some(new_root);
       let borrow_root = new_root.cell.borrow_mut();
       let new_pgid = borrow_root.pgid;
-      let tx_pgid = self.cell.1.upgrade().unwrap().meta().pgid();
+      let tx_pgid = self.cell.bound().upgrade().unwrap().meta().pgid();
       if new_pgid >= tx_pgid {
         panic!("pgid ({}) above high water mark ({})", new_pgid, tx_pgid);
       }
@@ -1181,7 +1181,7 @@ impl<'tx> BucketRwIAPI<'tx> for BucketRwCell<'tx> {
 
     unsafe {
       let inline_bucket = &mut (*(inline_bucket_ptr as *mut InBucket));
-      *inline_bucket = self.cell.0.borrow().r.bucket_header;
+      *inline_bucket = self.cell.borrow().r.bucket_header;
       let mut mut_page = MutPage::new(inline_bucket_ptr.add(IN_BUCKET_SIZE));
       root_node.write(&mut mut_page);
       from_raw_parts(inline_bucket_ptr, page_size)
@@ -1275,7 +1275,7 @@ impl<'tx> BucketRwIAPI<'tx> for BucketRwCell<'tx> {
   fn rebalance(self) {
     let bump = self.api_tx().bump();
     let (nodes, buckets) = {
-      let borrow = self.cell.0.borrow();
+      let borrow = self.cell.borrow();
       let nodes = BVec::from_iter_in(borrow.w.nodes.values().cloned(), bump);
       let buckets = BVec::from_iter_in(borrow.w.buckets.values().cloned(), bump);
       (nodes, buckets)

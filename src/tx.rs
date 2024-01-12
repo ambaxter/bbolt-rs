@@ -403,11 +403,11 @@ pub struct TxCell<'tx> {
 
 impl<'tx> SplitRef<TxR<'tx>, BucketCell<'tx>, TxW<'tx>> for TxCell<'tx> {
   fn split_r(&self) -> Ref<TxR<'tx>> {
-    self.cell.0.borrow()
+    self.cell.borrow()
   }
 
   fn split_r_ow(&self) -> (Ref<TxR<'tx>>, Option<Ref<TxW<'tx>>>) {
-    (self.cell.0.borrow(), None)
+    (self.cell.borrow(), None)
   }
 
   fn split_ow(&self) -> Option<Ref<TxW<'tx>>> {
@@ -415,19 +415,19 @@ impl<'tx> SplitRef<TxR<'tx>, BucketCell<'tx>, TxW<'tx>> for TxCell<'tx> {
   }
 
   fn split_bound(&self) -> BucketCell<'tx> {
-    self.cell.1
+    self.cell.bound()
   }
 
   fn split_ref(&self) -> (Ref<TxR<'tx>>, BucketCell<'tx>, Option<Ref<TxW<'tx>>>) {
-    (self.cell.0.borrow(), self.cell.1, None)
+    (self.cell.borrow(), self.cell.bound(), None)
   }
 
   fn split_r_mut(&self) -> RefMut<TxR<'tx>> {
-    self.cell.0.borrow_mut()
+    self.cell.borrow_mut()
   }
 
   fn split_r_ow_mut(&self) -> (RefMut<TxR<'tx>>, Option<RefMut<TxW<'tx>>>) {
-    (self.cell.0.borrow_mut(), None)
+    (self.cell.borrow_mut(), None)
   }
 
   fn split_ow_mut(&self) -> Option<RefMut<TxW<'tx>>> {
@@ -435,7 +435,7 @@ impl<'tx> SplitRef<TxR<'tx>, BucketCell<'tx>, TxW<'tx>> for TxCell<'tx> {
   }
 
   fn split_ref_mut(&self) -> (RefMut<TxR<'tx>>, BucketCell<'tx>, Option<RefMut<TxW<'tx>>>) {
-    (self.cell.0.borrow_mut(), self.cell.1, None)
+    (self.cell.borrow_mut(), self.cell.bound(), None)
   }
 }
 
@@ -458,38 +458,38 @@ pub struct TxRwCell<'tx> {
 
 impl<'tx> SplitRef<TxR<'tx>, BucketRwCell<'tx>, TxW<'tx>> for TxRwCell<'tx> {
   fn split_r(&self) -> Ref<TxR<'tx>> {
-    Ref::map(self.cell.0.borrow(), |c| &c.r)
+    Ref::map(self.cell.borrow(), |c| &c.r)
   }
 
   fn split_r_ow(&self) -> (Ref<TxR<'tx>>, Option<Ref<TxW<'tx>>>) {
-    let (r, w) = Ref::map_split(self.cell.0.borrow(), |b| (&b.r, &b.w));
+    let (r, w) = Ref::map_split(self.cell.borrow(), |b| (&b.r, &b.w));
     (r, Some(w))
   }
 
   fn split_ow(&self) -> Option<Ref<TxW<'tx>>> {
-    Some(Ref::map(self.cell.0.borrow(), |c| &c.w))
+    Some(Ref::map(self.cell.borrow(), |c| &c.w))
   }
 
   fn split_bound(&self) -> BucketRwCell<'tx> {
-    self.cell.1
+    self.cell.bound()
   }
 
   fn split_ref(&self) -> (Ref<TxR<'tx>>, BucketRwCell<'tx>, Option<Ref<TxW<'tx>>>) {
-    let (r, w) = Ref::map_split(self.cell.0.borrow(), |b| (&b.r, &b.w));
-    (r, self.cell.1, Some(w))
+    let (r, w) = Ref::map_split(self.cell.borrow(), |b| (&b.r, &b.w));
+    (r, self.cell.bound(), Some(w))
   }
 
   fn split_r_mut(&self) -> RefMut<TxR<'tx>> {
-    RefMut::map(self.cell.0.borrow_mut(), |c| &mut c.r)
+    RefMut::map(self.cell.borrow_mut(), |c| &mut c.r)
   }
 
   fn split_r_ow_mut(&self) -> (RefMut<TxR<'tx>>, Option<RefMut<TxW<'tx>>>) {
-    let (r, w) = RefMut::map_split(self.cell.0.borrow_mut(), |b| (&mut b.r, &mut b.w));
+    let (r, w) = RefMut::map_split(self.cell.borrow_mut(), |b| (&mut b.r, &mut b.w));
     (r, Some(w))
   }
 
   fn split_ow_mut(&self) -> Option<RefMut<TxW<'tx>>> {
-    Some(RefMut::map(self.cell.0.borrow_mut(), |c| &mut c.w))
+    Some(RefMut::map(self.cell.borrow_mut(), |c| &mut c.w))
   }
 
   fn split_ref_mut(
@@ -499,8 +499,8 @@ impl<'tx> SplitRef<TxR<'tx>, BucketRwCell<'tx>, TxW<'tx>> for TxRwCell<'tx> {
     BucketRwCell<'tx>,
     Option<RefMut<TxW<'tx>>>,
   ) {
-    let (r, w) = RefMut::map_split(self.cell.0.borrow_mut(), |b| (&mut b.r, &mut b.w));
-    (r, self.cell.1, Some(w))
+    let (r, w) = RefMut::map_split(self.cell.borrow_mut(), |b| (&mut b.r, &mut b.w));
+    (r, self.cell.bound(), Some(w))
   }
 }
 
@@ -522,7 +522,6 @@ impl<'tx> TxRwIAPI<'tx> for TxRwCell<'tx> {
   fn freelist_free_page(self, txid: TxId, p: &Page) {
     self
       .cell
-      .0
       .borrow()
       .r
       .db
@@ -534,17 +533,17 @@ impl<'tx> TxRwIAPI<'tx> for TxRwCell<'tx> {
   fn allocate(
     self, count: usize,
   ) -> crate::Result<SelfOwned<AlignedBytes<alignment::Page>, MutPage<'tx>>> {
-    let mut db = { self.cell.0.borrow().r.db.get_rw().unwrap() };
+    let mut db = { self.cell.borrow().r.db.get_rw().unwrap() };
     let page = db.allocate(self, count as u64)?;
 
-    let mut tx = self.cell.0.borrow_mut();
+    let mut tx = self.cell.borrow_mut();
     tx.r.stats.page_count += 1;
     tx.r.stats.page_alloc += (count * tx.r.page_size) as i64;
     Ok(page)
   }
 
   fn queue_page(self, page: SelfOwned<AlignedBytes<alignment::Page>, MutPage<'tx>>) {
-    let mut tx = self.cell.0.borrow_mut();
+    let mut tx = self.cell.borrow_mut();
     if let Some(pending) = tx.w.pages.insert(page.id, page) {
       if pending.overflow == 0 {
         tx.r
@@ -578,7 +577,7 @@ impl<'tx> TxRwIAPI<'tx> for TxRwCell<'tx> {
 
   fn write(self) -> crate::Result<()> {
     let (pages, mut db, page_size) = {
-      let mut tx = self.cell.0.borrow_mut();
+      let mut tx = self.cell.borrow_mut();
       let mut swap_pages = HashMap::with_capacity_in(0, tx.r.b);
       // Clear out page cache early.
       mem::swap(&mut swap_pages, &mut tx.w.pages);
@@ -856,7 +855,7 @@ impl<'tx> TxRwImpl<'tx> {
   fn commit_freelist(&mut self) -> crate::Result<()> {
     let freelist_page = self.db.get_rw().unwrap().commit_freelist(*self.tx)?;
     let pg_id = freelist_page.id;
-    let mut tx = self.tx.cell.0.borrow_mut();
+    let mut tx = self.tx.cell.borrow_mut();
     tx.r.meta.set_free_list(pg_id);
     tx.w.pages.insert(pg_id, freelist_page);
     Ok(())
@@ -958,8 +957,8 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
       }
     }
     {
-      let new_bucket = self.tx.cell.1.split_r().bucket_header;
-      let mut tx = self.tx.cell.0.borrow_mut();
+      let new_bucket = self.tx.cell.bound().split_r().bucket_header;
+      let mut tx = self.tx.cell.borrow_mut();
       tx.r.meta.set_root(new_bucket);
 
       //TODO: implement pgidNoFreeList
@@ -980,7 +979,7 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
     let new_pgid = self.tx.meta().pgid();
     let page_size = self.tx.meta().page_size();
     {
-      let tx = self.tx.cell.0.borrow();
+      let tx = self.tx.cell.borrow();
       for page in tx.w.pages.values() {
         assert!(page.id.0 > 1, "Invalid page id");
       }
@@ -1014,7 +1013,7 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
       }
     }
 
-    let mut tx = self.tx.cell.0.borrow_mut();
+    let mut tx = self.tx.cell.borrow_mut();
     for f in &tx.w.commit_handlers {
       f();
     }

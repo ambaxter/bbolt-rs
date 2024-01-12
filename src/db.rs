@@ -516,7 +516,7 @@ impl DBBackend for FileBackend {
     size = mmap_size(self.page_size, size)?;
     if let Some(mmap) = self.mmap.take() {
       mmap.unlock()?;
-      tx.cell.1.own_in();
+      tx.cell.bound().own_in();
     }
 
     let mmap = MmapOptions::new().len(size as usize).map_raw(&self.file)?;

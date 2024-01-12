@@ -57,18 +57,22 @@ impl<'a, T, B> Clone for BCell<'a, T, B> {
 
 impl<'a, T, B> Copy for BCell<'a, T, B> {}
 
-impl<'a, T, B> BCell<'a, T, B> {
+impl<'a, T, B: Clone> BCell<'a, T, B> {
   /// Allocates a BCell in a Bumpalo arena
   pub fn new_in(t: T, b: B, a: &'a Bump) -> BCell<'a, T, B> {
     BCell(a.alloc((RefCell::new(t), b)))
   }
+
+  pub fn bound(&self) -> B {
+    self.0.1.clone()
+  }
 }
 
 impl<'a, T, B> Deref for BCell<'a, T, B> {
-  type Target = (RefCell<T>, B);
+  type Target = RefCell<T>;
 
   fn deref(&self) -> &Self::Target {
-    self.0
+    &self.0.0
   }
 }
 
@@ -77,7 +81,7 @@ where
   T: PartialEq,
 {
   fn eq(&self, other: &Self) -> bool {
-    self.0 .0 == other.0 .0
+    self.0.0 == other.0 .0
   }
 }
 
