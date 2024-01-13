@@ -91,12 +91,17 @@ impl MappedFreeListPage {
   pub(crate) fn page_ids(&self) -> &[PgId] {
     let (idx, count) = self.page_count();
     let page_ptr = self.bytes;
-    unsafe {
-      let data_ptr = page_ptr
-        .add(PAGE_HEADER_SIZE)
-        .add(mem::size_of::<PgId>() * idx as usize)
-        .cast::<PgId>();
-      from_raw_parts(data_ptr, count as usize)
+    let data_ptr = unsafe { page_ptr.add(PAGE_HEADER_SIZE) };
+    assert_eq!(
+      data_ptr as usize % mem::align_of::<PgId>(),
+      0,
+      "Unaligned pointer: {:?}",
+      data_ptr
+    );
+    if count == 0 {
+      &[]
+    } else {
+      unsafe { from_raw_parts(data_ptr.cast::<PgId>().offset(idx as isize), count as usize) }
     }
   }
 
@@ -115,9 +120,10 @@ impl MappedFreeListPage {
       &mut []
     } else if count < u16::MAX as u64 {
       self.count = count as u16;
-      unsafe { from_raw_parts_mut(data_ptr as *mut PgId, count as usize) }
+      unsafe { from_raw_parts_mut(data_ptr.cast::<PgId>(), count as usize) }
     } else {
-      let data = unsafe { from_raw_parts_mut(data_ptr as *mut PgId, count as usize + 1) };
+      let data = unsafe { from_raw_parts_mut(data_ptr.cast::<PgId>(), count as usize + 1) };
+      self.count = u16::MAX;
       data[0] = count.into();
       data.split_at_mut(1).1
     }
@@ -236,22 +242,22 @@ impl Freelist {
     self.free_maps.entry(size).or_default().insert(start);
   }
 
-  pub(crate) fn allocate(&mut self, txid: TxId, n: u64) -> Option<PgId> {
-    if n == 0 {
+  pub(crate) fn allocate(&mut self, txid: TxId, page_count: u64) -> Option<PgId> {
+    if page_count == 0 {
       return None;
     }
     // if we have a exact size match just return short path
     if let Some(pgid) = self
       .free_maps
-      .get(&n)
+      .get(&page_count)
       .iter()
       .flat_map(|set| set.iter())
       .copied()
       .next()
     {
-      self.del_span(pgid, n);
+      self.del_span(pgid, page_count);
       self.allocs.insert(pgid, txid);
-      for i in 0..n {
+      for i in 0..page_count {
         self.cache.remove(&(pgid + i));
       }
       return Some(pgid);
@@ -261,18 +267,18 @@ impl Freelist {
     if let Some((size, pgid)) = self
       .free_maps
       .iter()
-      .filter(|(&size, _)| size >= n)
+      .filter(|(&size, _)| size >= page_count)
       .flat_map(|(&size, pgids)| zip(repeat(size), pgids.iter().copied()))
       .next()
     {
       // remove the initial
       self.del_span(pgid, size);
       self.allocs.insert(pgid, txid);
-      let remain = size - n;
+      let remain = size - page_count;
 
       // add remain span
-      self.add_span(pgid + n, remain);
-      for i in 0..n {
+      self.add_span(pgid + page_count, remain);
+      for i in 0..page_count {
         self.cache.remove(&(pgid + i));
       }
       return Some(pgid);

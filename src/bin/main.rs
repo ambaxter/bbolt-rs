@@ -3,7 +3,20 @@ use std::time::Instant;
 
 fn main() -> bbolt_rs::Result<()> {
   println!("Hello, world!");
-  let mut db = DB::open("test.db")?;
+
+  // TODO: overwrites freelist page, but fails somehow
+  // Meta is chosen correctly, but page is garbage
+
+  for _ in 0..5 {
+    let mut db = DB::open("test.db")?;
+    widgets(&mut db)?;
+  }
+
+  println!("Goodbye, world!");
+  Ok(())
+}
+
+fn widgets(db: &mut DB) -> bbolt_rs::Result<()> {
   let n = 400000u32;
   let batch_n = 200000u32;
 
@@ -26,7 +39,7 @@ fn main() -> bbolt_rs::Result<()> {
   db.update(|tx| {
     let errors = tx.check();
     if !errors.is_empty() {
-      for error in errors {
+      for error in &errors[0..10.min(errors.len())] {
         eprintln!("{}", error);
       }
       panic!()
@@ -34,7 +47,5 @@ fn main() -> bbolt_rs::Result<()> {
     Ok(())
   })?;
   println!("Checked in {:?}s", check.elapsed().as_secs_f32());
-
-  println!("Goodbye, world!");
   Ok(())
 }

@@ -520,14 +520,7 @@ impl<'tx> TxRwIAPI<'tx> for TxRwCell<'tx> {
   type CursorRwType = InnerCursor<'tx, Self, Self::BucketType>;
 
   fn freelist_free_page(self, txid: TxId, p: &Page) {
-    self
-      .cell
-      .borrow()
-      .r
-      .db
-      .get_rw()
-      .unwrap()
-      .free_page(txid, p)
+    self.cell.borrow().r.db.get_rw().unwrap().free_page(txid, p)
   }
 
   fn allocate(
@@ -857,7 +850,15 @@ impl<'tx> TxRwImpl<'tx> {
     let pg_id = freelist_page.id;
     let mut tx = self.tx.cell.borrow_mut();
     tx.r.meta.set_free_list(pg_id);
-    tx.w.pages.insert(pg_id, freelist_page);
+    if let Some(old_page) = tx.w.pages.insert(pg_id, freelist_page) {
+      if old_page.overflow == 0 {
+        tx.r
+          .db
+          .get_rw()
+          .unwrap()
+          .repool_allocated(old_page.into_owner());
+      }
+    }
     Ok(())
   }
 }

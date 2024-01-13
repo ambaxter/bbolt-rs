@@ -708,33 +708,33 @@ impl<'tx> DbRwIAPI<'tx> for DBShared {
   }
 
   fn allocate(
-    &mut self, tx: TxRwCell, count: u64,
+    &mut self, tx: TxRwCell, page_count: u64,
   ) -> crate::Result<SelfOwned<AlignedBytes<alignment::Page>, MutPage<'tx>>> {
     let tx_id = tx.api_id();
     let high_water = tx.meta().pgid();
     let mut r = self.records.lock();
-    let bytes = if count == 1 && !self.page_pool.is_empty() {
+    let bytes = if page_count == 1 && !self.page_pool.is_empty() {
       self.page_pool.pop().unwrap()
     } else {
-      AlignedBytes::new_zeroed(count as usize * self.backend.page_size())
+      AlignedBytes::new_zeroed(page_count as usize * self.backend.page_size())
     };
 
     let mut mut_page = SelfOwned::new_with_map(bytes, |b| MutPage::new(b.as_mut_ptr()));
-    mut_page.overflow = (count - 1) as u32;
+    mut_page.overflow = (page_count - 1) as u32;
 
-    if let Some(pid) = r.freelist.allocate(tx_id, count) {
+    if let Some(pid) = r.freelist.allocate(tx_id, page_count) {
       mut_page.id = pid;
       return Ok(mut_page);
     }
 
     // Resize mmap() if we're at the end.
     mut_page.id = high_water;
-    let min_size = (high_water.0 + count + 1) * self.backend.page_size() as u64;
+    let min_size = (high_water.0 + page_count + 1) * self.backend.page_size() as u64;
     if min_size > self.backend.data_size() {
       self.backend.mmap(min_size, tx)?;
     }
 
-    tx.split_r_mut().meta.set_pgid(high_water + count);
+    tx.split_r_mut().meta.set_pgid(high_water + page_count);
     Ok(mut_page)
   }
 

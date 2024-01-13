@@ -1,7 +1,9 @@
 use crate::bucket::{BucketIAPI, BucketRwCell, BucketRwIAPI, MAX_FILL_PERCENT, MIN_FILL_PERCENT};
 use crate::common::inode::INode;
 use crate::common::memory::{CodSlice, LCell};
-use crate::common::page::{CoerciblePage, MutPage, RefPage, MIN_KEYS_PER_PAGE, PAGE_HEADER_SIZE};
+use crate::common::page::{
+  CoerciblePage, MutPage, Page, RefPage, MIN_KEYS_PER_PAGE, PAGE_HEADER_SIZE,
+};
 use crate::common::tree::{
   MappedBranchPage, MappedLeafPage, TreePage, BRANCH_PAGE_ELEMENT_SIZE, LEAF_PAGE_ELEMENT_SIZE,
 };
