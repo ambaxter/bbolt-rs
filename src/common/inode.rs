@@ -9,7 +9,7 @@ use bumpalo::Bump;
 use std::marker::PhantomData;
 use std::ops::Deref;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct INode<'tx> {
   flags: u32,
   pgid: PgId,

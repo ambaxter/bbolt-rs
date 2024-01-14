@@ -637,14 +637,15 @@ impl<'tx> NodeRwCell<'tx> {
       self.prev_sibling().unwrap()
     };
     let mut target_borrow = target.cell.borrow_mut();
-    let (r, _, w) = bucket.split_ref_mut();
-    let mut wb = w.unwrap();
+    let mut wb = bucket.split_ow_mut().unwrap();
     let mut self_borrow = self.cell.borrow_mut();
 
     // If both this node and the target node are too small then merge them.
     if use_next_sibling {
+      let inodes = target_borrow.inodes.clone();
+      drop(target_borrow);
       // Reparent all child nodes being moved.
-      for inode in &target_borrow.inodes {
+      for inode in &inodes {
         if let Some(child) = wb.nodes.get(&inode.pgid()).cloned() {
           let child_parent = child.cell.borrow().parent.unwrap();
           child_parent.cell.borrow_mut().remove_child(child);
@@ -654,6 +655,7 @@ impl<'tx> NodeRwCell<'tx> {
       }
 
       // Copy over inodes from target and remove target.
+      let mut target_borrow = target.cell.borrow_mut();
       self_borrow.inodes.append(&mut target_borrow.inodes);
       let parent = self_borrow.parent.unwrap();
       parent.del(target_borrow.key());
@@ -664,8 +666,11 @@ impl<'tx> NodeRwCell<'tx> {
       wb.nodes.remove(&target_pgid);
       target.free();
     } else {
+      // Drop as child_parent may be self.
+      let inodes = self_borrow.inodes.clone();
+      drop(self_borrow);
       // Reparent all child nodes being moved.
-      for inode in &self_borrow.inodes {
+      for inode in inodes {
         if let Some(child) = wb.nodes.get(&inode.pgid()).cloned() {
           let child_parent = child.cell.borrow().parent.unwrap();
           child_parent.cell.borrow_mut().remove_child(child);
@@ -674,6 +679,7 @@ impl<'tx> NodeRwCell<'tx> {
         }
       }
       // Copy over inodes to target and remove node.
+      let mut self_borrow = self.cell.borrow_mut();
       target_borrow.inodes.append(&mut self_borrow.inodes);
       let parent = self_borrow.parent.unwrap();
       parent.del(self_borrow.key());
@@ -684,7 +690,7 @@ impl<'tx> NodeRwCell<'tx> {
       wb.nodes.remove(&self_pgid);
       self.free();
     }
-
+    drop(wb);
     // Either this node or the target node was deleted from the parent so rebalance it.
     parent.rebalance();
   }

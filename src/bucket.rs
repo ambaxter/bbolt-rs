@@ -1293,7 +1293,7 @@ impl<'tx> BucketRwIAPI<'tx> for BucketRwCell<'tx> {
 #[cfg(test)]
 mod tests {
   use crate::test_support::TestDb;
-  use crate::{BucketApi, BucketRwApi, CursorApi, DbApi, DbRwAPI, Error, TxApi, TxRwApi};
+  use crate::{BucketApi, BucketRwApi, CursorApi, CursorRwApi, DbApi, DbRwAPI, Error, TxApi, TxRwApi};
   use itertools::Itertools;
 
   #[test]
@@ -1496,7 +1496,34 @@ mod tests {
 
   #[test]
   fn test_bucket_delete_freelist_overflow() -> crate::Result<()> {
-    todo!()
+    let mut db = TestDb::new()?;
+
+    //TODO:
+    for i in 0u64..4096 {
+      db.update(|mut tx | {
+        let mut b = tx.create_bucket_if_not_exists(b"0")?;
+        for j in 0u64..1000 {
+          let mut k = [0u8; 16];
+          let (k0, k1) = k.split_at_mut(8);
+          k0.copy_from_slice(i.to_be_bytes().as_slice());
+          k1.copy_from_slice(j.to_be_bytes().as_slice());
+          b.put(&k, &[])?;
+        }
+        Ok(())
+      })?;
+      println!("i: {}", i);
+    }
+    db.update(|mut tx| {
+      let b = tx.bucket(b"0").unwrap();
+      let mut c = b.cursor_mut();
+      let mut node = c.first();
+      while node.is_some() {
+        c.delete()?;
+        node = c.next();
+      }
+      Ok(())
+    })?;
+  Ok(())
   }
 
   #[test]
