@@ -204,10 +204,10 @@ Features:
 - [x] test_bucket_next_sequence_persist
 - [ ] test_bucket_next_sequence_read_only
 - [ ] test_bucket_next_sequence_closed
-- [ ] test_bucket_for_each
-- [ ] test_bucket_for_each_bucket
-- [ ] test_bucket_for_each_bucket_no_buckets
-- [ ] test_bucket_for_each_short_circuit
+- [x] test_bucket_for_each
+- [x] test_bucket_for_each_bucket
+- [x] test_bucket_for_each_bucket_no_buckets
+- [x] test_bucket_for_each_short_circuit
 - [ ] test_bucket_for_each_closed
 - [x] test_bucket_put_empty_key
 - [x] test_bucket_put_key_too_large

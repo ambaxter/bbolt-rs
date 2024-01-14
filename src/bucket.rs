@@ -62,9 +62,9 @@ where
   /// If the provided function returns an error then the iteration is stopped and
   /// the error is returned to the caller. The provided function must not modify
   /// the bucket; this will result in undefined behavior.
-  fn for_each<F: Fn(&[u8]) -> crate::Result<()>>(&self, f: F) -> crate::Result<()>;
+  fn for_each<F: Fn(&'tx [u8], Option<&'tx [u8]>) -> crate::Result<()>>(&self, f: F) -> crate::Result<()>;
 
-  fn for_each_bucket<F: Fn(&[u8]) -> crate::Result<()>>(&self, f: F) -> crate::Result<()>;
+  fn for_each_bucket<F: Fn(&'tx [u8]) -> crate::Result<()>>(&self, f: F) -> crate::Result<()>;
 
   /// Stats returns stats on a bucket.
   fn stats(&self) -> BucketStats;
@@ -147,11 +147,11 @@ impl<'tx> BucketApi<'tx> for BucketImpl<'tx> {
     self.b.api_sequence()
   }
 
-  fn for_each<F: Fn(&[u8]) -> crate::Result<()>>(&self, f: F) -> crate::Result<()> {
+  fn for_each<F: Fn(&'tx [u8], Option<&'tx [u8]>) -> crate::Result<()>>(&self, f: F) -> crate::Result<()> {
     self.b.api_for_each(f)
   }
 
-  fn for_each_bucket<F: Fn(&[u8]) -> crate::Result<()>>(&self, f: F) -> crate::Result<()> {
+  fn for_each_bucket<F: Fn(&'tx [u8]) -> crate::Result<()>>(&self, f: F) -> crate::Result<()> {
     self.b.api_for_each_bucket(f)
   }
 
@@ -197,11 +197,11 @@ impl<'tx> BucketApi<'tx> for BucketRwImpl<'tx> {
     self.b.api_sequence()
   }
 
-  fn for_each<F: Fn(&[u8]) -> crate::Result<()>>(&self, f: F) -> crate::Result<()> {
+  fn for_each<F: Fn(&'tx [u8], Option<&'tx [u8]>) -> crate::Result<()>>(&self, f: F) -> crate::Result<()> {
     self.b.api_for_each(f)
   }
 
-  fn for_each_bucket<F: Fn(&[u8]) -> crate::Result<()>>(&self, f: F) -> crate::Result<()> {
+  fn for_each_bucket<F: Fn(&'tx [u8]) -> crate::Result<()>>(&self, f: F) -> crate::Result<()> {
     self.b.api_for_each_bucket(f)
   }
 
@@ -462,18 +462,18 @@ pub(crate) trait BucketIAPI<'tx, T: TxIAPI<'tx>>:
   }
 
   /// See [BucketApi::for_each]
-  fn api_for_each<F: Fn(&[u8]) -> crate::Result<()>>(self, f: F) -> crate::Result<()> {
+  fn api_for_each<F: Fn(&'tx [u8], Option<&'tx [u8]>) -> crate::Result<()>>(self, f: F) -> crate::Result<()> {
     let mut c = self.i_cursor();
-    let mut inode = c.i_first();
-    while let Some((k, _, flags)) = inode {
-      f(k)?;
-      inode = c.i_next();
+    let mut inode = c.api_first();
+    while let Some((k, v)) = inode {
+      f(k, v)?;
+      inode = c.api_next();
     }
     Ok(())
   }
 
   /// See [BucketApi::for_each_bucket]
-  fn api_for_each_bucket<F: FnMut(&[u8]) -> crate::Result<()>>(
+  fn api_for_each_bucket<F: FnMut(&'tx [u8]) -> crate::Result<()>>(
     self, mut f: F,
   ) -> crate::Result<()> {
     let mut c = self.i_cursor();
@@ -1292,13 +1292,16 @@ impl<'tx> BucketRwIAPI<'tx> for BucketRwCell<'tx> {
 
 #[cfg(test)]
 mod tests {
-  use crate::bucket::MAX_VALUE_SIZE;
+  use std::cell::RefCell;
+  use crate::bucket::{BucketRwImpl, MAX_VALUE_SIZE};
   use crate::test_support::TestDb;
   use crate::{
     BucketApi, BucketRwApi, CursorApi, CursorRwApi, DbApi, DbRwAPI, Error, TxApi, TxRwApi,
   };
   use itertools::Itertools;
   use std::fmt::format;
+  use std::sync::atomic::{AtomicU32, Ordering};
+  use anyhow::anyhow;
 
   #[test]
   fn test_bucket_get_non_existent() -> crate::Result<()> {
@@ -1797,29 +1800,130 @@ mod tests {
     todo!("not-possible")
   }
 
+  fn for_each_collect_kv<'tx, B: BucketApi<'tx>>(b: B ) -> crate::Result<Vec<(&'tx [u8], Option<&'tx[u8]>)>>{
+    let items = RefCell::new(Vec::new());
+    b.for_each(|k, v| {
+      items.borrow_mut().push((k, v));
+      Ok(())
+    })?;
+    Ok(items.into_inner())
+  }
+
+  fn for_each_bucket_collect_k<'tx, B: BucketApi<'tx>>(b: B ) -> crate::Result<Vec<&'tx [u8]>>{
+    let items = RefCell::new(Vec::new());
+    b.for_each_bucket(|k| {
+      items.borrow_mut().push(k);
+      Ok(())
+    })?;
+    Ok(items.into_inner())
+  }
+
   #[test]
   fn test_bucket_for_each() -> crate::Result<()> {
-    todo!()
+    let expected_items = [
+      (b"bar".as_slice(), Some(b"0002".as_slice())),
+      (b"baz".as_slice(), Some(b"0001".as_slice())),
+      (b"csubbucket".as_slice(), None),
+      (b"foo".as_slice(), Some(b"0000".as_slice())),
+    ];
+    let mut db = TestDb::new_tmp()?;
+    db.update(|mut tx| {
+      let mut b = tx.create_bucket(b"widgets")?;
+      b.put(b"foo", b"0000")?;
+      b.put(b"baz", b"0001")?;
+      b.put(b"bar", b"0002")?;
+      b.create_bucket(b"csubbucket")?;
+
+      let items = for_each_collect_kv(b)?;
+      assert_eq!(expected_items.as_slice(), &items, "what we iterated (ForEach) is not what we put");
+      Ok(())
+    })?;
+    db.view(|tx| {
+      let b = tx.bucket(b"widgets").unwrap();
+      let items = for_each_collect_kv(b)?;
+      assert_eq!(expected_items.as_slice(), &items, "what we iterated (ForEach) is not what we put");
+      Ok(())
+    })?;
+    Ok(())
   }
 
   #[test]
   fn test_bucket_for_each_bucket() -> crate::Result<()> {
-    todo!()
+    let expected_items = [
+      b"csubbucket".as_slice(),
+      b"zsubbucket".as_slice(),
+    ];
+    let mut db = TestDb::new_tmp()?;
+    db.update(|mut tx| {
+      let mut b = tx.create_bucket(b"widgets")?;
+      b.put(b"foo", b"0000")?;
+      let _ = b.create_bucket(b"zsubbucket")?;
+      b.put(b"baz", b"0001")?;
+      b.put(b"bar", b"0002")?;
+      let _ = b.create_bucket(b"csubbucket")?;
+
+      let items = for_each_bucket_collect_k(b)?;
+      assert_eq!(expected_items.as_slice(), &items, "what we iterated (ForEach) is not what we put");
+      Ok(())
+    })?;
+    db.view(|tx| {
+      let b = tx.bucket(b"widgets").unwrap();
+      let items = for_each_bucket_collect_k(b)?;
+      assert_eq!(expected_items.as_slice(), &items, "what we iterated (ForEach) is not what we put");
+      Ok(())
+    })?;
+    Ok(())
   }
 
   #[test]
   fn test_bucket_for_each_bucket_no_buckets() -> crate::Result<()> {
-    todo!()
+    let mut db = TestDb::new_tmp()?;
+    db.update(|mut tx| {
+      let mut b = tx.create_bucket(b"widgets")?;
+      b.put(b"foo", b"0000")?;
+      b.put(b"baz", b"0001")?;
+
+      let items = for_each_bucket_collect_k(b)?;
+      assert!(items.is_empty(), "what we iterated (ForEach) is not what we put");
+      Ok(())
+    })?;
+    db.view(|tx| {
+      let b = tx.bucket(b"widgets").unwrap();
+      let items = for_each_bucket_collect_k(b)?;
+      assert!(items.is_empty(), "what we iterated (ForEach) is not what we put");
+      Ok(())
+    })?;
+    Ok(())
   }
 
   #[test]
   fn test_bucket_for_each_short_circuit() -> crate::Result<()> {
-    todo!()
+    let mut db = TestDb::new_tmp()?;
+    let result = db.update(|mut tx| {
+      let mut b = tx.create_bucket(b"widgets")?;
+      b.put(b"bar", b"0000")?;
+      b.put(b"baz", b"0000")?;
+      b.put(b"foo", b"0000")?;
+
+      let index = AtomicU32::new(0);
+      tx.bucket(b"widgets").unwrap().for_each(|k, v| {
+        index.fetch_add(1, Ordering::Relaxed);
+        if k == b"baz" {
+          return Err(Error::Other(anyhow!("marker")));
+        }
+        Ok(())
+      })?;
+
+      Ok(())
+    });
+    let e = result.map_err(|e| e.to_string()).err().unwrap();
+    assert_eq!("marker", e);
+    Ok(())
   }
 
   #[test]
   fn test_bucket_for_each_closed() -> crate::Result<()> {
-    todo!()
+    todo!("not possible")
   }
 
   #[test]
