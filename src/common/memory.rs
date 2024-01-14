@@ -64,7 +64,7 @@ impl<'a, T, B: Clone> BCell<'a, T, B> {
   }
 
   pub fn bound(&self) -> B {
-    self.0.1.clone()
+    self.0 .1.clone()
   }
 }
 
@@ -72,7 +72,7 @@ impl<'a, T, B> Deref for BCell<'a, T, B> {
   type Target = RefCell<T>;
 
   fn deref(&self) -> &Self::Target {
-    &self.0.0
+    &self.0 .0
   }
 }
 
@@ -81,7 +81,7 @@ where
   T: PartialEq,
 {
   fn eq(&self, other: &Self) -> bool {
-    self.0.0 == other.0 .0
+    self.0 .0 == other.0 .0
   }
 }
 

@@ -1292,8 +1292,11 @@ impl<'tx> BucketRwIAPI<'tx> for BucketRwCell<'tx> {
 
 #[cfg(test)]
 mod tests {
+  use std::fmt::format;
   use crate::test_support::TestDb;
-  use crate::{BucketApi, BucketRwApi, CursorApi, CursorRwApi, DbApi, DbRwAPI, Error, TxApi, TxRwApi};
+  use crate::{
+    BucketApi, BucketRwApi, CursorApi, CursorRwApi, DbApi, DbRwAPI, Error, TxApi, TxRwApi,
+  };
   use itertools::Itertools;
 
   #[test]
@@ -1500,7 +1503,7 @@ mod tests {
 
     //TODO:
     for i in 0u64..4096 {
-      db.update(|mut tx | {
+      db.update(|mut tx| {
         let mut b = tx.create_bucket_if_not_exists(b"0")?;
         for j in 0u64..1000 {
           let mut k = [0u8; 16];
@@ -1523,32 +1526,100 @@ mod tests {
       }
       Ok(())
     })?;
-  Ok(())
+    todo!("Stats check");
+    Ok(())
   }
 
   #[test]
   fn test_bucket_delete_non_existing() -> crate::Result<()> {
-    todo!()
+    let mut db = TestDb::new_tmp()?;
+    db.update(|mut tx| {
+      let mut b = tx.create_bucket(b"widgets")?;
+      let _ = b.create_bucket(b"nested")?;
+      Ok(())
+    })?;
+    db.update(|mut tx | {
+      let mut b = tx.bucket(b"widgets").unwrap();
+      b.delete(b"foo")?;
+      assert!(b.bucket(b"nested").is_some(), "nested bucket has been deleted");
+      Ok(())
+    })?;
+    Ok(())
   }
 
   #[test]
   fn test_bucket_nested() -> crate::Result<()> {
-    todo!()
+    let mut db = TestDb::new_tmp()?;
+    db.update(|mut tx| {
+      // Create a widgets bucket.
+      let mut b = tx.create_bucket(b"widgets")?;
+
+      // Create a widgets/foo bucket.
+      let _ = b.create_bucket(b"foo")?;
+
+      // Create a widgets/bar key.
+      b.put(b"bar", b"0000")?;
+      Ok(())
+    })?;
+    db.must_check_rw();
+    db.update(|mut tx| {
+      let mut b = tx.bucket(b"widgets").unwrap();
+      b.put(b"bar", b"xxxx")?;
+      Ok(())
+    })?;
+    db.must_check_rw();
+    db.update(|mut tx| {
+      let mut b = tx.bucket(b"widgets").unwrap();
+      for i in 0..10000 {
+        let s = format!("{}", i);
+        b.put(s.as_bytes(), s.as_bytes())?;
+      }
+      Ok(())
+    })?;
+    db.must_check_rw();
+    db.update(|mut tx| {
+      let mut b = tx.bucket(b"widgets").unwrap();
+      let mut foo = b.bucket(b"foo").unwrap();
+      foo.put(b"baz", b"yyyy")?;
+      b.put(b"bar", b"xxxx")?;
+      Ok(())
+    })?;
+    db.must_check_rw();
+    db.view(|tx| {
+      let b = tx.bucket(b"widgets").unwrap();
+      let foo = b.bucket(b"foo").unwrap();
+      assert_eq!(Some(b"yyyy".as_slice()), foo.get(b"baz"));
+      assert_eq!(Some(b"xxxx".as_slice()), b.get(b"bar"));
+
+      for i in 0..10000 {
+        let s = format!("{}", i);
+        assert_eq!(Some(s.as_bytes()), b.get(s.as_bytes()));
+      }
+      Ok(())
+    })?;
+    Ok(())
   }
 
   #[test]
   fn test_bucket_delete_bucket() -> crate::Result<()> {
-    todo!()
+    let mut db = TestDb::new_tmp()?;
+    db.update(|mut tx| {
+      let mut b = tx.create_bucket(b"widgets")?;
+      let _ = b.create_bucket(b"foo")?;
+      assert_eq!(Err(Error::IncompatibleValue), b.delete(b"foo"));
+      Ok(())
+    })?;
+    Ok(())
   }
 
   #[test]
   fn test_bucket_delete_read_only() -> crate::Result<()> {
-    todo!()
+    todo!("read-only")
   }
 
   #[test]
   fn test_bucket_delete_closed() -> crate::Result<()> {
-    todo!()
+    todo!("not possible")
   }
 
   #[test]
