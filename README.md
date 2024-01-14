@@ -22,7 +22,6 @@ Features:
 
 ### General
 - [ ] Read-only DB access with optional freelist loading
-- [ ] Update layout to match current bbolt directory structure
 - [ ] Quick Check analog
 - [ ] Logging capabilities
 - [x] Follow Clippy guidance
@@ -34,7 +33,7 @@ Features:
 - [ ] blag post
 
 ### Open Questions
-- [ ] How do we properly pin memory for the transactions?
+- [x] How do we properly pin memory for the transactions?
 - [ ] How do we properly set up sync and send for the database?
 - [ ] Why do I need to transmute the key deref in key(&'a self) -> &'tx [u8] in inode.rs?
 - [ ] Why do we leak memory when dropping TxRwImpl?
@@ -186,23 +185,23 @@ Features:
 
 ### src/bucket.rs
 - [ ] BucketApi.stats
-- [ ] BucketApi.set_sequence
-- [ ] BucketApi.next_sequence
-- [ ] test_bucket_delete_freelist_overflow
-- [ ] test_bucket_delete_non_existing
-- [ ] test_bucket_nested
-- [ ] test_bucket_delete_bucket
+- [x] BucketApi.set_sequence
+- [x] BucketApi.next_sequence
+- [x] test_bucket_delete_freelist_overflow
+- [x] test_bucket_delete_non_existing
+- [x] test_bucket_nested
+- [x] test_bucket_delete_bucket
 - [ ] test_bucket_delete_read_only
 - [ ] test_bucket_delete_closed
-- [ ] test_bucket_delete_bucket_nested
-- [ ] test_bucket_delete_bucket_nested2
-- [ ] test_bucket_delete_bucket_large
-- [ ] test_bucket_bucket_incompatible_value
-- [ ] test_bucket_create_bucket_incompatible_value
-- [ ] test_bucket_delete_bucket_incompatible_value
-- [ ] test_bucket_sequence
-- [ ] test_bucket_next_sequence
-- [ ] test_bucket_next_sequence_persist
+- [x] test_bucket_delete_bucket_nested
+- [x] test_bucket_delete_bucket_nested2
+- [x] test_bucket_delete_bucket_large
+- [x] test_bucket_bucket_incompatible_value
+- [x] test_bucket_create_bucket_incompatible_value
+- [x] test_bucket_delete_bucket_incompatible_value
+- [x] test_bucket_sequence
+- [x] test_bucket_next_sequence
+- [x] test_bucket_next_sequence_persist
 - [ ] test_bucket_next_sequence_read_only
 - [ ] test_bucket_next_sequence_closed
 - [ ] test_bucket_for_each
@@ -210,9 +209,9 @@ Features:
 - [ ] test_bucket_for_each_bucket_no_buckets
 - [ ] test_bucket_for_each_short_circuit
 - [ ] test_bucket_for_each_closed
-- [ ] test_bucket_put_empty_key
-- [ ] test_bucket_put_key_too_large
-- [ ] test_bucket_put_value_too_large
+- [x] test_bucket_put_empty_key
+- [x] test_bucket_put_key_too_large
+- [x] test_bucket_put_value_too_large
 - [ ] test_bucket_stats
 - [ ] test_bucket_stats_random_fill
 - [ ] test_bucket_stats_small

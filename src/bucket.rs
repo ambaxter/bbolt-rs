@@ -241,11 +241,11 @@ impl<'tx> BucketRwApi<'tx> for BucketRwImpl<'tx> {
   }
 
   fn set_sequence(&mut self, v: u64) -> crate::Result<()> {
-    todo!()
+    self.b.api_set_sequence(v)
   }
 
   fn next_sequence(&mut self) -> crate::Result<u64> {
-    todo!()
+    self.b.api_next_sequence()
   }
 }
 
@@ -687,10 +687,10 @@ pub(crate) trait BucketRwIAPI<'tx>: BucketIAPI<'tx, TxRwCell<'tx>> {
   fn api_delete(self, key: &[u8]) -> crate::Result<()>;
 
   /// See [BucketRwApi::set_sequence]
-  fn api_set_sequence(cell: BucketRwCell<'tx>, v: u64) -> crate::Result<()>;
+  fn api_set_sequence(self, v: u64) -> crate::Result<()>;
 
   /// See [BucketRwApi::next_sequence]
-  fn api_next_sequence(cell: BucketRwCell<'tx>) -> crate::Result<u64>;
+  fn api_next_sequence(self) -> crate::Result<u64>;
 
   /// free recursively frees all pages in the bucket.
   fn free(self);
@@ -1010,16 +1010,16 @@ impl<'tx> BucketRwIAPI<'tx> for BucketRwCell<'tx> {
   fn api_delete_bucket(self, key: &[u8]) -> crate::Result<()> {
     let mut c = self.i_cursor();
 
-    let (k, _, flags) = c.i_seek(key).unwrap();
+    let (k, _, flags) = c.i_seek(key).unwrap_or((&[], &[], 0));
     if key != k {
       return Err(BucketNotFound);
-    } else if flags & BUCKET_LEAF_FLAG != 0 {
+    } else if flags & BUCKET_LEAF_FLAG == 0 {
       return Err(IncompatibleValue);
     }
 
     let child = self.api_bucket(key).unwrap();
     child.api_for_each_bucket(|k| {
-      match self.api_delete_bucket(k) {
+      match child.api_delete_bucket(k) {
         Ok(_) => Ok(()),
         // TODO: Ideally we want to properly chain errors here
         Err(e) => Err(Error::Other(e.into())),
@@ -1079,15 +1079,15 @@ impl<'tx> BucketRwIAPI<'tx> for BucketRwCell<'tx> {
     Ok(())
   }
 
-  fn api_set_sequence(cell: BucketRwCell<'tx>, v: u64) -> crate::Result<()> {
-    cell.materialize_root();
-    cell.split_r_mut().bucket_header.set_sequence(v);
+  fn api_set_sequence(self, v: u64) -> crate::Result<()> {
+    self.materialize_root();
+    self.split_r_mut().bucket_header.set_sequence(v);
     Ok(())
   }
 
-  fn api_next_sequence(cell: BucketRwCell<'tx>) -> crate::Result<u64> {
-    cell.materialize_root();
-    let mut r = cell.split_r_mut();
+  fn api_next_sequence(self) -> crate::Result<u64> {
+    self.materialize_root();
+    let mut r = self.split_r_mut();
     r.bucket_header.inc_sequence();
     Ok(r.bucket_header.sequence())
   }
@@ -1292,12 +1292,13 @@ impl<'tx> BucketRwIAPI<'tx> for BucketRwCell<'tx> {
 
 #[cfg(test)]
 mod tests {
-  use std::fmt::format;
+  use crate::bucket::MAX_VALUE_SIZE;
   use crate::test_support::TestDb;
   use crate::{
     BucketApi, BucketRwApi, CursorApi, CursorRwApi, DbApi, DbRwAPI, Error, TxApi, TxRwApi,
   };
   use itertools::Itertools;
+  use std::fmt::format;
 
   #[test]
   fn test_bucket_get_non_existent() -> crate::Result<()> {
@@ -1415,7 +1416,6 @@ mod tests {
   }
 
   #[test]
-  #[ignore]
   fn test_db_put_very_large() -> crate::Result<()> {
     let mut db = TestDb::new_tmp()?;
     let n = 400000u64;
@@ -1431,7 +1431,6 @@ mod tests {
         Ok(())
       })?;
     }
-    //db.must_check_rw();
     Ok(())
   }
 
@@ -1497,7 +1496,9 @@ mod tests {
     Ok(())
   }
 
+  // TODO: long running tests. This one is about a 12 minute test on --release
   #[test]
+  #[ignore]
   fn test_bucket_delete_freelist_overflow() -> crate::Result<()> {
     let mut db = TestDb::new()?;
 
@@ -1538,10 +1539,13 @@ mod tests {
       let _ = b.create_bucket(b"nested")?;
       Ok(())
     })?;
-    db.update(|mut tx | {
+    db.update(|mut tx| {
       let mut b = tx.bucket(b"widgets").unwrap();
       b.delete(b"foo")?;
-      assert!(b.bucket(b"nested").is_some(), "nested bucket has been deleted");
+      assert!(
+        b.bucket(b"nested").is_some(),
+        "nested bucket has been deleted"
+      );
       Ok(())
     })?;
     Ok(())
@@ -1623,58 +1627,174 @@ mod tests {
   }
 
   #[test]
+  // Ensure that deleting a bucket causes nested buckets to be deleted.
   fn test_bucket_delete_bucket_nested() -> crate::Result<()> {
-    todo!()
+    let mut db = TestDb::new_tmp()?;
+    db.update(|mut tx| {
+      let mut widgets = tx.create_bucket(b"widgets")?;
+      let mut foo = widgets.create_bucket(b"foo")?;
+      let mut bar = foo.create_bucket(b"bar")?;
+      bar.put(b"baz", b"bat")?;
+      tx.bucket(b"widgets").unwrap().delete_bucket(b"foo")?;
+      Ok(())
+    })?;
+    Ok(())
   }
 
   #[test]
+  // Ensure that deleting a bucket causes nested buckets to be deleted after they have been committed.
   fn test_bucket_delete_bucket_nested2() -> crate::Result<()> {
-    todo!()
+    let mut db = TestDb::new_tmp()?;
+    db.update(|mut tx| {
+      let mut widgets = tx.create_bucket(b"widgets")?;
+      let mut foo = widgets.create_bucket(b"foo")?;
+      let mut bar = foo.create_bucket(b"bar")?;
+      bar.put(b"baz", b"bat")?;
+      Ok(())
+    })?;
+    db.update(|mut tx| {
+      let mut widgets = tx.bucket(b"widgets").unwrap();
+      let mut foo = widgets.bucket(b"foo").unwrap();
+      let mut bar = foo.bucket(b"bar").unwrap();
+      assert_eq!(Some(b"bat".as_slice()), bar.get(b"baz"));
+      tx.delete_bucket(b"widgets")?;
+      Ok(())
+    })?;
+    db.view(|tx| {
+      assert!(tx.bucket(b"widgets").is_none());
+      Ok(())
+    })?;
+    Ok(())
   }
 
   #[test]
+  // Ensure that deleting a child bucket with multiple pages causes all pages to get collected.
+  // NOTE: Consistency check in bolt_test.DB.Close() will panic if pages not freed properly.
   fn test_bucket_delete_bucket_large() -> crate::Result<()> {
-    todo!()
+    let mut db = TestDb::new_tmp()?;
+    db.update(|mut tx| {
+      let mut widgets = tx.create_bucket(b"widgets")?;
+      let mut foo = widgets.create_bucket(b"foo")?;
+      for i in 0..1000 {
+        let k = format!("{}", i);
+        let v = format!("{:0100}", i);
+        foo.put(k.as_bytes(), v.as_bytes())?;
+      }
+      Ok(())
+    })?;
+    db.update(|mut tx| {
+      tx.delete_bucket(b"widgets")?;
+      Ok(())
+    })?;
+    Ok(())
   }
 
   #[test]
   fn test_bucket_bucket_incompatible_value() -> crate::Result<()> {
-    todo!()
+    let mut db = TestDb::new_tmp()?;
+    db.update(|mut tx| {
+      let mut widgets = tx.create_bucket(b"widgets")?;
+      widgets.put(b"foo", b"bar")?;
+      assert!(widgets.bucket(b"foo").is_none());
+      Ok(())
+    })?;
+    Ok(())
   }
 
   #[test]
   fn test_bucket_create_bucket_incompatible_value() -> crate::Result<()> {
-    todo!()
+    let mut db = TestDb::new_tmp()?;
+    db.update(|mut tx| {
+      let mut widgets = tx.create_bucket(b"widgets")?;
+      widgets.put(b"foo", b"bar")?;
+      assert_eq!(
+        Some(Error::IncompatibleValue),
+        widgets.create_bucket(b"foo").err()
+      );
+      Ok(())
+    })?;
+    Ok(())
   }
 
   #[test]
   fn test_bucket_delete_bucket_incompatible_value() -> crate::Result<()> {
-    todo!()
+    let mut db = TestDb::new_tmp()?;
+    db.update(|mut tx| {
+      let mut widgets = tx.create_bucket(b"widgets")?;
+      widgets.put(b"foo", b"bar")?;
+      assert_eq!(
+        Some(Error::IncompatibleValue),
+        widgets.delete_bucket(b"foo").err()
+      );
+      Ok(())
+    })?;
+    Ok(())
   }
 
   #[test]
   fn test_bucket_sequence() -> crate::Result<()> {
-    todo!()
+    let mut db = TestDb::new_tmp()?;
+    db.update(|mut tx| {
+      let mut bkt = tx.create_bucket(b"0")?;
+      assert_eq!(0, bkt.sequence());
+      bkt.set_sequence(1000)?;
+      assert_eq!(1000, bkt.sequence());
+      Ok(())
+    })?;
+    db.view(|tx| {
+      let bkt = tx.bucket(b"0").unwrap();
+      assert_eq!(1000, bkt.sequence());
+      Ok(())
+    })?;
+    Ok(())
   }
 
   #[test]
   fn test_bucket_next_sequence() -> crate::Result<()> {
-    todo!()
+    let mut db = TestDb::new_tmp()?;
+    db.update(|mut tx| {
+      let mut widgets = tx.create_bucket(b"widgets")?;
+      let mut woojits = tx.create_bucket(b"woojits")?;
+      assert_eq!(1, widgets.next_sequence()?);
+      assert_eq!(2, widgets.next_sequence()?);
+      assert_eq!(1, woojits.next_sequence()?);
+
+      Ok(())
+    })?;
+    Ok(())
   }
 
   #[test]
+  // Ensure that a bucket will persist an autoincrementing sequence even if its
+  // the only thing updated on the bucket.
+  // https://github.com/boltdb/bolt/issues/296
   fn test_bucket_next_sequence_persist() -> crate::Result<()> {
-    todo!()
+    let mut db = TestDb::new_tmp()?;
+    db.update(|mut tx| {
+      let mut widgets = tx.create_bucket(b"widgets")?;
+      Ok(())
+    })?;
+    db.update(|mut tx| {
+      let mut widgets = tx.bucket(b"widgets").unwrap();
+      assert_eq!(1, widgets.next_sequence()?);
+      Ok(())
+    })?;
+    db.update(|mut tx| {
+      let mut widgets = tx.bucket(b"widgets").unwrap();
+      assert_eq!(2, widgets.next_sequence()?);
+      Ok(())
+    })?;
+    Ok(())
   }
 
   #[test]
   fn test_bucket_next_sequence_read_only() -> crate::Result<()> {
-    todo!()
+    todo!("read-only")
   }
 
   #[test]
   fn test_bucket_next_sequence_closed() -> crate::Result<()> {
-    todo!()
+    todo!("not-possible")
   }
 
   #[test]
@@ -1704,17 +1824,43 @@ mod tests {
 
   #[test]
   fn test_bucket_put_empty_key() -> crate::Result<()> {
-    todo!()
+    let mut db = TestDb::new_tmp()?;
+    db.update(|mut tx| {
+      let mut widgets = tx.create_bucket(b"widgets")?;
+      assert_eq!(Some(Error::KeyRequired), widgets.put(&[], &[]).err());
+      Ok(())
+    })?;
+    Ok(())
   }
 
   #[test]
   fn test_bucket_put_key_too_large() -> crate::Result<()> {
-    todo!()
+    let mut db = TestDb::new_tmp()?;
+    let key = [0u8; 32769];
+    db.update(|mut tx| {
+      let mut widgets = tx.create_bucket(b"widgets")?;
+      assert_eq!(
+        Some(Error::KeyTooLarge),
+        widgets.put(key.as_slice(), b"bar").err()
+      );
+      Ok(())
+    })?;
+    Ok(())
   }
 
   #[test]
   fn test_bucket_put_value_too_large() -> crate::Result<()> {
-    todo!()
+    let mut db = TestDb::new_tmp()?;
+    let value = vec![0u8; MAX_VALUE_SIZE as usize + 1];
+    db.update(|mut tx| {
+      let mut widgets = tx.create_bucket(b"widgets")?;
+      assert_eq!(
+        Some(Error::ValueTooLarge),
+        widgets.put(b"foo", value.as_slice()).err()
+      );
+      Ok(())
+    })?;
+    Ok(())
   }
 
   #[test]
@@ -1749,17 +1895,17 @@ mod tests {
 
   #[test]
   fn test_bucket_put_single() -> crate::Result<()> {
-    todo!()
+    todo!("quick-check")
   }
 
   #[test]
   fn test_bucket_put_multiple() -> crate::Result<()> {
-    todo!()
+    todo!("quick-check")
   }
 
   #[test]
   fn test_bucket_delete_quick() -> crate::Result<()> {
-    todo!()
+    todo!("quick-check")
   }
 
   #[test]

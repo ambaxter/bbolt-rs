@@ -72,6 +72,6 @@ impl TestDb {
 
 impl Drop for TestDb {
   fn drop(&mut self) {
-    //self.must_check_rw()
+    self.must_check_rw()
   }
 }
