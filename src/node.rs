@@ -2,7 +2,7 @@ use crate::bucket::{BucketIApi, BucketRwCell, BucketRwIApi, MAX_FILL_PERCENT, MI
 use crate::common::inode::INode;
 use crate::common::memory::{CodSlice, LCell};
 use crate::common::page::{
-  CoerciblePage, MutPage, Page, RefPage, MIN_KEYS_PER_PAGE, PAGE_HEADER_SIZE,
+  CoerciblePage, MutPage, RefPage, MIN_KEYS_PER_PAGE, PAGE_HEADER_SIZE,
 };
 use crate::common::tree::{
   MappedBranchPage, MappedLeafPage, TreePage, BRANCH_PAGE_ELEMENT_SIZE, LEAF_PAGE_ELEMENT_SIZE,
@@ -737,7 +737,7 @@ mod test {
   use crate::common::{SplitRef, ZERO_PGID};
   use crate::test_support::TestDb;
   use crate::tx::check::UnsealTx;
-  use crate::tx::TxIApi;
+  use crate::tx::{TxIApi, TxRwIApi};
   use crate::DbRwAPI;
   use itertools::Itertools;
 
@@ -745,8 +745,8 @@ mod test {
   fn test_node_put() -> crate::Result<()> {
     let mut test_db = TestDb::new()?;
     let tx = test_db.begin_mut();
-    let txrw = tx.unseal();
-    let root_bucket = txrw.root_bucket();
+    let txrw = tx.unseal_rw();
+    let root_bucket = txrw.root_bucket_mut();
     let n = root_bucket.materialize_root();
     n.put(b"baz", b"baz", b"2", ZERO_PGID, 0);
     n.put(b"foo", b"foo", b"0", ZERO_PGID, 0);
@@ -768,8 +768,8 @@ mod test {
   fn test_node_read_leaf_page() -> crate::Result<()> {
     let mut test_db = TestDb::new()?;
     let tx = test_db.begin_mut();
-    let txrw = tx.unseal();
-    let root_bucket = txrw.root_bucket();
+    let txrw = tx.unseal_rw();
+    let root_bucket = txrw.root_bucket_mut();
     root_bucket.materialize_root();
     let n = root_bucket.split_ref().2.unwrap().root_node.unwrap();
     todo!()
@@ -779,8 +779,8 @@ mod test {
   fn test_node_write_leaf_page() -> crate::Result<()> {
     let mut test_db = TestDb::new()?;
     let tx = test_db.begin_mut();
-    let txrw = tx.unseal();
-    let root_bucket = txrw.root_bucket();
+    let txrw = tx.unseal_rw();
+    let root_bucket = txrw.root_bucket_mut();
     root_bucket.materialize_root();
     let n = root_bucket.split_ref().2.unwrap().root_node.unwrap();
     todo!()
@@ -790,8 +790,8 @@ mod test {
   fn test_node_split() -> crate::Result<()> {
     let mut test_db = TestDb::new()?;
     let tx = test_db.begin_mut();
-    let txrw = tx.unseal();
-    let root_bucket = txrw.root_bucket();
+    let txrw = tx.unseal_rw();
+    let root_bucket = txrw.root_bucket_mut();
     let n = root_bucket.materialize_root();
     n.put(b"00000001", b"00000001", b"0123456701234567", ZERO_PGID, 0);
     n.put(b"00000002", b"00000002", b"0123456701234567", ZERO_PGID, 0);
@@ -811,8 +811,8 @@ mod test {
   fn test_node_split_min_keys() -> crate::Result<()> {
     let mut test_db = TestDb::new()?;
     let tx = test_db.begin_mut();
-    let txrw = tx.unseal();
-    let root_bucket = txrw.root_bucket();
+    let txrw = tx.unseal_rw();
+    let root_bucket = txrw.root_bucket_mut();
     let n = root_bucket.materialize_root();
     n.put(b"00000001", b"00000001", b"0123456701234567", ZERO_PGID, 0);
     n.put(b"00000002", b"00000002", b"0123456701234567", ZERO_PGID, 0);
@@ -825,8 +825,8 @@ mod test {
   fn test_node_split_single_page() -> crate::Result<()> {
     let mut test_db = TestDb::new()?;
     let tx = test_db.begin_mut();
-    let txrw = tx.unseal();
-    let root_bucket = txrw.root_bucket();
+    let txrw = tx.unseal_rw();
+    let root_bucket = txrw.root_bucket_mut();
     let n = root_bucket.materialize_root();
     n.put(b"00000001", b"00000001", b"0123456701234567", ZERO_PGID, 0);
     n.put(b"00000002", b"00000002", b"0123456701234567", ZERO_PGID, 0);

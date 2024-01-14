@@ -29,7 +29,7 @@ Features:
 - [ ] Optional fsync
 - [ ] Optional mlock
 - [ ] Strict mode
-- [ ] impl trait for public apis?
+- [x] impl trait for public apis?
 - [ ] blag post
 
 ### Open Questions

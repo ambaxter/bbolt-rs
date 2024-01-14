@@ -31,8 +31,6 @@ pub trait BucketApi<'tx>
 where
   Self: Sized,
 {
-  type CursorType: CursorApi<'tx>;
-
   /// Root returns the root of the bucket.
   fn root(&self) -> PgId;
 
@@ -42,12 +40,12 @@ where
   /// Cursor creates a cursor associated with the bucket.
   /// The cursor is only valid as long as the transaction is open.
   /// Do not use a cursor after the transaction is closed.
-  fn cursor(&self) -> Self::CursorType;
+  fn cursor(&self) -> impl CursorApi<'tx>;
 
   /// Bucket retrieves a nested bucket by name.
   /// Returns nil if the bucket does not exist.
   /// The bucket instance is only valid for the lifetime of the transaction.
-  fn bucket<T: AsRef<[u8]>>(&self, name: T) -> Option<Self>;
+  fn bucket<T: AsRef<[u8]>>(&self, name: T) -> Option<impl BucketApi<'tx>>;
 
   /// Get retrieves the value for a key in the bucket.
   /// Returns a nil value if the key does not exist or if the key is a nested bucket.
@@ -73,22 +71,24 @@ where
 }
 
 pub trait BucketRwApi<'tx>: BucketApi<'tx> {
-  type CursorRwType: CursorRwApi<'tx>;
+
+  fn bucket_mut<T: AsRef<[u8]>>(&mut self, name: T) -> Option<impl BucketRwApi<'tx>>;
+
 
   /// CreateBucket creates a new bucket at the given key and returns the new bucket.
   /// Returns an error if the key already exists, if the bucket name is blank, or if the bucket name is too long.
   /// The bucket instance is only valid for the lifetime of the transaction.
-  fn create_bucket<T: AsRef<[u8]>>(&mut self, key: T) -> crate::Result<Self>;
+  fn create_bucket<T: AsRef<[u8]>>(&mut self, key: T) -> crate::Result<impl BucketRwApi<'tx>>;
 
   /// CreateBucketIfNotExists creates a new bucket if it doesn't already exist and returns a reference to it.
   /// Returns an error if the bucket name is blank, or if the bucket name is too long.
   /// The bucket instance is only valid for the lifetime of the transaction.
-  fn create_bucket_if_not_exists<T: AsRef<[u8]>>(&mut self, key: T) -> crate::Result<Self>;
+  fn create_bucket_if_not_exists<T: AsRef<[u8]>>(&mut self, key: T) -> crate::Result<impl BucketRwApi<'tx>>;
 
   /// Cursor creates a cursor associated with the bucket.
   /// The cursor is only valid as long as the transaction is open.
   /// Do not use a cursor after the transaction is closed.
-  fn cursor_mut(&self) -> Self::CursorRwType;
+  fn cursor_mut(&self) -> impl CursorRwApi<'tx>;
 
   /// DeleteBucket deletes a bucket at the given key.
   /// Returns an error if the bucket does not exist, or if the key represents a non-bucket value.
@@ -123,7 +123,6 @@ impl<'tx> From<BucketCell<'tx>> for BucketImpl<'tx> {
 }
 
 impl<'tx> BucketApi<'tx> for BucketImpl<'tx> {
-  type CursorType = CursorImpl<'tx, InnerCursor<'tx, TxCell<'tx>, BucketCell<'tx>>>;
 
   fn root(&self) -> PgId {
     self.b.root()
@@ -133,12 +132,12 @@ impl<'tx> BucketApi<'tx> for BucketImpl<'tx> {
     self.b.is_writeable()
   }
 
-  fn cursor(&self) -> Self::CursorType {
+  fn cursor(&self) -> impl CursorApi<'tx> {
     CursorImpl::new(InnerCursor::new(self.b, self.b.api_tx().bump()))
   }
 
-  fn bucket<T: AsRef<[u8]>>(&self, name: T) -> Option<Self> {
-    self.b.api_bucket(name.as_ref()).map(|b| BucketImpl { b })
+  fn bucket<T: AsRef<[u8]>>(&self, name: T) -> Option<impl BucketApi<'tx>> {
+    self.b.api_bucket(name.as_ref()).map(BucketImpl::from)
   }
 
   fn get<T: AsRef<[u8]>>(&self, key: T) -> Option<&'tx [u8]> {
@@ -175,7 +174,6 @@ impl<'tx> From<BucketRwCell<'tx>> for BucketRwImpl<'tx> {
 }
 
 impl<'tx> BucketApi<'tx> for BucketRwImpl<'tx> {
-  type CursorType = CursorImpl<'tx, InnerCursor<'tx, TxRwCell<'tx>, BucketRwCell<'tx>>>;
 
   fn root(&self) -> PgId {
     self.b.root()
@@ -185,12 +183,12 @@ impl<'tx> BucketApi<'tx> for BucketRwImpl<'tx> {
     self.b.is_writeable()
   }
 
-  fn cursor(&self) -> Self::CursorType {
+  fn cursor(&self) -> impl CursorApi<'tx> {
     CursorImpl::new(InnerCursor::new(self.b, self.b.api_tx().bump()))
   }
 
-  fn bucket<T: AsRef<[u8]>>(&self, name: T) -> Option<Self> {
-    self.b.api_bucket(name.as_ref()).map(|b| BucketRwImpl { b })
+  fn bucket<T: AsRef<[u8]>>(&self, name: T) -> Option<impl BucketApi<'tx>> {
+    self.b.api_bucket(name.as_ref()).map(BucketRwImpl::from)
   }
 
   fn get<T: AsRef<[u8]>>(&self, key: T) -> Option<&'tx [u8]> {
@@ -217,23 +215,26 @@ impl<'tx> BucketApi<'tx> for BucketRwImpl<'tx> {
 }
 
 impl<'tx> BucketRwApi<'tx> for BucketRwImpl<'tx> {
-  type CursorRwType = CursorRwImpl<'tx, InnerCursor<'tx, TxRwCell<'tx>, BucketRwCell<'tx>>>;
 
-  fn create_bucket<T: AsRef<[u8]>>(&mut self, key: T) -> crate::Result<Self> {
+  fn bucket_mut<T: AsRef<[u8]>>(&mut self, name: T) -> Option<impl BucketRwApi<'tx>> {
+    self.b.api_bucket(name.as_ref()).map(BucketRwImpl::from)
+  }
+
+  fn create_bucket<T: AsRef<[u8]>>(&mut self, key: T) -> crate::Result<impl BucketRwApi<'tx>> {
     self
       .b
       .api_create_bucket(key.as_ref())
-      .map(|b| BucketRwImpl { b })
+      .map(BucketRwImpl::from)
   }
 
-  fn create_bucket_if_not_exists<T: AsRef<[u8]>>(&mut self, key: T) -> crate::Result<Self> {
+  fn create_bucket_if_not_exists<T: AsRef<[u8]>>(&mut self, key: T) -> crate::Result<impl BucketRwApi<'tx>> {
     self
       .b
       .api_create_bucket_if_not_exists(key.as_ref())
-      .map(|b| BucketRwImpl { b })
+      .map(BucketRwImpl::from)
   }
 
-  fn cursor_mut(&self) -> Self::CursorRwType {
+  fn cursor_mut(&self) -> impl CursorRwApi<'tx> {
     CursorRwImpl::new(InnerCursor::new(self.b, self.b.api_tx().bump()))
   }
 
@@ -1303,22 +1304,20 @@ impl<'tx> BucketRwIApi<'tx> for BucketRwCell<'tx> {
 
 #[cfg(test)]
 mod tests {
-  use crate::bucket::{BucketRwImpl, MAX_VALUE_SIZE};
+  use crate::bucket::{MAX_VALUE_SIZE};
   use crate::test_support::TestDb;
   use crate::{
     BucketApi, BucketRwApi, CursorApi, CursorRwApi, DbApi, DbRwAPI, Error, TxApi, TxRwApi,
   };
   use anyhow::anyhow;
-  use itertools::Itertools;
   use std::cell::RefCell;
-  use std::fmt::format;
   use std::sync::atomic::{AtomicU32, Ordering};
 
   #[test]
   fn test_bucket_get_non_existent() -> crate::Result<()> {
     let mut db = TestDb::new()?;
     db.update(|mut tx| {
-      let mut b = tx.create_bucket(b"widgets")?;
+      let b = tx.create_bucket(b"widgets")?;
       assert_eq!(None, b.get(b"foo"));
       Ok(())
     })?;
@@ -1342,7 +1341,7 @@ mod tests {
     let mut db = TestDb::new()?;
     db.update(|mut tx| {
       let _ = tx.create_bucket(b"widgets")?;
-      tx.bucket(b"widgets").unwrap().create_bucket(b"foo")?;
+      tx.bucket_mut(b"widgets").unwrap().create_bucket(b"foo")?;
       assert_eq!(None, tx.bucket(b"widgets").unwrap().get(b"foo"));
       Ok(())
     })?;
@@ -1376,8 +1375,10 @@ mod tests {
   fn test_bucket_put() -> crate::Result<()> {
     let mut db = TestDb::new()?;
     db.update(|mut tx| {
-      let mut b = tx.create_bucket(b"widgets")?;
-      b.put(b"foo", b"bar")?;
+      {
+        let mut b = tx.create_bucket(b"widgets")?;
+        b.put(b"foo", b"bar")?;
+      }
 
       assert_eq!(
         Some(b"bar".as_slice()),
@@ -1391,9 +1392,11 @@ mod tests {
   fn test_bucket_put_repeat() -> crate::Result<()> {
     let mut db = TestDb::new()?;
     db.update(|mut tx| {
-      let mut b = tx.create_bucket(b"widgets")?;
-      b.put(b"foo", b"bar")?;
-      b.put(b"foo", b"baz")?;
+      {
+        let mut b = tx.create_bucket(b"widgets")?;
+        b.put(b"foo", b"bar")?;
+        b.put(b"foo", b"baz")?;
+      }
 
       assert_eq!(
         Some(b"baz".as_slice()),
@@ -1452,10 +1455,10 @@ mod tests {
   fn test_bucket_put_incompatible_value() -> crate::Result<()> {
     let mut db = TestDb::new_tmp()?;
     db.update(|mut tx| {
-      let mut b0 = tx.create_bucket(b"widgets")?;
-      tx.bucket(b"widgets").unwrap().create_bucket(b"foo")?;
+      let _ = tx.create_bucket(b"widgets")?;
+      tx.bucket_mut(b"widgets").unwrap().create_bucket(b"foo")?;
 
-      assert_eq!(Err(Error::IncompatibleValue), b0.put(b"foo", b"bar"));
+      assert_eq!(Err(Error::IncompatibleValue), tx.bucket_mut(b"widgets").unwrap().put(b"foo", b"bar"));
       Ok(())
     })
   }
@@ -1494,7 +1497,7 @@ mod tests {
       Ok(())
     })?;
     db.update(|mut tx| {
-      let mut b = tx.bucket(b"widgets").unwrap();
+      let mut b = tx.bucket_mut(b"widgets").unwrap();
       for i in 0..100 {
         b.delete(format!("{}", i).as_bytes())?;
       }
@@ -1532,7 +1535,7 @@ mod tests {
       println!("i: {}", i);
     }
     db.update(|mut tx| {
-      let b = tx.bucket(b"0").unwrap();
+      let b = tx.bucket_mut(b"0").unwrap();
       let mut c = b.cursor_mut();
       let mut node = c.first();
       while node.is_some() {
@@ -1554,7 +1557,7 @@ mod tests {
       Ok(())
     })?;
     db.update(|mut tx| {
-      let mut b = tx.bucket(b"widgets").unwrap();
+      let mut b = tx.bucket_mut(b"widgets").unwrap();
       b.delete(b"foo")?;
       assert!(
         b.bucket(b"nested").is_some(),
@@ -1581,13 +1584,13 @@ mod tests {
     })?;
     db.must_check_rw();
     db.update(|mut tx| {
-      let mut b = tx.bucket(b"widgets").unwrap();
+      let mut b = tx.bucket_mut(b"widgets").unwrap();
       b.put(b"bar", b"xxxx")?;
       Ok(())
     })?;
     db.must_check_rw();
     db.update(|mut tx| {
-      let mut b = tx.bucket(b"widgets").unwrap();
+      let mut b = tx.bucket_mut(b"widgets").unwrap();
       for i in 0..10000 {
         let s = format!("{}", i);
         b.put(s.as_bytes(), s.as_bytes())?;
@@ -1596,9 +1599,11 @@ mod tests {
     })?;
     db.must_check_rw();
     db.update(|mut tx| {
-      let mut b = tx.bucket(b"widgets").unwrap();
-      let mut foo = b.bucket(b"foo").unwrap();
-      foo.put(b"baz", b"yyyy")?;
+      let mut b = tx.bucket_mut(b"widgets").unwrap();
+      {
+        let mut foo = b.bucket_mut(b"foo").unwrap();
+        foo.put(b"baz", b"yyyy")?;
+      }
       b.put(b"bar", b"xxxx")?;
       Ok(())
     })?;
@@ -1645,11 +1650,13 @@ mod tests {
   fn test_bucket_delete_bucket_nested() -> crate::Result<()> {
     let mut db = TestDb::new_tmp()?;
     db.update(|mut tx| {
-      let mut widgets = tx.create_bucket(b"widgets")?;
-      let mut foo = widgets.create_bucket(b"foo")?;
-      let mut bar = foo.create_bucket(b"bar")?;
-      bar.put(b"baz", b"bat")?;
-      tx.bucket(b"widgets").unwrap().delete_bucket(b"foo")?;
+      {
+        let mut widgets = tx.create_bucket(b"widgets")?;
+        let mut foo = widgets.create_bucket(b"foo")?;
+        let mut bar = foo.create_bucket(b"bar")?;
+        bar.put(b"baz", b"bat")?;
+      }
+      tx.bucket_mut(b"widgets").unwrap().delete_bucket(b"foo")?;
       Ok(())
     })?;
     Ok(())
@@ -1667,10 +1674,12 @@ mod tests {
       Ok(())
     })?;
     db.update(|mut tx| {
-      let mut widgets = tx.bucket(b"widgets").unwrap();
-      let mut foo = widgets.bucket(b"foo").unwrap();
-      let mut bar = foo.bucket(b"bar").unwrap();
-      assert_eq!(Some(b"bat".as_slice()), bar.get(b"baz"));
+      {
+        let widgets = tx.bucket(b"widgets").unwrap();
+        let foo = widgets.bucket(b"foo").unwrap();
+        let bar = foo.bucket(b"bar").unwrap();
+        assert_eq!(Some(b"bat".as_slice()), bar.get(b"baz"));
+      }
       tx.delete_bucket(b"widgets")?;
       Ok(())
     })?;
@@ -1767,10 +1776,14 @@ mod tests {
   fn test_bucket_next_sequence() -> crate::Result<()> {
     let mut db = TestDb::new_tmp()?;
     db.update(|mut tx| {
-      let mut widgets = tx.create_bucket(b"widgets")?;
-      let mut woojits = tx.create_bucket(b"woojits")?;
-      assert_eq!(1, widgets.next_sequence()?);
-      assert_eq!(2, widgets.next_sequence()?);
+      let _ = tx.create_bucket(b"widgets")?;
+      let _ = tx.create_bucket(b"woojits")?;
+      {
+        let mut widgets = tx.bucket_mut("widgets").unwrap();
+        assert_eq!(1, widgets.next_sequence()?);
+        assert_eq!(2, widgets.next_sequence()?);
+      }
+      let mut woojits = tx.bucket_mut("woojits").unwrap();
       assert_eq!(1, woojits.next_sequence()?);
 
       Ok(())
@@ -1789,12 +1802,12 @@ mod tests {
       Ok(())
     })?;
     db.update(|mut tx| {
-      let mut widgets = tx.bucket(b"widgets").unwrap();
+      let mut widgets = tx.bucket_mut(b"widgets").unwrap();
       assert_eq!(1, widgets.next_sequence()?);
       Ok(())
     })?;
     db.update(|mut tx| {
-      let mut widgets = tx.bucket(b"widgets").unwrap();
+      let mut widgets = tx.bucket_mut(b"widgets").unwrap();
       assert_eq!(2, widgets.next_sequence()?);
       Ok(())
     })?;
@@ -1932,11 +1945,12 @@ mod tests {
   fn test_bucket_for_each_short_circuit() -> crate::Result<()> {
     let mut db = TestDb::new_tmp()?;
     let result = db.update(|mut tx| {
-      let mut b = tx.create_bucket(b"widgets")?;
-      b.put(b"bar", b"0000")?;
-      b.put(b"baz", b"0000")?;
-      b.put(b"foo", b"0000")?;
-
+      {
+        let mut b = tx.create_bucket(b"widgets")?;
+        b.put(b"bar", b"0000")?;
+        b.put(b"baz", b"0000")?;
+        b.put(b"foo", b"0000")?;
+      }
       let index = AtomicU32::new(0);
       tx.bucket(b"widgets").unwrap().for_each(|k, v| {
         index.fetch_add(1, Ordering::Relaxed);

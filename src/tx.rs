@@ -8,7 +8,7 @@ use crate::common::tree::{MappedBranchPage, TreePage};
 use crate::common::{BVec, HashMap, PgId, SplitRef, TxId};
 use crate::cursor::{CursorImpl, CursorRwIApi, CursorRwImpl, InnerCursor};
 use crate::db::{DBShared, DbGuard, DbIApi, DbRwIApi};
-use crate::{BucketApi, CursorApi, CursorRwApi};
+use crate::{BucketApi, BucketRwApi, CursorApi, CursorRwApi};
 use aliasable::boxed::AliasableBox;
 use aligners::{alignment, AlignedBytes};
 use bumpalo::Bump;
@@ -26,10 +26,9 @@ use std::ptr::{addr_of, addr_of_mut};
 use std::rc::Rc;
 use std::slice::from_raw_parts_mut;
 use std::time::{Duration, Instant};
+use crate::tx::check::{TxICheck, UnsealTx};
 
 pub trait TxApi<'tx> {
-  type CursorType: CursorApi<'tx>;
-  type BucketType: BucketApi<'tx>;
 
   /// ID returns the transaction id.
   fn id(&self) -> TxId;
@@ -44,7 +43,7 @@ pub trait TxApi<'tx> {
   /// All items in the cursor will return a nil value because all root bucket keys point to buckets.
   /// The cursor is only valid as long as the transaction is open.
   /// Do not use a cursor after the transaction is closed.
-  fn cursor(&self) -> Self::CursorType;
+  fn cursor(&self) -> impl CursorApi<'tx>;
 
   /// Stats retrieves a copy of the current transaction statistics.
   fn stats(&self) -> TxStats;
@@ -52,9 +51,9 @@ pub trait TxApi<'tx> {
   /// Bucket retrieves a bucket by name.
   /// Returns nil if the bucket does not exist.
   /// The bucket instance is only valid for the lifetime of the transaction.
-  fn bucket<T: AsRef<[u8]>>(&self, name: T) -> Option<Self::BucketType>;
+  fn bucket<T: AsRef<[u8]>>(&self, name: T) -> Option<impl BucketApi<'tx>>;
 
-  fn for_each<F: FnMut(&[u8], Self::BucketType)>(&self, f: F) -> crate::Result<()>;
+  fn for_each<F: FnMut(&[u8], &dyn BucketApi<'tx>)>(&self, f: F) -> crate::Result<()>;
 
   /// Rollback closes the transaction and ignores all previous updates. Read-only
   /// transactions must be rolled back and not committed.
@@ -65,7 +64,7 @@ pub trait TxApi<'tx> {
   fn page(&self, id: PgId) -> crate::Result<Option<PageInfo>>;
 }
 
-pub trait TxRwApi<'tx>: TxApi<'tx> {
+pub trait TxRwApi<'tx>: TxApi<'tx> + UnsealTx<'tx> {
   type CursorRwType: CursorRwApi<'tx>;
 
   /// Cursor creates a cursor associated with the root bucket.
@@ -74,17 +73,20 @@ pub trait TxRwApi<'tx>: TxApi<'tx> {
   /// Do not use a cursor after the transaction is closed.
   fn cursor_mut(&mut self) -> Self::CursorRwType;
 
+  fn bucket_mut<T: AsRef<[u8]>>(&mut self, name: T) -> Option<impl BucketRwApi<'tx>>;
+
+
   /// CreateBucket creates a new bucket.
   /// Returns an error if the bucket already exists, if the bucket name is blank, or if the bucket name is too long.
   /// The bucket instance is only valid for the lifetime of the transaction.
-  fn create_bucket<T: AsRef<[u8]>>(&mut self, name: T) -> crate::Result<Self::BucketType>;
+  fn create_bucket<T: AsRef<[u8]>>(&mut self, name: T) -> crate::Result<impl BucketRwApi<'tx>>;
 
   /// CreateBucketIfNotExists creates a new bucket if it doesn't already exist.
   /// Returns an error if the bucket name is blank, or if the bucket name is too long.
   /// The bucket instance is only valid for the lifetime of the transaction.
   fn create_bucket_if_not_exists<T: AsRef<[u8]>>(
     &mut self, name: T,
-  ) -> crate::Result<Self::BucketType>;
+  ) -> crate::Result<impl BucketRwApi<'tx>>;
 
   /// DeleteBucket deletes a bucket.
   /// Returns an error if the bucket cannot be found or if the key represents a non-bucket value.
@@ -350,9 +352,11 @@ pub(crate) trait TxIApi<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
   fn close(self) -> crate::Result<()>;
 }
 
-pub(crate) trait TxRwIApi<'tx>: TxIApi<'tx> {
+pub(crate) trait TxRwIApi<'tx>: TxIApi<'tx> + TxICheck<'tx> {
   type CursorRwType: CursorRwIApi<'tx>;
   fn freelist_free_page(self, txid: TxId, p: &Page);
+
+  fn root_bucket_mut(self) -> BucketRwCell<'tx>;
 
   fn allocate(
     self, count: usize,
@@ -523,6 +527,10 @@ impl<'tx> TxRwIApi<'tx> for TxRwCell<'tx> {
 
   fn freelist_free_page(self, txid: TxId, p: &Page) {
     self.cell.borrow().r.db.get_rw().unwrap().free_page(txid, p)
+  }
+
+  fn root_bucket_mut(self) -> BucketRwCell<'tx> {
+    self.split_bound()
   }
 
   fn allocate(
@@ -704,9 +712,23 @@ impl<'tx> Drop for TxImpl<'tx> {
   }
 }
 
+trait TxApi2<'tx> {
+  fn cursor2(&self) -> impl CursorApi<'tx>;
+
+  fn bucket2<T: AsRef<[u8]>>(&self, key: T ) -> Option<impl BucketApi<'tx>>;
+}
+
+impl<'tx> TxApi2<'tx> for TxImpl<'tx> {
+  fn cursor2(&self) -> impl CursorApi<'tx> {
+    CursorImpl::new(self.tx.api_cursor())
+  }
+
+  fn bucket2<T: AsRef<[u8]>>(&self, name: T) -> Option<impl BucketApi<'tx>> {
+    self.tx.api_bucket(name.as_ref()).map(BucketImpl::from)
+  }
+}
+
 impl<'tx> TxApi<'tx> for TxImpl<'tx> {
-  type CursorType = CursorImpl<'tx, InnerCursor<'tx, TxCell<'tx>, BucketCell<'tx>>>;
-  type BucketType = BucketImpl<'tx>;
 
   fn id(&self) -> TxId {
     self.tx.api_id()
@@ -720,19 +742,19 @@ impl<'tx> TxApi<'tx> for TxImpl<'tx> {
     false
   }
 
-  fn cursor(&self) -> Self::CursorType {
-    self.tx.api_cursor().into()
+  fn cursor(&self) -> impl CursorApi<'tx> {
+    CursorImpl::new(self.tx.api_cursor())
   }
 
   fn stats(&self) -> TxStats {
     self.tx.api_stats()
   }
 
-  fn bucket<T: AsRef<[u8]>>(&self, name: T) -> Option<Self::BucketType> {
-    self.tx.api_bucket(name.as_ref()).map(|b| b.into())
+  fn bucket<T: AsRef<[u8]>>(&self, name: T) -> Option<impl BucketApi<'tx>> {
+    self.tx.api_bucket(name.as_ref()).map(BucketImpl::from)
   }
 
-  fn for_each<F: FnMut(&[u8], Self::BucketType)>(&self, f: F) -> crate::Result<()> {
+  fn for_each<F: FnMut(&[u8], &dyn BucketApi<'tx>)>(&self, f: F)-> crate::Result<()> {
     todo!()
   }
 
@@ -752,8 +774,6 @@ pub struct TxRef<'tx> {
 }
 
 impl<'tx> TxApi<'tx> for TxRef<'tx> {
-  type CursorType = CursorImpl<'tx, InnerCursor<'tx, TxCell<'tx>, BucketCell<'tx>>>;
-  type BucketType = BucketImpl<'tx>;
 
   fn id(&self) -> TxId {
     self.tx.api_id()
@@ -767,19 +787,19 @@ impl<'tx> TxApi<'tx> for TxRef<'tx> {
     false
   }
 
-  fn cursor(&self) -> Self::CursorType {
-    self.tx.api_cursor().into()
+  fn cursor(&self) -> impl CursorApi<'tx> {
+    CursorImpl::new(self.tx.api_cursor())
   }
 
   fn stats(&self) -> TxStats {
     self.tx.api_stats()
   }
 
-  fn bucket<T: AsRef<[u8]>>(&self, name: T) -> Option<Self::BucketType> {
-    self.tx.api_bucket(name.as_ref()).map(|b| b.into())
+  fn bucket<T: AsRef<[u8]>>(&self, name: T) -> Option<impl BucketApi<'tx>> {
+    self.tx.api_bucket(name.as_ref()).map(BucketImpl::from)
   }
 
-  fn for_each<F: FnMut(&[u8], Self::BucketType)>(&self, f: F) -> crate::Result<()> {
+  fn for_each<F: FnMut(&[u8], &dyn BucketApi<'tx>)>(&self, f: F)-> crate::Result<()> {
     todo!()
   }
 
@@ -873,8 +893,6 @@ impl<'tx> Drop for TxRwImpl<'tx> {
 }
 
 impl<'tx> TxApi<'tx> for TxRwImpl<'tx> {
-  type CursorType = CursorImpl<'tx, InnerCursor<'tx, TxRwCell<'tx>, BucketRwCell<'tx>>>;
-  type BucketType = BucketRwImpl<'tx>;
 
   fn id(&self) -> TxId {
     self.tx.api_id()
@@ -888,19 +906,19 @@ impl<'tx> TxApi<'tx> for TxRwImpl<'tx> {
     true
   }
 
-  fn cursor(&self) -> Self::CursorType {
-    self.tx.api_cursor().into()
+  fn cursor(&self) -> impl CursorApi<'tx> {
+    CursorImpl::new(self.tx.api_cursor())
   }
 
   fn stats(&self) -> TxStats {
     self.tx.api_stats()
   }
 
-  fn bucket<T: AsRef<[u8]>>(&self, name: T) -> Option<Self::BucketType> {
-    self.tx.api_bucket(name.as_ref()).map(|b| b.into())
+  fn bucket<T: AsRef<[u8]>>(&self, name: T) -> Option<impl BucketApi<'tx>> {
+    self.tx.api_bucket(name.as_ref()).map(BucketRwImpl::from)
   }
 
-  fn for_each<F: FnMut(&[u8], Self::BucketType)>(&self, f: F) -> crate::Result<()> {
+  fn for_each<F: FnMut(&[u8], & dyn BucketApi<'tx>)>(&self, f: F) -> crate::Result<()> {
     //self.tx.api_for_each(f)
     // TODO: mismatching bucket types
     todo!()
@@ -922,17 +940,22 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
     self.tx.api_cursor_mut().into()
   }
 
-  fn create_bucket<T: AsRef<[u8]>>(&mut self, name: T) -> crate::Result<Self::BucketType> {
-    self.tx.api_create_bucket(name.as_ref()).map(|b| b.into())
+  fn bucket_mut<T: AsRef<[u8]>>(&mut self, name: T) -> Option<impl BucketRwApi<'tx>> {
+    self.tx.api_bucket(name.as_ref()).map(BucketRwImpl::from)
+
+  }
+
+  fn create_bucket<T: AsRef<[u8]>>(&mut self, name: T) -> crate::Result<impl BucketRwApi<'tx>> {
+    self.tx.api_create_bucket(name.as_ref()).map(BucketRwImpl::from)
   }
 
   fn create_bucket_if_not_exists<T: AsRef<[u8]>>(
     &mut self, name: T,
-  ) -> crate::Result<Self::BucketType> {
+  ) -> crate::Result<impl BucketRwApi<'tx>> {
     self
       .tx
       .api_create_bucket_if_not_exist(name.as_ref())
-      .map(|b| b.into())
+      .map(BucketRwImpl::from)
   }
 
   fn delete_bucket<T: AsRef<[u8]>>(&mut self, name: T) -> crate::Result<()> {
@@ -1033,8 +1056,6 @@ pub struct TxRwRef<'tx> {
 }
 
 impl<'tx> TxApi<'tx> for TxRwRef<'tx> {
-  type CursorType = CursorImpl<'tx, InnerCursor<'tx, TxRwCell<'tx>, BucketRwCell<'tx>>>;
-  type BucketType = BucketRwImpl<'tx>;
 
   fn id(&self) -> TxId {
     self.tx.api_id()
@@ -1048,19 +1069,19 @@ impl<'tx> TxApi<'tx> for TxRwRef<'tx> {
     true
   }
 
-  fn cursor(&self) -> Self::CursorType {
-    self.tx.api_cursor().into()
+  fn cursor(&self) -> impl CursorApi<'tx> {
+    CursorImpl::new(self.tx.api_cursor())
   }
 
   fn stats(&self) -> TxStats {
     self.tx.api_stats()
   }
 
-  fn bucket<T: AsRef<[u8]>>(&self, name: T) -> Option<Self::BucketType> {
-    self.tx.api_bucket(name.as_ref()).map(|b| b.into())
+  fn bucket<T: AsRef<[u8]>>(&self, name: T) -> Option<impl BucketApi<'tx>> {
+    self.tx.api_bucket(name.as_ref()).map(BucketRwImpl::from)
   }
 
-  fn for_each<F: FnMut(&[u8], Self::BucketType)>(&self, f: F) -> crate::Result<()> {
+  fn for_each<F: FnMut(&[u8], &dyn BucketApi<'tx>)>(&self, f: F) -> crate::Result<()> {
     todo!()
   }
 
@@ -1080,17 +1101,21 @@ impl<'tx> TxRwApi<'tx> for TxRwRef<'tx> {
     self.tx.api_cursor_mut().into()
   }
 
-  fn create_bucket<T: AsRef<[u8]>>(&mut self, name: T) -> crate::Result<Self::BucketType> {
-    self.tx.api_create_bucket(name.as_ref()).map(|b| b.into())
+  fn bucket_mut<T: AsRef<[u8]>>(&mut self, name: T) -> Option<impl BucketRwApi<'tx>> {
+    self.tx.api_bucket(name.as_ref()).map(BucketRwImpl::from)
+  }
+
+  fn create_bucket<T: AsRef<[u8]>>(&mut self, name: T) -> crate::Result<impl BucketRwApi<'tx>> {
+    self.tx.api_create_bucket(name.as_ref()).map(BucketRwImpl::from)
   }
 
   fn create_bucket_if_not_exists<T: AsRef<[u8]>>(
     &mut self, name: T,
-  ) -> crate::Result<Self::BucketType> {
+  ) -> crate::Result<impl BucketRwApi<'tx>> {
     self
       .tx
       .api_create_bucket_if_not_exist(name.as_ref())
-      .map(|b| b.into())
+      .map(BucketRwImpl::from)
   }
 
   fn delete_bucket<T: AsRef<[u8]>>(&mut self, name: T) -> crate::Result<()> {
@@ -1107,12 +1132,10 @@ pub(crate) mod check {
   use crate::common::page::{CoerciblePage, RefPage};
   use crate::common::tree::{MappedBranchPage, MappedLeafPage, TreePage};
   use crate::common::{BVec, HashMap, HashSet, PgId, ZERO_PGID};
-  use crate::tx::{TxCell, TxIApi, TxRwCell, TxRwImpl, TxRwRef};
+  use crate::tx::{TxCell, TxIApi, TxRwCell, TxRwIApi, TxRwImpl, TxRwRef};
 
   pub(crate) trait UnsealTx<'tx> {
-    type Unsealed: TxICheck<'tx>;
-
-    fn unseal(&self) -> Self::Unsealed;
+    fn unseal_rw(&self) -> impl TxRwIApi<'tx>;
   }
   /*
   impl<'tx> UnsealTx<'tx> for TxImpl<'tx> {
@@ -1132,17 +1155,14 @@ pub(crate) mod check {
   }*/
 
   impl<'tx> UnsealTx<'tx> for TxRwImpl<'tx> {
-    type Unsealed = TxRwCell<'tx>;
 
-    fn unseal(&self) -> Self::Unsealed {
+    fn unseal_rw(&self) -> impl TxRwIApi<'tx> {
       TxRwCell { cell: self.tx.cell }
     }
   }
 
   impl<'tx> UnsealTx<'tx> for TxRwRef<'tx> {
-    type Unsealed = TxRwCell<'tx>;
-
-    fn unseal(&self) -> Self::Unsealed {
+    fn unseal_rw(&self) -> impl TxRwIApi<'tx> {
       self.tx
     }
   }
@@ -1157,7 +1177,7 @@ pub(crate) mod check {
   /// the same time.
   pub trait TxCheck<'tx>: UnsealTx<'tx> {
     fn check(&self) -> Vec<String> {
-      let i_tx = self.unseal();
+      let i_tx = self.unseal_rw();
       i_tx.check()
     }
   }

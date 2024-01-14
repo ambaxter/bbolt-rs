@@ -683,14 +683,14 @@ mod tests {
       let mut b = tx.create_bucket(b"widgets")?;
       for i in 0..count {
         let be_i = i.to_be_bytes();
-        b.put(&be_i, &value)?;
+        b.put(be_i, value)?;
       }
       let _ = b.create_bucket(b"sub")?;
       Ok(())
     })?;
     db.must_check_rw();
     db.update(|mut tx| {
-      let b = tx.bucket(b"widgets").unwrap();
+      let b = tx.bucket_mut(b"widgets").unwrap();
       let mut c = b.cursor_mut();
       let bound = (count / 2).to_be_bytes();
       let (mut key, _) = c.first().unwrap();
@@ -790,19 +790,21 @@ mod tests {
     let mut db = TestDb::new()?;
     db.update(|mut tx| {
       let mut b = tx.create_bucket(b"widgets")?;
-      b.put(b"baz", &[])?;
-      b.put(b"foo", &[0])?;
-      b.put(b"bar", &[1])?;
+      b.put(b"baz", [])?;
+      b.put(b"foo", [0])?;
+      b.put(b"bar", [1])?;
       Ok(())
     })?;
     let tx = db.begin();
-    let b = tx.bucket(b"widgets").unwrap();
-    let mut c = b.cursor();
-    assert_eq!(Some((b"bar".as_slice(), Some([1].as_slice()))), c.first());
-    assert_eq!(Some((b"baz".as_slice(), Some([].as_slice()))), c.next());
-    assert_eq!(Some((b"foo".as_slice(), Some([0].as_slice()))), c.next());
-    assert_eq!(None, c.next());
-    assert_eq!(None, c.next());
+    {
+      let b = tx.bucket(b"widgets").unwrap();
+      let mut c = b.cursor();
+      assert_eq!(Some((b"bar".as_slice(), Some([1].as_slice()))), c.first());
+      assert_eq!(Some((b"baz".as_slice(), Some([].as_slice()))), c.next());
+      assert_eq!(Some((b"foo".as_slice(), Some([0].as_slice()))), c.next());
+      assert_eq!(None, c.next());
+      assert_eq!(None, c.next());
+    }
     tx.rollback()
   }
 
@@ -811,19 +813,21 @@ mod tests {
     let mut db = TestDb::new()?;
     db.update(|mut tx| {
       let mut b = tx.create_bucket(b"widgets")?;
-      b.put(b"baz", &[])?;
-      b.put(b"foo", &[0])?;
-      b.put(b"bar", &[1])?;
+      b.put(b"baz", [])?;
+      b.put(b"foo", [0])?;
+      b.put(b"bar", [1])?;
       Ok(())
     })?;
     let tx = db.begin();
-    let b = tx.bucket(b"widgets").unwrap();
-    let mut c = b.cursor();
-    assert_eq!(Some((b"foo".as_slice(), Some([0].as_slice()))), c.last());
-    assert_eq!(Some((b"baz".as_slice(), Some([].as_slice()))), c.prev());
-    assert_eq!(Some((b"bar".as_slice(), Some([1].as_slice()))), c.prev());
-    assert_eq!(None, c.prev());
-    assert_eq!(None, c.prev());
+    {
+      let b = tx.bucket(b"widgets").unwrap();
+      let mut c = b.cursor();
+      assert_eq!(Some((b"foo".as_slice(), Some([0].as_slice()))), c.last());
+      assert_eq!(Some((b"baz".as_slice(), Some([].as_slice()))), c.prev());
+      assert_eq!(Some((b"bar".as_slice(), Some([1].as_slice()))), c.prev());
+      assert_eq!(None, c.prev());
+      assert_eq!(None, c.prev());
+    }
     tx.rollback()
   }
 
@@ -837,12 +841,14 @@ mod tests {
       Ok(())
     })?;
     let tx = db.begin();
-    let b = tx.bucket(b"widgets").unwrap();
-    let mut c = b.cursor();
-    assert_eq!(Some((b"bar".as_slice(), Some([].as_slice()))), c.first());
-    assert_eq!(Some((b"foo".as_slice(), Some([].as_slice()))), c.next());
-    assert_eq!(Some((b"bar".as_slice(), Some([].as_slice()))), c.first());
-    assert_eq!(Some((b"foo".as_slice(), Some([].as_slice()))), c.next());
+    {
+      let b = tx.bucket(b"widgets").unwrap();
+      let mut c = b.cursor();
+      assert_eq!(Some((b"bar".as_slice(), Some([].as_slice()))), c.first());
+      assert_eq!(Some((b"foo".as_slice(), Some([].as_slice()))), c.next());
+      assert_eq!(Some((b"bar".as_slice(), Some([].as_slice()))), c.first());
+      assert_eq!(Some((b"foo".as_slice(), Some([].as_slice()))), c.next());
+    }
     tx.rollback()
   }
 
@@ -857,7 +863,7 @@ mod tests {
       Ok(())
     })?;
     db.update(|mut tx| {
-      let mut b = tx.bucket(b"widgets").unwrap();
+      let mut b = tx.bucket_mut(b"widgets").unwrap();
       for i in 1..600u64 {
         b.delete(bytemuck::bytes_of(&i))?;
       }
@@ -884,7 +890,7 @@ mod tests {
       Ok(())
     })?;
     db.update(|mut tx| {
-      let mut b = tx.bucket(b"widgets").unwrap();
+      let mut b = tx.bucket_mut(b"widgets").unwrap();
       for i in 200..1000u64 {
         b.delete(bytemuck::bytes_of(&i))?;
       }
