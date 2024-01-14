@@ -7,9 +7,9 @@ use crate::common::tree::{
   MappedBranchPage, MappedLeafPage, TreePage, BRANCH_PAGE_ELEMENT_SIZE, LEAF_PAGE_ELEMENT_SIZE,
 };
 use crate::common::{BVec, HashMap, PgId, SplitRef, ZERO_PGID};
-use crate::cursor::{CursorApi, CursorIAPI, CursorImpl, CursorRwIAPI, CursorRwImpl, InnerCursor};
+use crate::cursor::{CursorApi, CursorIApi, CursorImpl, CursorRwIApi, CursorRwImpl, InnerCursor};
 use crate::node::NodeRwCell;
-use crate::tx::{TxCell, TxIAPI, TxRwCell, TxRwIAPI};
+use crate::tx::{TxCell, TxIApi, TxRwCell, TxRwIApi};
 use crate::Error::{
   BucketExists, BucketNameRequired, BucketNotFound, IncompatibleValue, KeyRequired, KeyTooLarge,
   ValueTooLarge,
@@ -47,12 +47,12 @@ where
   /// Bucket retrieves a nested bucket by name.
   /// Returns nil if the bucket does not exist.
   /// The bucket instance is only valid for the lifetime of the transaction.
-  fn bucket(&self, name: &[u8]) -> Option<Self>;
+  fn bucket<T: AsRef<[u8]>>(&self, name: T) -> Option<Self>;
 
   /// Get retrieves the value for a key in the bucket.
   /// Returns a nil value if the key does not exist or if the key is a nested bucket.
   /// The returned value is only valid for the life of the transaction.
-  fn get(&self, key: &[u8]) -> Option<&'tx [u8]>;
+  fn get<T: AsRef<[u8]>>(&self, key: T) -> Option<&'tx [u8]>;
 
   /// Sequence returns the current integer for the bucket without incrementing it.
   fn sequence(&self) -> u64;
@@ -62,7 +62,9 @@ where
   /// If the provided function returns an error then the iteration is stopped and
   /// the error is returned to the caller. The provided function must not modify
   /// the bucket; this will result in undefined behavior.
-  fn for_each<F: Fn(&'tx [u8], Option<&'tx [u8]>) -> crate::Result<()>>(&self, f: F) -> crate::Result<()>;
+  fn for_each<F: Fn(&'tx [u8], Option<&'tx [u8]>) -> crate::Result<()>>(
+    &self, f: F,
+  ) -> crate::Result<()>;
 
   fn for_each_bucket<F: Fn(&'tx [u8]) -> crate::Result<()>>(&self, f: F) -> crate::Result<()>;
 
@@ -76,12 +78,12 @@ pub trait BucketRwApi<'tx>: BucketApi<'tx> {
   /// CreateBucket creates a new bucket at the given key and returns the new bucket.
   /// Returns an error if the key already exists, if the bucket name is blank, or if the bucket name is too long.
   /// The bucket instance is only valid for the lifetime of the transaction.
-  fn create_bucket(&mut self, key: &[u8]) -> crate::Result<Self>;
+  fn create_bucket<T: AsRef<[u8]>>(&mut self, key: T) -> crate::Result<Self>;
 
   /// CreateBucketIfNotExists creates a new bucket if it doesn't already exist and returns a reference to it.
   /// Returns an error if the bucket name is blank, or if the bucket name is too long.
   /// The bucket instance is only valid for the lifetime of the transaction.
-  fn create_bucket_if_not_exists(&mut self, key: &[u8]) -> crate::Result<Self>;
+  fn create_bucket_if_not_exists<T: AsRef<[u8]>>(&mut self, key: T) -> crate::Result<Self>;
 
   /// Cursor creates a cursor associated with the bucket.
   /// The cursor is only valid as long as the transaction is open.
@@ -90,18 +92,18 @@ pub trait BucketRwApi<'tx>: BucketApi<'tx> {
 
   /// DeleteBucket deletes a bucket at the given key.
   /// Returns an error if the bucket does not exist, or if the key represents a non-bucket value.
-  fn delete_bucket(&mut self, key: &[u8]) -> crate::Result<()>;
+  fn delete_bucket<T: AsRef<[u8]>>(&mut self, key: T) -> crate::Result<()>;
 
   /// Put sets the value for a key in the bucket.
   /// If the key exist then its previous value will be overwritten.
   /// Supplied value must remain valid for the life of the transaction.
   /// Returns an error if the bucket was created from a read-only transaction, if the key is blank, if the key is too large, or if the value is too large.
-  fn put(&mut self, key: &[u8], data: &[u8]) -> crate::Result<()>;
+  fn put<T: AsRef<[u8]>, U: AsRef<[u8]>>(&mut self, key: T, data: U) -> crate::Result<()>;
 
   /// Delete removes a key from the bucket.
   /// If the key does not exist then nothing is done and a nil error is returned.
   /// Returns an error if the bucket was created from a read-only transaction.
-  fn delete(&mut self, key: &[u8]) -> crate::Result<()>;
+  fn delete<T: AsRef<[u8]>>(&mut self, key: T) -> crate::Result<()>;
 
   /// SetSequence updates the sequence number for the bucket.
   fn set_sequence(&mut self, v: u64) -> crate::Result<()>;
@@ -135,19 +137,21 @@ impl<'tx> BucketApi<'tx> for BucketImpl<'tx> {
     CursorImpl::new(InnerCursor::new(self.b, self.b.api_tx().bump()))
   }
 
-  fn bucket(&self, name: &[u8]) -> Option<Self> {
-    self.b.api_bucket(name).map(|b| BucketImpl { b })
+  fn bucket<T: AsRef<[u8]>>(&self, name: T) -> Option<Self> {
+    self.b.api_bucket(name.as_ref()).map(|b| BucketImpl { b })
   }
 
-  fn get(&self, key: &[u8]) -> Option<&'tx [u8]> {
-    self.b.api_get(key)
+  fn get<T: AsRef<[u8]>>(&self, key: T) -> Option<&'tx [u8]> {
+    self.b.api_get(key.as_ref())
   }
 
   fn sequence(&self) -> u64 {
     self.b.api_sequence()
   }
 
-  fn for_each<F: Fn(&'tx [u8], Option<&'tx [u8]>) -> crate::Result<()>>(&self, f: F) -> crate::Result<()> {
+  fn for_each<F: Fn(&'tx [u8], Option<&'tx [u8]>) -> crate::Result<()>>(
+    &self, f: F,
+  ) -> crate::Result<()> {
     self.b.api_for_each(f)
   }
 
@@ -185,19 +189,21 @@ impl<'tx> BucketApi<'tx> for BucketRwImpl<'tx> {
     CursorImpl::new(InnerCursor::new(self.b, self.b.api_tx().bump()))
   }
 
-  fn bucket(&self, name: &[u8]) -> Option<Self> {
-    self.b.api_bucket(name).map(|b| BucketRwImpl { b })
+  fn bucket<T: AsRef<[u8]>>(&self, name: T) -> Option<Self> {
+    self.b.api_bucket(name.as_ref()).map(|b| BucketRwImpl { b })
   }
 
-  fn get(&self, key: &[u8]) -> Option<&'tx [u8]> {
-    self.b.api_get(key)
+  fn get<T: AsRef<[u8]>>(&self, key: T) -> Option<&'tx [u8]> {
+    self.b.api_get(key.as_ref())
   }
 
   fn sequence(&self) -> u64 {
     self.b.api_sequence()
   }
 
-  fn for_each<F: Fn(&'tx [u8], Option<&'tx [u8]>) -> crate::Result<()>>(&self, f: F) -> crate::Result<()> {
+  fn for_each<F: Fn(&'tx [u8], Option<&'tx [u8]>) -> crate::Result<()>>(
+    &self, f: F,
+  ) -> crate::Result<()> {
     self.b.api_for_each(f)
   }
 
@@ -213,14 +219,17 @@ impl<'tx> BucketApi<'tx> for BucketRwImpl<'tx> {
 impl<'tx> BucketRwApi<'tx> for BucketRwImpl<'tx> {
   type CursorRwType = CursorRwImpl<'tx, InnerCursor<'tx, TxRwCell<'tx>, BucketRwCell<'tx>>>;
 
-  fn create_bucket(&mut self, key: &[u8]) -> crate::Result<Self> {
-    self.b.api_create_bucket(key).map(|b| BucketRwImpl { b })
-  }
-
-  fn create_bucket_if_not_exists(&mut self, key: &[u8]) -> crate::Result<Self> {
+  fn create_bucket<T: AsRef<[u8]>>(&mut self, key: T) -> crate::Result<Self> {
     self
       .b
-      .api_create_bucket_if_not_exists(key)
+      .api_create_bucket(key.as_ref())
+      .map(|b| BucketRwImpl { b })
+  }
+
+  fn create_bucket_if_not_exists<T: AsRef<[u8]>>(&mut self, key: T) -> crate::Result<Self> {
+    self
+      .b
+      .api_create_bucket_if_not_exists(key.as_ref())
       .map(|b| BucketRwImpl { b })
   }
 
@@ -228,16 +237,16 @@ impl<'tx> BucketRwApi<'tx> for BucketRwImpl<'tx> {
     CursorRwImpl::new(InnerCursor::new(self.b, self.b.api_tx().bump()))
   }
 
-  fn delete_bucket(&mut self, key: &[u8]) -> crate::Result<()> {
-    self.b.api_delete_bucket(key)
+  fn delete_bucket<T: AsRef<[u8]>>(&mut self, key: T) -> crate::Result<()> {
+    self.b.api_delete_bucket(key.as_ref())
   }
 
-  fn put(&mut self, key: &[u8], data: &[u8]) -> crate::Result<()> {
-    self.b.api_put(key, data)
+  fn put<T: AsRef<[u8]>, U: AsRef<[u8]>>(&mut self, key: T, data: U) -> crate::Result<()> {
+    self.b.api_put(key.as_ref(), data.as_ref())
   }
 
-  fn delete(&mut self, key: &[u8]) -> crate::Result<()> {
-    self.b.api_delete(key)
+  fn delete<T: AsRef<[u8]>>(&mut self, key: T) -> crate::Result<()> {
+    self.b.api_delete(key.as_ref())
   }
 
   fn set_sequence(&mut self, v: u64) -> crate::Result<()> {
@@ -348,7 +357,7 @@ impl Default for InlineBucket {
 }
 
 /// The internal Bucket API
-pub(crate) trait BucketIAPI<'tx, T: TxIAPI<'tx>>:
+pub(crate) trait BucketIApi<'tx, T: TxIApi<'tx>>:
   SplitRef<BucketR<'tx>, Weak<T>, InnerBucketW<'tx, T, Self>>
 {
   fn new_in(
@@ -462,7 +471,9 @@ pub(crate) trait BucketIAPI<'tx, T: TxIAPI<'tx>>:
   }
 
   /// See [BucketApi::for_each]
-  fn api_for_each<F: Fn(&'tx [u8], Option<&'tx [u8]>) -> crate::Result<()>>(self, f: F) -> crate::Result<()> {
+  fn api_for_each<F: Fn(&'tx [u8], Option<&'tx [u8]>) -> crate::Result<()>>(
+    self, f: F,
+  ) -> crate::Result<()> {
     let mut c = self.i_cursor();
     let mut inode = c.api_first();
     while let Some((k, v)) = inode {
@@ -667,7 +678,7 @@ pub(crate) trait BucketIAPI<'tx, T: TxIAPI<'tx>>:
   }
 }
 
-pub(crate) trait BucketRwIAPI<'tx>: BucketIAPI<'tx, TxRwCell<'tx>> {
+pub(crate) trait BucketRwIApi<'tx>: BucketIApi<'tx, TxRwCell<'tx>> {
   /// Explicitly materialize the root node
   fn materialize_root(self) -> NodeRwCell<'tx>;
 
@@ -731,7 +742,7 @@ impl<'tx> BucketR<'tx> {
   }
 }
 
-pub struct InnerBucketW<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> {
+pub struct InnerBucketW<'tx, T: TxIApi<'tx>, B: BucketIApi<'tx, T>> {
   /// materialized node for the root page.
   pub(crate) root_node: Option<NodeRwCell<'tx>>,
   /// subbucket cache
@@ -748,7 +759,7 @@ pub struct InnerBucketW<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> {
   phantom_t: PhantomData<T>,
 }
 
-impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> InnerBucketW<'tx, T, B> {
+impl<'tx, T: TxIApi<'tx>, B: BucketIApi<'tx, T>> InnerBucketW<'tx, T, B> {
   pub fn new_in(bump: &'tx Bump) -> InnerBucketW<'tx, T, B> {
     InnerBucketW {
       root_node: None,
@@ -781,7 +792,7 @@ pub struct BucketCell<'tx> {
   cell: BCell<'tx, BucketR<'tx>, Weak<TxCell<'tx>>>,
 }
 
-impl<'tx> BucketIAPI<'tx, TxCell<'tx>> for BucketCell<'tx> {
+impl<'tx> BucketIApi<'tx, TxCell<'tx>> for BucketCell<'tx> {
   fn new_in(
     bump: &'tx Bump, bucket_header: InBucket, tx: Weak<TxCell<'tx>>,
     inline_page: Option<RefPage<'tx>>,
@@ -924,7 +935,7 @@ impl<'tx> SplitRef<BucketR<'tx>, Weak<TxRwCell<'tx>>, BucketW<'tx>> for BucketRw
   }
 }
 
-impl<'tx> BucketIAPI<'tx, TxRwCell<'tx>> for BucketRwCell<'tx> {
+impl<'tx> BucketIApi<'tx, TxRwCell<'tx>> for BucketRwCell<'tx> {
   fn new_in(
     bump: &'tx Bump, bucket_header: InBucket, tx: Weak<TxRwCell<'tx>>,
     inline_page: Option<RefPage<'tx>>,
@@ -948,7 +959,7 @@ impl<'tx> BucketIAPI<'tx, TxRwCell<'tx>> for BucketRwCell<'tx> {
   }
 }
 
-impl<'tx> BucketRwIAPI<'tx> for BucketRwCell<'tx> {
+impl<'tx> BucketRwIApi<'tx> for BucketRwCell<'tx> {
   fn materialize_root(self) -> NodeRwCell<'tx> {
     let mut root_id = ZERO_PGID;
     if let (r, Some(w)) = self.split_r_ow() {
@@ -1292,16 +1303,16 @@ impl<'tx> BucketRwIAPI<'tx> for BucketRwCell<'tx> {
 
 #[cfg(test)]
 mod tests {
-  use std::cell::RefCell;
   use crate::bucket::{BucketRwImpl, MAX_VALUE_SIZE};
   use crate::test_support::TestDb;
   use crate::{
     BucketApi, BucketRwApi, CursorApi, CursorRwApi, DbApi, DbRwAPI, Error, TxApi, TxRwApi,
   };
+  use anyhow::anyhow;
   use itertools::Itertools;
+  use std::cell::RefCell;
   use std::fmt::format;
   use std::sync::atomic::{AtomicU32, Ordering};
-  use anyhow::anyhow;
 
   #[test]
   fn test_bucket_get_non_existent() -> crate::Result<()> {
@@ -1800,7 +1811,9 @@ mod tests {
     todo!("not-possible")
   }
 
-  fn for_each_collect_kv<'tx, B: BucketApi<'tx>>(b: B ) -> crate::Result<Vec<(&'tx [u8], Option<&'tx[u8]>)>>{
+  fn for_each_collect_kv<'tx, B: BucketApi<'tx>>(
+    b: B,
+  ) -> crate::Result<Vec<(&'tx [u8], Option<&'tx [u8]>)>> {
     let items = RefCell::new(Vec::new());
     b.for_each(|k, v| {
       items.borrow_mut().push((k, v));
@@ -1809,7 +1822,7 @@ mod tests {
     Ok(items.into_inner())
   }
 
-  fn for_each_bucket_collect_k<'tx, B: BucketApi<'tx>>(b: B ) -> crate::Result<Vec<&'tx [u8]>>{
+  fn for_each_bucket_collect_k<'tx, B: BucketApi<'tx>>(b: B) -> crate::Result<Vec<&'tx [u8]>> {
     let items = RefCell::new(Vec::new());
     b.for_each_bucket(|k| {
       items.borrow_mut().push(k);
@@ -1835,13 +1848,21 @@ mod tests {
       b.create_bucket(b"csubbucket")?;
 
       let items = for_each_collect_kv(b)?;
-      assert_eq!(expected_items.as_slice(), &items, "what we iterated (ForEach) is not what we put");
+      assert_eq!(
+        expected_items.as_slice(),
+        &items,
+        "what we iterated (ForEach) is not what we put"
+      );
       Ok(())
     })?;
     db.view(|tx| {
       let b = tx.bucket(b"widgets").unwrap();
       let items = for_each_collect_kv(b)?;
-      assert_eq!(expected_items.as_slice(), &items, "what we iterated (ForEach) is not what we put");
+      assert_eq!(
+        expected_items.as_slice(),
+        &items,
+        "what we iterated (ForEach) is not what we put"
+      );
       Ok(())
     })?;
     Ok(())
@@ -1849,10 +1870,7 @@ mod tests {
 
   #[test]
   fn test_bucket_for_each_bucket() -> crate::Result<()> {
-    let expected_items = [
-      b"csubbucket".as_slice(),
-      b"zsubbucket".as_slice(),
-    ];
+    let expected_items = [b"csubbucket".as_slice(), b"zsubbucket".as_slice()];
     let mut db = TestDb::new_tmp()?;
     db.update(|mut tx| {
       let mut b = tx.create_bucket(b"widgets")?;
@@ -1863,13 +1881,21 @@ mod tests {
       let _ = b.create_bucket(b"csubbucket")?;
 
       let items = for_each_bucket_collect_k(b)?;
-      assert_eq!(expected_items.as_slice(), &items, "what we iterated (ForEach) is not what we put");
+      assert_eq!(
+        expected_items.as_slice(),
+        &items,
+        "what we iterated (ForEach) is not what we put"
+      );
       Ok(())
     })?;
     db.view(|tx| {
       let b = tx.bucket(b"widgets").unwrap();
       let items = for_each_bucket_collect_k(b)?;
-      assert_eq!(expected_items.as_slice(), &items, "what we iterated (ForEach) is not what we put");
+      assert_eq!(
+        expected_items.as_slice(),
+        &items,
+        "what we iterated (ForEach) is not what we put"
+      );
       Ok(())
     })?;
     Ok(())
@@ -1884,13 +1910,19 @@ mod tests {
       b.put(b"baz", b"0001")?;
 
       let items = for_each_bucket_collect_k(b)?;
-      assert!(items.is_empty(), "what we iterated (ForEach) is not what we put");
+      assert!(
+        items.is_empty(),
+        "what we iterated (ForEach) is not what we put"
+      );
       Ok(())
     })?;
     db.view(|tx| {
       let b = tx.bucket(b"widgets").unwrap();
       let items = for_each_bucket_collect_k(b)?;
-      assert!(items.is_empty(), "what we iterated (ForEach) is not what we put");
+      assert!(
+        items.is_empty(),
+        "what we iterated (ForEach) is not what we put"
+      );
       Ok(())
     })?;
     Ok(())

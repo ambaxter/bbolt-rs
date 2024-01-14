@@ -7,7 +7,7 @@ use crate::common::page::{CoerciblePage, MutPage};
 use crate::common::tree::{MappedBranchPage, MappedLeafPage};
 use crate::tx::check::TxCheck;
 use crate::tx::check::TxICheck;
-use crate::tx::{TxCell, TxIAPI, TxImpl, TxRwCell, TxRwImpl, TxRwRef};
+use crate::tx::{TxCell, TxIApi, TxImpl, TxRwCell, TxRwImpl, TxRwRef};
 use crate::{DbApi, DbRwAPI, DB};
 use aligners::{alignment, AlignedBytes};
 use tempfile::{tempfile, Builder, NamedTempFile};

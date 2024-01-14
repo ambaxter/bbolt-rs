@@ -1,5 +1,5 @@
 use crate::arch::size::MAX_MAP_SIZE;
-use crate::bucket::BucketRwIAPI;
+use crate::bucket::BucketRwIApi;
 use crate::common::bucket::InBucket;
 use crate::common::defaults::{
   DEFAULT_ALLOC_SIZE, DEFAULT_PAGE_SIZE, MAGIC, MAX_MMAP_STEP, PGID_NO_FREE_LIST, VERSION,
@@ -10,7 +10,7 @@ use crate::common::self_owned::SelfOwned;
 use crate::common::tree::MappedLeafPage;
 use crate::common::{PgId, SplitRef, TxId};
 use crate::freelist::{Freelist, MappedFreeListPage};
-use crate::tx::{TxIAPI, TxImpl, TxRef, TxRwCell, TxRwImpl, TxRwRef, TxStats};
+use crate::tx::{TxIApi, TxImpl, TxRef, TxRwCell, TxRwImpl, TxRwRef, TxStats};
 use crate::{Error, TxApi, TxRwApi};
 use aligners::{alignment, AlignedBytes};
 use bumpalo::Bump;
@@ -30,10 +30,6 @@ pub trait DbApi: Clone + Send + Sync
 where
   Self: Sized,
 {
-  type TxType<'tx>: TxApi<'tx>
-  where
-    Self: 'tx;
-
   /// Close releases all database resources.
   /// It will block waiting for any open transactions to finish
   /// before closing the database and returning.
@@ -56,7 +52,7 @@ where
   ///
   /// IMPORTANT: You must close read-only transactions after you are finished or
   /// else the database will not reclaim old pages.
-  fn begin(&self) -> Self::TxType<'_>;
+  fn begin(&self) -> impl TxApi;
 
   /// View executes a function within the context of a managed read-only transaction.
   /// Any error that is returned from the function is returned from the View() method.
@@ -70,10 +66,6 @@ where
 }
 
 pub trait DbRwAPI: DbApi {
-  type TxRwType<'tx>: TxRwApi<'tx>
-  where
-    Self: 'tx;
-
   /// Begin starts a new transaction.
   /// Multiple read-only transactions can be used concurrently but only one
   /// write transaction can be used at a time. Starting multiple write transactions
@@ -91,7 +83,7 @@ pub trait DbRwAPI: DbApi {
   ///
   /// IMPORTANT: You must close read-only transactions after you are finished or
   /// else the database will not reclaim old pages.
-  fn begin_mut(&mut self) -> Self::TxRwType<'_>;
+  fn begin_mut(&mut self) -> impl TxRwApi;
 
   /// Update executes a function within the context of a read-write managed transaction.
   /// If no error is returned from the function then the transaction is committed.
@@ -574,7 +566,7 @@ impl Drop for FileBackend {
   }
 }
 
-pub(crate) trait DbIAPI<'tx>: 'tx {
+pub(crate) trait DbIApi<'tx>: 'tx {
   fn page(&self, pg_id: PgId) -> RefPage<'tx>;
 
   fn is_page_free(&self, pg_id: PgId) -> bool;
@@ -582,7 +574,7 @@ pub(crate) trait DbIAPI<'tx>: 'tx {
   fn remove_tx(&self, rem_tx: TxId, tx_stats: TxStats);
 }
 
-pub(crate) trait DbRwIAPI<'tx>: DbIAPI<'tx> {
+pub(crate) trait DbRwIApi<'tx>: DbIApi<'tx> {
   fn free_page(&self, txid: TxId, p: &Page);
 
   fn free_pages(&self);
@@ -618,7 +610,7 @@ impl<'tx> DbGuard<'tx> {
   }
 }
 
-impl<'tx> DbIAPI<'tx> for DbGuard<'tx> {
+impl<'tx> DbIApi<'tx> for DbGuard<'tx> {
   fn page(&self, pg_id: PgId) -> RefPage<'tx> {
     match self {
       DbGuard::Read(guard) => guard.page(pg_id),
@@ -649,7 +641,7 @@ pub struct DBShared {
   pub(crate) backend: Box<dyn DBBackend>,
 }
 
-impl<'tx> DbIAPI<'tx> for DBShared {
+impl<'tx> DbIApi<'tx> for DBShared {
   fn page(&self, pg_id: PgId) -> RefPage<'tx> {
     self.backend.page(pg_id)
   }
@@ -671,7 +663,7 @@ impl<'tx> DbIAPI<'tx> for DBShared {
   }
 }
 
-impl<'tx> DbRwIAPI<'tx> for DBShared {
+impl<'tx> DbRwIApi<'tx> for DBShared {
   fn free_page(&self, txid: TxId, p: &Page) {
     self.records.lock().freelist.free(txid, p)
   }
@@ -945,13 +937,11 @@ impl DB {
 }
 
 impl DbApi for DB {
-  type TxType<'tx> =  TxImpl<'tx> where Self: 'tx ;
-
   fn close(self) {
     todo!()
   }
 
-  fn begin(&self) -> Self::TxType<'_> {
+  fn begin(&self) -> impl TxApi {
     let bump = self.bump_pool.pull_owned();
     TxImpl::new(bump, self.db.read())
   }
@@ -973,9 +963,7 @@ impl DbApi for DB {
 }
 
 impl DbRwAPI for DB {
-  type TxRwType<'tx> = TxRwImpl<'tx> where Self: 'tx;
-
-  fn begin_mut(&mut self) -> Self::TxRwType<'_> {
+  fn begin_mut(&mut self) -> impl TxRwApi {
     let bump = self.bump_pool.pull_owned();
     let write_lock = self.db.write();
     TxRwImpl::new(bump, write_lock)

@@ -1,13 +1,13 @@
 use crate::arch::size::MAX_ALLOC_SIZE;
-use crate::bucket::{BucketCell, BucketIAPI, BucketImpl, BucketRwCell, BucketRwIAPI, BucketRwImpl};
+use crate::bucket::{BucketCell, BucketIApi, BucketImpl, BucketRwCell, BucketRwIApi, BucketRwImpl};
 use crate::common::memory::BCell;
 use crate::common::meta::{MappedMetaPage, Meta, MetaPage};
 use crate::common::page::{CoerciblePage, MutPage, Page, PageInfo, RefPage};
 use crate::common::self_owned::SelfOwned;
 use crate::common::tree::{MappedBranchPage, TreePage};
 use crate::common::{BVec, HashMap, PgId, SplitRef, TxId};
-use crate::cursor::{CursorImpl, CursorRwIAPI, CursorRwImpl, InnerCursor};
-use crate::db::{DBShared, DbGuard, DbIAPI, DbRwIAPI};
+use crate::cursor::{CursorImpl, CursorRwIApi, CursorRwImpl, InnerCursor};
+use crate::db::{DBShared, DbGuard, DbIApi, DbRwIApi};
 use crate::{BucketApi, CursorApi, CursorRwApi};
 use aliasable::boxed::AliasableBox;
 use aligners::{alignment, AlignedBytes};
@@ -52,7 +52,7 @@ pub trait TxApi<'tx> {
   /// Bucket retrieves a bucket by name.
   /// Returns nil if the bucket does not exist.
   /// The bucket instance is only valid for the lifetime of the transaction.
-  fn bucket(&self, name: &[u8]) -> Option<Self::BucketType>;
+  fn bucket<T: AsRef<[u8]>>(&self, name: T) -> Option<Self::BucketType>;
 
   fn for_each<F: FnMut(&[u8], Self::BucketType)>(&self, f: F) -> crate::Result<()>;
 
@@ -77,16 +77,18 @@ pub trait TxRwApi<'tx>: TxApi<'tx> {
   /// CreateBucket creates a new bucket.
   /// Returns an error if the bucket already exists, if the bucket name is blank, or if the bucket name is too long.
   /// The bucket instance is only valid for the lifetime of the transaction.
-  fn create_bucket(&mut self, name: &[u8]) -> crate::Result<Self::BucketType>;
+  fn create_bucket<T: AsRef<[u8]>>(&mut self, name: T) -> crate::Result<Self::BucketType>;
 
   /// CreateBucketIfNotExists creates a new bucket if it doesn't already exist.
   /// Returns an error if the bucket name is blank, or if the bucket name is too long.
   /// The bucket instance is only valid for the lifetime of the transaction.
-  fn create_bucket_if_not_exists(&mut self, name: &[u8]) -> crate::Result<Self::BucketType>;
+  fn create_bucket_if_not_exists<T: AsRef<[u8]>>(
+    &mut self, name: T,
+  ) -> crate::Result<Self::BucketType>;
 
   /// DeleteBucket deletes a bucket.
   /// Returns an error if the bucket cannot be found or if the key represents a non-bucket value.
-  fn delete_bucket(&mut self, name: &[u8]) -> crate::Result<()>;
+  fn delete_bucket<T: AsRef<[u8]>>(&mut self, name: T) -> crate::Result<()>;
 
   /// Commit writes all changes to disk and updates the meta page.
   /// Returns an error if a disk write error occurs, or if Commit is
@@ -194,8 +196,8 @@ impl<'a, 'tx: 'a> Deref for AnyPage<'tx, 'a> {
   }
 }
 
-pub(crate) trait TxIAPI<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
-  type BucketType: BucketIAPI<'tx, Self>;
+pub(crate) trait TxIApi<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
+  type BucketType: BucketIApi<'tx, Self>;
 
   fn bump(self) -> &'tx Bump {
     self.split_r().b
@@ -348,8 +350,8 @@ pub(crate) trait TxIAPI<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
   fn close(self) -> crate::Result<()>;
 }
 
-pub(crate) trait TxRwIAPI<'tx>: TxIAPI<'tx> {
-  type CursorRwType: CursorRwIAPI<'tx>;
+pub(crate) trait TxRwIApi<'tx>: TxIApi<'tx> {
+  type CursorRwType: CursorRwIApi<'tx>;
   fn freelist_free_page(self, txid: TxId, p: &Page);
 
   fn allocate(
@@ -439,7 +441,7 @@ impl<'tx> SplitRef<TxR<'tx>, BucketCell<'tx>, TxW<'tx>> for TxCell<'tx> {
   }
 }
 
-impl<'tx> TxIAPI<'tx> for TxCell<'tx> {
+impl<'tx> TxIApi<'tx> for TxCell<'tx> {
   type BucketType = BucketCell<'tx>;
 
   fn non_physical_rollback(self) -> crate::Result<()> {
@@ -504,7 +506,7 @@ impl<'tx> SplitRef<TxR<'tx>, BucketRwCell<'tx>, TxW<'tx>> for TxRwCell<'tx> {
   }
 }
 
-impl<'tx> TxIAPI<'tx> for TxRwCell<'tx> {
+impl<'tx> TxIApi<'tx> for TxRwCell<'tx> {
   type BucketType = BucketRwCell<'tx>;
 
   fn non_physical_rollback(self) -> crate::Result<()> {
@@ -516,7 +518,7 @@ impl<'tx> TxIAPI<'tx> for TxRwCell<'tx> {
   }
 }
 
-impl<'tx> TxRwIAPI<'tx> for TxRwCell<'tx> {
+impl<'tx> TxRwIApi<'tx> for TxRwCell<'tx> {
   type CursorRwType = InnerCursor<'tx, Self, Self::BucketType>;
 
   fn freelist_free_page(self, txid: TxId, p: &Page) {
@@ -726,8 +728,8 @@ impl<'tx> TxApi<'tx> for TxImpl<'tx> {
     self.tx.api_stats()
   }
 
-  fn bucket(&self, name: &[u8]) -> Option<Self::BucketType> {
-    self.tx.api_bucket(name).map(|b| b.into())
+  fn bucket<T: AsRef<[u8]>>(&self, name: T) -> Option<Self::BucketType> {
+    self.tx.api_bucket(name.as_ref()).map(|b| b.into())
   }
 
   fn for_each<F: FnMut(&[u8], Self::BucketType)>(&self, f: F) -> crate::Result<()> {
@@ -773,8 +775,8 @@ impl<'tx> TxApi<'tx> for TxRef<'tx> {
     self.tx.api_stats()
   }
 
-  fn bucket(&self, name: &[u8]) -> Option<Self::BucketType> {
-    self.tx.api_bucket(name).map(|b| b.into())
+  fn bucket<T: AsRef<[u8]>>(&self, name: T) -> Option<Self::BucketType> {
+    self.tx.api_bucket(name.as_ref()).map(|b| b.into())
   }
 
   fn for_each<F: FnMut(&[u8], Self::BucketType)>(&self, f: F) -> crate::Result<()> {
@@ -894,8 +896,8 @@ impl<'tx> TxApi<'tx> for TxRwImpl<'tx> {
     self.tx.api_stats()
   }
 
-  fn bucket(&self, name: &[u8]) -> Option<Self::BucketType> {
-    self.tx.api_bucket(name).map(|b| b.into())
+  fn bucket<T: AsRef<[u8]>>(&self, name: T) -> Option<Self::BucketType> {
+    self.tx.api_bucket(name.as_ref()).map(|b| b.into())
   }
 
   fn for_each<F: FnMut(&[u8], Self::BucketType)>(&self, f: F) -> crate::Result<()> {
@@ -920,19 +922,21 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
     self.tx.api_cursor_mut().into()
   }
 
-  fn create_bucket(&mut self, name: &[u8]) -> crate::Result<Self::BucketType> {
-    self.tx.api_create_bucket(name).map(|b| b.into())
+  fn create_bucket<T: AsRef<[u8]>>(&mut self, name: T) -> crate::Result<Self::BucketType> {
+    self.tx.api_create_bucket(name.as_ref()).map(|b| b.into())
   }
 
-  fn create_bucket_if_not_exists(&mut self, name: &[u8]) -> crate::Result<Self::BucketType> {
+  fn create_bucket_if_not_exists<T: AsRef<[u8]>>(
+    &mut self, name: T,
+  ) -> crate::Result<Self::BucketType> {
     self
       .tx
-      .api_create_bucket_if_not_exist(name)
+      .api_create_bucket_if_not_exist(name.as_ref())
       .map(|b| b.into())
   }
 
-  fn delete_bucket(&mut self, name: &[u8]) -> crate::Result<()> {
-    self.tx.api_delete_bucket(name)
+  fn delete_bucket<T: AsRef<[u8]>>(&mut self, name: T) -> crate::Result<()> {
+    self.tx.api_delete_bucket(name.as_ref())
   }
 
   fn commit(mut self) -> crate::Result<()> {
@@ -1052,8 +1056,8 @@ impl<'tx> TxApi<'tx> for TxRwRef<'tx> {
     self.tx.api_stats()
   }
 
-  fn bucket(&self, name: &[u8]) -> Option<Self::BucketType> {
-    self.tx.api_bucket(name).map(|b| b.into())
+  fn bucket<T: AsRef<[u8]>>(&self, name: T) -> Option<Self::BucketType> {
+    self.tx.api_bucket(name.as_ref()).map(|b| b.into())
   }
 
   fn for_each<F: FnMut(&[u8], Self::BucketType)>(&self, f: F) -> crate::Result<()> {
@@ -1076,19 +1080,21 @@ impl<'tx> TxRwApi<'tx> for TxRwRef<'tx> {
     self.tx.api_cursor_mut().into()
   }
 
-  fn create_bucket(&mut self, name: &[u8]) -> crate::Result<Self::BucketType> {
-    self.tx.api_create_bucket(name).map(|b| b.into())
+  fn create_bucket<T: AsRef<[u8]>>(&mut self, name: T) -> crate::Result<Self::BucketType> {
+    self.tx.api_create_bucket(name.as_ref()).map(|b| b.into())
   }
 
-  fn create_bucket_if_not_exists(&mut self, name: &[u8]) -> crate::Result<Self::BucketType> {
+  fn create_bucket_if_not_exists<T: AsRef<[u8]>>(
+    &mut self, name: T,
+  ) -> crate::Result<Self::BucketType> {
     self
       .tx
-      .api_create_bucket_if_not_exist(name)
+      .api_create_bucket_if_not_exist(name.as_ref())
       .map(|b| b.into())
   }
 
-  fn delete_bucket(&mut self, name: &[u8]) -> crate::Result<()> {
-    self.tx.api_delete_bucket(name)
+  fn delete_bucket<T: AsRef<[u8]>>(&mut self, name: T) -> crate::Result<()> {
+    self.tx.api_delete_bucket(name.as_ref())
   }
 
   fn commit(self) -> crate::Result<()> {
@@ -1097,11 +1103,11 @@ impl<'tx> TxRwApi<'tx> for TxRwRef<'tx> {
 }
 
 pub(crate) mod check {
-  use crate::bucket::BucketIAPI;
+  use crate::bucket::BucketIApi;
   use crate::common::page::{CoerciblePage, RefPage};
   use crate::common::tree::{MappedBranchPage, MappedLeafPage, TreePage};
   use crate::common::{BVec, HashMap, HashSet, PgId, ZERO_PGID};
-  use crate::tx::{TxCell, TxIAPI, TxRwCell, TxRwImpl, TxRwRef};
+  use crate::tx::{TxCell, TxIApi, TxRwCell, TxRwImpl, TxRwRef};
 
   pub(crate) trait UnsealTx<'tx> {
     type Unsealed: TxICheck<'tx>;
@@ -1158,7 +1164,7 @@ pub(crate) mod check {
 
   impl<'tx, T> TxCheck<'tx> for T where T: UnsealTx<'tx> {}
 
-  pub(crate) trait TxICheck<'tx>: TxIAPI<'tx> {
+  pub(crate) trait TxICheck<'tx>: TxIApi<'tx> {
     fn check(self) -> Vec<String> {
       let mut errors = Vec::new();
       let bump = self.bump();

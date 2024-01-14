@@ -25,9 +25,9 @@ fn widgets(db: &mut DB) -> bbolt_rs::Result<()> {
   for i in (0..n).step_by(batch_n as usize) {
     let update = Instant::now();
     db.update(|mut tx| {
-      let mut b = tx.create_bucket_if_not_exists(b"widgets")?;
+      let mut b = tx.create_bucket_if_not_exists("widgets")?;
       for j in 1..batch_n {
-        b.put((i + j).to_be_bytes().as_slice(), &v)?;
+        b.put((i + j).to_be_bytes().as_slice(), v)?;
       }
       Ok(())
     })?;

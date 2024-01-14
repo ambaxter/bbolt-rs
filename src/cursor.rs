@@ -1,9 +1,9 @@
-use crate::bucket::{BucketIAPI, BucketRwIAPI};
+use crate::bucket::{BucketIApi, BucketRwIApi};
 use crate::common::page::{CoerciblePage, RefPage, BUCKET_LEAF_FLAG};
 use crate::common::tree::{MappedBranchPage, MappedLeafPage, TreePage};
 use crate::common::{BVec, PgId};
 use crate::node::NodeRwCell;
-use crate::tx::{TxIAPI, TxRwCell};
+use crate::tx::{TxIApi, TxRwCell};
 use crate::Error::IncompatibleValue;
 use bumpalo::Bump;
 use either::Either;
@@ -34,7 +34,7 @@ pub trait CursorApi<'tx> {
   /// If the key does not exist then the next key is used. If no keys
   /// follow, a nil key is returned.
   /// The returned key and value are only valid for the life of the transaction.
-  fn seek(&mut self, seek: &[u8]) -> Option<(&'tx [u8], Option<&'tx [u8]>)>;
+  fn seek<T: AsRef<[u8]>>(&mut self, seek: T) -> Option<(&'tx [u8], Option<&'tx [u8]>)>;
 }
 
 pub trait CursorRwApi<'tx>: CursorApi<'tx> {
@@ -43,18 +43,18 @@ pub trait CursorRwApi<'tx>: CursorApi<'tx> {
   fn delete(&mut self) -> crate::Result<()>;
 }
 
-pub struct CursorImpl<'tx, C: CursorIAPI<'tx>> {
+pub struct CursorImpl<'tx, C: CursorIApi<'tx>> {
   c: C,
   p: PhantomData<&'tx u64>,
 }
 
-impl<'tx, C: CursorIAPI<'tx>> From<C> for CursorImpl<'tx, C> {
+impl<'tx, C: CursorIApi<'tx>> From<C> for CursorImpl<'tx, C> {
   fn from(value: C) -> Self {
     CursorImpl::new(value)
   }
 }
 
-impl<'tx, C: CursorIAPI<'tx>> CursorImpl<'tx, C> {
+impl<'tx, C: CursorIApi<'tx>> CursorImpl<'tx, C> {
   pub(crate) fn new(c: C) -> Self {
     CursorImpl {
       c,
@@ -63,7 +63,7 @@ impl<'tx, C: CursorIAPI<'tx>> CursorImpl<'tx, C> {
   }
 }
 
-impl<'tx, C: CursorIAPI<'tx>> CursorApi<'tx> for CursorImpl<'tx, C> {
+impl<'tx, C: CursorIApi<'tx>> CursorApi<'tx> for CursorImpl<'tx, C> {
   fn first(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
     self.c.api_first()
   }
@@ -80,17 +80,17 @@ impl<'tx, C: CursorIAPI<'tx>> CursorApi<'tx> for CursorImpl<'tx, C> {
     self.c.api_prev()
   }
 
-  fn seek(&mut self, seek: &[u8]) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
-    self.c.api_seek(seek)
+  fn seek<T: AsRef<[u8]>>(&mut self, seek: T) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
+    self.c.api_seek(seek.as_ref())
   }
 }
 
-pub struct CursorRwImpl<'tx, C: CursorRwIAPI<'tx>> {
+pub struct CursorRwImpl<'tx, C: CursorRwIApi<'tx>> {
   c: C,
   p: PhantomData<&'tx u64>,
 }
 
-impl<'tx, C: CursorRwIAPI<'tx>> CursorRwImpl<'tx, C> {
+impl<'tx, C: CursorRwIApi<'tx>> CursorRwImpl<'tx, C> {
   pub(crate) fn new(c: C) -> Self {
     CursorRwImpl {
       c,
@@ -99,13 +99,13 @@ impl<'tx, C: CursorRwIAPI<'tx>> CursorRwImpl<'tx, C> {
   }
 }
 
-impl<'tx, C: CursorRwIAPI<'tx>> From<C> for CursorRwImpl<'tx, C> {
+impl<'tx, C: CursorRwIApi<'tx>> From<C> for CursorRwImpl<'tx, C> {
   fn from(value: C) -> Self {
     CursorRwImpl::new(value)
   }
 }
 
-impl<'tx, C: CursorRwIAPI<'tx>> CursorApi<'tx> for CursorRwImpl<'tx, C> {
+impl<'tx, C: CursorRwIApi<'tx>> CursorApi<'tx> for CursorRwImpl<'tx, C> {
   fn first(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
     self.c.api_first()
   }
@@ -122,18 +122,18 @@ impl<'tx, C: CursorRwIAPI<'tx>> CursorApi<'tx> for CursorRwImpl<'tx, C> {
     self.c.api_prev()
   }
 
-  fn seek(&mut self, seek: &[u8]) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
-    self.c.api_seek(seek)
+  fn seek<T: AsRef<[u8]>>(&mut self, seek: T) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
+    self.c.api_seek(seek.as_ref())
   }
 }
 
-impl<'tx, C: CursorRwIAPI<'tx>> CursorRwApi<'tx> for CursorRwImpl<'tx, C> {
+impl<'tx, C: CursorRwIApi<'tx>> CursorRwApi<'tx> for CursorRwImpl<'tx, C> {
   fn delete(&mut self) -> crate::Result<()> {
     self.c.api_delete()
   }
 }
 
-pub(crate) trait CursorIAPI<'tx>: Clone {
+pub(crate) trait CursorIApi<'tx>: Clone {
   /// See [CursorApi::first]
   fn api_first(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)>;
 
@@ -182,7 +182,7 @@ pub(crate) trait CursorIAPI<'tx>: Clone {
   fn search_page(&mut self, key: &[u8], page: &RefPage);
 }
 
-pub(crate) trait CursorRwIAPI<'tx>: CursorIAPI<'tx> {
+pub(crate) trait CursorRwIApi<'tx>: CursorIApi<'tx> {
   /// node returns the node that the cursor is currently positioned on.
   fn node(&mut self) -> NodeRwCell<'tx>;
 
@@ -215,13 +215,13 @@ impl<'tx> ElemRef<'tx> {
 }
 
 #[derive(Clone)]
-pub struct InnerCursor<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> {
+pub struct InnerCursor<'tx, T: TxIApi<'tx>, B: BucketIApi<'tx, T>> {
   bucket: B,
   stack: BVec<'tx, ElemRef<'tx>>,
   phantom_t: PhantomData<T>,
 }
 
-impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> InnerCursor<'tx, T, B> {
+impl<'tx, T: TxIApi<'tx>, B: BucketIApi<'tx, T>> InnerCursor<'tx, T, B> {
   pub(crate) fn new(cell: B, bump: &'tx Bump) -> Self {
     InnerCursor {
       bucket: cell,
@@ -231,7 +231,7 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> InnerCursor<'tx, T, B> {
   }
 }
 
-impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for InnerCursor<'tx, T, B> {
+impl<'tx, T: TxIApi<'tx>, B: BucketIApi<'tx, T>> CursorIApi<'tx> for InnerCursor<'tx, T, B> {
   fn api_first(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
     let (k, v, flags) = self.i_first()?;
     if (flags & BUCKET_LEAF_FLAG) != 0 {
@@ -575,7 +575,7 @@ impl<'tx, T: TxIAPI<'tx>, B: BucketIAPI<'tx, T>> CursorIAPI<'tx> for InnerCursor
   }
 }
 
-impl<'tx, B: BucketRwIAPI<'tx>> CursorRwIAPI<'tx> for InnerCursor<'tx, TxRwCell<'tx>, B> {
+impl<'tx, B: BucketRwIApi<'tx>> CursorRwIApi<'tx> for InnerCursor<'tx, TxRwCell<'tx>, B> {
   fn node(&mut self) -> NodeRwCell<'tx> {
     assert!(
       !self.stack.is_empty(),
@@ -688,16 +688,7 @@ mod tests {
       let _ = b.create_bucket(b"sub")?;
       Ok(())
     })?;
-    db.update(|tx| {
-      let errors = tx.unseal().check();
-      for error in &errors {
-        println!("{}", error);
-      }
-      if !errors.is_empty() {
-        panic!();
-      }
-      Ok(())
-    })?;
+    db.must_check_rw();
     db.update(|mut tx| {
       let b = tx.bucket(b"widgets").unwrap();
       let mut c = b.cursor_mut();
@@ -711,16 +702,7 @@ mod tests {
       assert_eq!(Err(Error::IncompatibleValue), c.delete());
       Ok(())
     })?;
-    db.update(|tx| {
-      let errors = tx.unseal().check();
-      for error in &errors {
-        println!("{}", error);
-      }
-      if !errors.is_empty() {
-        panic!();
-      }
-      Ok(())
-    })?;
+    db.must_check_rw();
     db.view(|tx| {
       let b = tx.bucket(b"widgets").unwrap();
       let stats = b.stats();

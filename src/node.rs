@@ -1,4 +1,4 @@
-use crate::bucket::{BucketIAPI, BucketRwCell, BucketRwIAPI, MAX_FILL_PERCENT, MIN_FILL_PERCENT};
+use crate::bucket::{BucketIApi, BucketRwCell, BucketRwIApi, MAX_FILL_PERCENT, MIN_FILL_PERCENT};
 use crate::common::inode::INode;
 use crate::common::memory::{CodSlice, LCell};
 use crate::common::page::{
@@ -8,7 +8,7 @@ use crate::common::tree::{
   MappedBranchPage, MappedLeafPage, TreePage, BRANCH_PAGE_ELEMENT_SIZE, LEAF_PAGE_ELEMENT_SIZE,
 };
 use crate::common::{BVec, PgId, SplitRef, ZERO_PGID};
-use crate::tx::{TxIAPI, TxRwIAPI};
+use crate::tx::{TxIApi, TxRwIApi};
 use bumpalo::Bump;
 use std::mem;
 use std::ops::Deref;
@@ -732,12 +732,12 @@ impl<'tx> NodeRwCell<'tx> {
 
 #[cfg(test)]
 mod test {
-  use crate::bucket::BucketRwIAPI;
+  use crate::bucket::BucketRwIApi;
   use crate::common::page::LEAF_PAGE_FLAG;
   use crate::common::{SplitRef, ZERO_PGID};
   use crate::test_support::TestDb;
   use crate::tx::check::UnsealTx;
-  use crate::tx::TxIAPI;
+  use crate::tx::TxIApi;
   use crate::DbRwAPI;
   use itertools::Itertools;
 
