@@ -65,13 +65,12 @@ pub trait TxApi<'tx> {
 }
 
 pub trait TxRwApi<'tx>: TxApi<'tx> + UnsealTx<'tx> {
-  type CursorRwType: CursorRwApi<'tx>;
 
   /// Cursor creates a cursor associated with the root bucket.
   /// All items in the cursor will return a nil value because all root bucket keys point to buckets.
   /// The cursor is only valid as long as the transaction is open.
   /// Do not use a cursor after the transaction is closed.
-  fn cursor_mut(&mut self) -> Self::CursorRwType;
+  fn cursor_mut(&mut self) -> impl CursorRwApi<'tx>;
 
   fn bucket_mut<T: AsRef<[u8]>>(&mut self, name: T) -> Option<impl BucketRwApi<'tx>>;
 
@@ -934,10 +933,9 @@ impl<'tx> TxApi<'tx> for TxRwImpl<'tx> {
 }
 
 impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
-  type CursorRwType = CursorRwImpl<'tx, InnerCursor<'tx, TxRwCell<'tx>, BucketRwCell<'tx>>>;
 
-  fn cursor_mut(&mut self) -> Self::CursorRwType {
-    self.tx.api_cursor_mut().into()
+  fn cursor_mut(&mut self) -> impl CursorRwApi<'tx> {
+    CursorRwImpl::new(self.tx.api_cursor_mut())
   }
 
   fn bucket_mut<T: AsRef<[u8]>>(&mut self, name: T) -> Option<impl BucketRwApi<'tx>> {
@@ -1095,10 +1093,9 @@ impl<'tx> TxApi<'tx> for TxRwRef<'tx> {
 }
 
 impl<'tx> TxRwApi<'tx> for TxRwRef<'tx> {
-  type CursorRwType = CursorRwImpl<'tx, InnerCursor<'tx, TxRwCell<'tx>, BucketRwCell<'tx>>>;
 
-  fn cursor_mut(&mut self) -> Self::CursorRwType {
-    self.tx.api_cursor_mut().into()
+  fn cursor_mut(&mut self) -> impl CursorRwApi<'tx> {
+    CursorRwImpl::new(self.tx.api_cursor_mut())
   }
 
   fn bucket_mut<T: AsRef<[u8]>>(&mut self, name: T) -> Option<impl BucketRwApi<'tx>> {
