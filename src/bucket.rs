@@ -71,9 +71,7 @@ where
 }
 
 pub trait BucketRwApi<'tx>: BucketApi<'tx> {
-
   fn bucket_mut<T: AsRef<[u8]>>(&mut self, name: T) -> Option<impl BucketRwApi<'tx>>;
-
 
   /// CreateBucket creates a new bucket at the given key and returns the new bucket.
   /// Returns an error if the key already exists, if the bucket name is blank, or if the bucket name is too long.
@@ -83,7 +81,9 @@ pub trait BucketRwApi<'tx>: BucketApi<'tx> {
   /// CreateBucketIfNotExists creates a new bucket if it doesn't already exist and returns a reference to it.
   /// Returns an error if the bucket name is blank, or if the bucket name is too long.
   /// The bucket instance is only valid for the lifetime of the transaction.
-  fn create_bucket_if_not_exists<T: AsRef<[u8]>>(&mut self, key: T) -> crate::Result<impl BucketRwApi<'tx>>;
+  fn create_bucket_if_not_exists<T: AsRef<[u8]>>(
+    &mut self, key: T,
+  ) -> crate::Result<impl BucketRwApi<'tx>>;
 
   /// Cursor creates a cursor associated with the bucket.
   /// The cursor is only valid as long as the transaction is open.
@@ -123,7 +123,6 @@ impl<'tx> From<BucketCell<'tx>> for BucketImpl<'tx> {
 }
 
 impl<'tx> BucketApi<'tx> for BucketImpl<'tx> {
-
   fn root(&self) -> PgId {
     self.b.root()
   }
@@ -174,7 +173,6 @@ impl<'tx> From<BucketRwCell<'tx>> for BucketRwImpl<'tx> {
 }
 
 impl<'tx> BucketApi<'tx> for BucketRwImpl<'tx> {
-
   fn root(&self) -> PgId {
     self.b.root()
   }
@@ -215,7 +213,6 @@ impl<'tx> BucketApi<'tx> for BucketRwImpl<'tx> {
 }
 
 impl<'tx> BucketRwApi<'tx> for BucketRwImpl<'tx> {
-
   fn bucket_mut<T: AsRef<[u8]>>(&mut self, name: T) -> Option<impl BucketRwApi<'tx>> {
     self.b.api_bucket(name.as_ref()).map(BucketRwImpl::from)
   }
@@ -227,7 +224,9 @@ impl<'tx> BucketRwApi<'tx> for BucketRwImpl<'tx> {
       .map(BucketRwImpl::from)
   }
 
-  fn create_bucket_if_not_exists<T: AsRef<[u8]>>(&mut self, key: T) -> crate::Result<impl BucketRwApi<'tx>> {
+  fn create_bucket_if_not_exists<T: AsRef<[u8]>>(
+    &mut self, key: T,
+  ) -> crate::Result<impl BucketRwApi<'tx>> {
     self
       .b
       .api_create_bucket_if_not_exists(key.as_ref())
@@ -1304,7 +1303,7 @@ impl<'tx> BucketRwIApi<'tx> for BucketRwCell<'tx> {
 
 #[cfg(test)]
 mod tests {
-  use crate::bucket::{MAX_VALUE_SIZE};
+  use crate::bucket::MAX_VALUE_SIZE;
   use crate::test_support::TestDb;
   use crate::{
     BucketApi, BucketRwApi, CursorApi, CursorRwApi, DbApi, DbRwAPI, Error, TxApi, TxRwApi,
@@ -1458,7 +1457,10 @@ mod tests {
       let _ = tx.create_bucket(b"widgets")?;
       tx.bucket_mut(b"widgets").unwrap().create_bucket(b"foo")?;
 
-      assert_eq!(Err(Error::IncompatibleValue), tx.bucket_mut(b"widgets").unwrap().put(b"foo", b"bar"));
+      assert_eq!(
+        Err(Error::IncompatibleValue),
+        tx.bucket_mut(b"widgets").unwrap().put(b"foo", b"bar")
+      );
       Ok(())
     })
   }

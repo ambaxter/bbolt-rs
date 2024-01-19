@@ -14,7 +14,9 @@ pub mod self_owned;
 pub mod tree;
 pub mod utility;
 
+pub mod bump;
 pub mod ids;
+pub mod lock;
 
 pub use ids::{PgId, TxId};
 

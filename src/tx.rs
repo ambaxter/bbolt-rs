@@ -8,6 +8,7 @@ use crate::common::tree::{MappedBranchPage, TreePage};
 use crate::common::{BVec, HashMap, PgId, SplitRef, TxId};
 use crate::cursor::{CursorImpl, CursorRwIApi, CursorRwImpl, InnerCursor};
 use crate::db::{DBShared, DbGuard, DbIApi, DbRwIApi};
+use crate::tx::check::{TxICheck, UnsealTx};
 use crate::{BucketApi, BucketRwApi, CursorApi, CursorRwApi};
 use aliasable::boxed::AliasableBox;
 use aligners::{alignment, AlignedBytes};
@@ -26,10 +27,8 @@ use std::ptr::{addr_of, addr_of_mut};
 use std::rc::Rc;
 use std::slice::from_raw_parts_mut;
 use std::time::{Duration, Instant};
-use crate::tx::check::{TxICheck, UnsealTx};
 
 pub trait TxApi<'tx> {
-
   /// ID returns the transaction id.
   fn id(&self) -> TxId;
 
@@ -65,7 +64,6 @@ pub trait TxApi<'tx> {
 }
 
 pub trait TxRwApi<'tx>: TxApi<'tx> + UnsealTx<'tx> {
-
   /// Cursor creates a cursor associated with the root bucket.
   /// All items in the cursor will return a nil value because all root bucket keys point to buckets.
   /// The cursor is only valid as long as the transaction is open.
@@ -73,7 +71,6 @@ pub trait TxRwApi<'tx>: TxApi<'tx> + UnsealTx<'tx> {
   fn cursor_mut(&mut self) -> impl CursorRwApi<'tx>;
 
   fn bucket_mut<T: AsRef<[u8]>>(&mut self, name: T) -> Option<impl BucketRwApi<'tx>>;
-
 
   /// CreateBucket creates a new bucket.
   /// Returns an error if the bucket already exists, if the bucket name is blank, or if the bucket name is too long.
@@ -714,7 +711,7 @@ impl<'tx> Drop for TxImpl<'tx> {
 trait TxApi2<'tx> {
   fn cursor2(&self) -> impl CursorApi<'tx>;
 
-  fn bucket2<T: AsRef<[u8]>>(&self, key: T ) -> Option<impl BucketApi<'tx>>;
+  fn bucket2<T: AsRef<[u8]>>(&self, key: T) -> Option<impl BucketApi<'tx>>;
 }
 
 impl<'tx> TxApi2<'tx> for TxImpl<'tx> {
@@ -728,7 +725,6 @@ impl<'tx> TxApi2<'tx> for TxImpl<'tx> {
 }
 
 impl<'tx> TxApi<'tx> for TxImpl<'tx> {
-
   fn id(&self) -> TxId {
     self.tx.api_id()
   }
@@ -753,7 +749,7 @@ impl<'tx> TxApi<'tx> for TxImpl<'tx> {
     self.tx.api_bucket(name.as_ref()).map(BucketImpl::from)
   }
 
-  fn for_each<F: FnMut(&[u8], &dyn BucketApi<'tx>)>(&self, f: F)-> crate::Result<()> {
+  fn for_each<F: FnMut(&[u8], &dyn BucketApi<'tx>)>(&self, f: F) -> crate::Result<()> {
     todo!()
   }
 
@@ -773,7 +769,6 @@ pub struct TxRef<'tx> {
 }
 
 impl<'tx> TxApi<'tx> for TxRef<'tx> {
-
   fn id(&self) -> TxId {
     self.tx.api_id()
   }
@@ -798,7 +793,7 @@ impl<'tx> TxApi<'tx> for TxRef<'tx> {
     self.tx.api_bucket(name.as_ref()).map(BucketImpl::from)
   }
 
-  fn for_each<F: FnMut(&[u8], &dyn BucketApi<'tx>)>(&self, f: F)-> crate::Result<()> {
+  fn for_each<F: FnMut(&[u8], &dyn BucketApi<'tx>)>(&self, f: F) -> crate::Result<()> {
     todo!()
   }
 
@@ -892,7 +887,6 @@ impl<'tx> Drop for TxRwImpl<'tx> {
 }
 
 impl<'tx> TxApi<'tx> for TxRwImpl<'tx> {
-
   fn id(&self) -> TxId {
     self.tx.api_id()
   }
@@ -917,7 +911,7 @@ impl<'tx> TxApi<'tx> for TxRwImpl<'tx> {
     self.tx.api_bucket(name.as_ref()).map(BucketRwImpl::from)
   }
 
-  fn for_each<F: FnMut(&[u8], & dyn BucketApi<'tx>)>(&self, f: F) -> crate::Result<()> {
+  fn for_each<F: FnMut(&[u8], &dyn BucketApi<'tx>)>(&self, f: F) -> crate::Result<()> {
     //self.tx.api_for_each(f)
     // TODO: mismatching bucket types
     todo!()
@@ -933,18 +927,19 @@ impl<'tx> TxApi<'tx> for TxRwImpl<'tx> {
 }
 
 impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
-
   fn cursor_mut(&mut self) -> impl CursorRwApi<'tx> {
     CursorRwImpl::new(self.tx.api_cursor_mut())
   }
 
   fn bucket_mut<T: AsRef<[u8]>>(&mut self, name: T) -> Option<impl BucketRwApi<'tx>> {
     self.tx.api_bucket(name.as_ref()).map(BucketRwImpl::from)
-
   }
 
   fn create_bucket<T: AsRef<[u8]>>(&mut self, name: T) -> crate::Result<impl BucketRwApi<'tx>> {
-    self.tx.api_create_bucket(name.as_ref()).map(BucketRwImpl::from)
+    self
+      .tx
+      .api_create_bucket(name.as_ref())
+      .map(BucketRwImpl::from)
   }
 
   fn create_bucket_if_not_exists<T: AsRef<[u8]>>(
@@ -1054,7 +1049,6 @@ pub struct TxRwRef<'tx> {
 }
 
 impl<'tx> TxApi<'tx> for TxRwRef<'tx> {
-
   fn id(&self) -> TxId {
     self.tx.api_id()
   }
@@ -1093,7 +1087,6 @@ impl<'tx> TxApi<'tx> for TxRwRef<'tx> {
 }
 
 impl<'tx> TxRwApi<'tx> for TxRwRef<'tx> {
-
   fn cursor_mut(&mut self) -> impl CursorRwApi<'tx> {
     CursorRwImpl::new(self.tx.api_cursor_mut())
   }
@@ -1103,7 +1096,10 @@ impl<'tx> TxRwApi<'tx> for TxRwRef<'tx> {
   }
 
   fn create_bucket<T: AsRef<[u8]>>(&mut self, name: T) -> crate::Result<impl BucketRwApi<'tx>> {
-    self.tx.api_create_bucket(name.as_ref()).map(BucketRwImpl::from)
+    self
+      .tx
+      .api_create_bucket(name.as_ref())
+      .map(BucketRwImpl::from)
   }
 
   fn create_bucket_if_not_exists<T: AsRef<[u8]>>(
@@ -1152,7 +1148,6 @@ pub(crate) mod check {
   }*/
 
   impl<'tx> UnsealTx<'tx> for TxRwImpl<'tx> {
-
     fn unseal_rw(&self) -> impl TxRwIApi<'tx> {
       TxRwCell { cell: self.tx.cell }
     }

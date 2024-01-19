@@ -186,7 +186,7 @@ fn mmap_size(page_size: usize, size: u64) -> crate::Result<u64> {
   Ok(sz)
 }
 
-pub(crate) trait DBBackend {
+pub(crate) trait DBBackend: Send + Sync {
   fn page_size(&self) -> usize;
   fn data_size(&self) -> u64;
   fn meta(&self) -> Meta {
@@ -225,13 +225,16 @@ pub(crate) trait DBBackend {
 }
 
 struct MemBackend {
-  mmap: AlignedBytes<alignment::Page>,
+  mmap: Mutex<AlignedBytes<alignment::Page>>,
   page_size: usize,
   alloc_size: u64,
   /// current on disk file size
   file_size: u64,
   data_size: u64,
 }
+
+unsafe impl Send for MemBackend {}
+unsafe impl Sync for MemBackend {}
 
 impl DBBackend for MemBackend {
   fn page_size(&self) -> usize {
@@ -244,20 +247,20 @@ impl DBBackend for MemBackend {
 
   fn meta0(&self) -> MappedMetaPage {
     // Safe because we will never actually mutate this ptr
-    unsafe { MappedMetaPage::new(self.mmap.as_ptr().cast_mut()) }
+    unsafe { MappedMetaPage::new(self.mmap.lock().as_ptr().cast_mut()) }
   }
 
   fn meta1(&self) -> MappedMetaPage {
     // Safe because we will never actually mutate this ptr
-    unsafe { MappedMetaPage::new(self.mmap.as_ptr().add(self.page_size).cast_mut()) }
+    unsafe { MappedMetaPage::new(self.mmap.lock().as_ptr().add(self.page_size).cast_mut()) }
   }
 
   fn page<'tx>(&self, pg_id: PgId) -> RefPage<'tx> {
-    debug_assert!(((pg_id.0 as usize + 1) * self.page_size) <= self.mmap.len());
+    let mmap = self.mmap.lock();
+    debug_assert!(((pg_id.0 as usize + 1) * self.page_size) <= mmap.len());
     unsafe {
       RefPage::new(
-        self
-          .mmap
+        mmap
           .as_ptr()
           .offset(pg_id.0 as isize * self.page_size as isize),
       )
@@ -265,17 +268,22 @@ impl DBBackend for MemBackend {
   }
 
   fn grow(&mut self, size: u64) -> crate::Result<()> {
-    let mut new_mmap = AlignedBytes::new_zeroed(size as usize);
-    new_mmap[0..self.mmap.len()].copy_from_slice(&self.mmap);
-    self.mmap = new_mmap;
+    let new_mmap = {
+      let mmap = self.mmap.lock();
+      let mut new_mmap = AlignedBytes::new_zeroed(size as usize);
+      new_mmap[0..mmap.len()].copy_from_slice(&mmap);
+      new_mmap
+    };
+    self.mmap = Mutex::new(new_mmap);
     Ok(())
   }
 
   fn mmap(&mut self, min_size: u64, _tx: TxRwCell) -> crate::Result<()> {
-    if self.mmap.len() < self.page_size * 2 {
+    let mmap = self.mmap.lock();
+    if mmap.len() < self.page_size * 2 {
       return Err(Error::MMapFileSizeTooSmall);
     }
-    let mut size = (self.mmap.len() as u64).max(min_size);
+    let mut size = (mmap.len() as u64).max(min_size);
     size = mmap_size(self.page_size, size)?;
     let r0 = self.meta0().meta.validate();
     let r1 = self.meta1().meta.validate();
@@ -293,7 +301,8 @@ impl DBBackend for MemBackend {
   }
 
   fn write_all_at(&mut self, buffer: &[u8], offset: u64) -> crate::Result<usize> {
-    let write_to = &mut self.mmap[offset as usize..offset as usize + buffer.len()];
+    let mut mmap = self.mmap.lock();
+    let write_to = &mut mmap[offset as usize..offset as usize + buffer.len()];
     write_to.copy_from_slice(buffer);
     let written = write_to.len();
     Ok(written)
@@ -864,7 +873,7 @@ impl DB {
     let mmap = DB::init_page(page_size);
     let file_size = mmap.len() as u64;
     let backend = MemBackend {
-      mmap,
+      mmap: Mutex::new(mmap),
       page_size,
       alloc_size: DEFAULT_ALLOC_SIZE.bytes() as u64,
       file_size,

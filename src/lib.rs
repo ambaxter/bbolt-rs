@@ -17,3 +17,6 @@ pub use cursor::{CursorApi, CursorRwApi};
 pub use db::{DbApi, DbRwAPI, DB};
 pub use tx::check::TxCheck;
 pub use tx::{TxApi, TxRwApi};
+
+pub use common::bump::*;
+pub use common::lock::UpgradableGuard;
