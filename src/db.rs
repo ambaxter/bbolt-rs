@@ -11,11 +11,9 @@ use crate::common::tree::MappedLeafPage;
 use crate::common::{PgId, SplitRef, TxId};
 use crate::freelist::{Freelist, MappedFreeListPage};
 use crate::tx::{TxIApi, TxImpl, TxRef, TxRwCell, TxRwImpl, TxRwRef, TxStats};
-use crate::{BumpPool, Error, TxApi, TxRwApi};
+use crate::{BumpPool, Error, PinBump, TxApi, TxRwApi};
 use aligners::{alignment, AlignedBytes};
-use bumpalo::Bump;
 use fs4::FileExt;
-use lockfree_object_pool::LinearObjectPool;
 use memmap2::{Advice, MmapOptions, MmapRaw};
 use parking_lot::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::cell::{RefCell, RefMut};
@@ -25,6 +23,7 @@ use std::ops::Sub;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::{fs, io, mem};
+use std::pin::Pin;
 
 pub trait DbApi: Clone + Send + Sync
 where
@@ -601,6 +600,9 @@ pub(crate) trait DbRwIApi<'tx>: DbIApi<'tx> {
   fn remove_rw_tx(&mut self, tx_stats: TxStats);
 
   fn repool_allocated(&mut self, page: AlignedBytes<alignment::Page>);
+
+  fn repool_bump(&mut self, bump: Pin<Box<PinBump>>);
+
   fn fsync(&mut self) -> crate::Result<()>;
   fn write_at(&mut self, buf: &[u8], offset: u64) -> crate::Result<usize>;
 }
@@ -644,6 +646,7 @@ impl<'tx> DbIApi<'tx> for DbGuard<'tx> {
 
 // In theory things are wired up ok. Here's hoping Miri is happy
 pub struct DBShared {
+  bump_pool: BumpPool,
   pub(crate) stats: Arc<RwLock<DbStats>>,
   pub(crate) records: Mutex<TxRecords>,
   page_pool: Vec<AlignedBytes<alignment::Page>>,
@@ -784,8 +787,13 @@ impl<'tx> DbRwIApi<'tx> for DBShared {
   }
 
   fn repool_allocated(&mut self, mut page: AlignedBytes<alignment::Page>) {
-    page.fill(0);
+    //page.fill(0);
     self.page_pool.push(page);
+  }
+
+  fn repool_bump(&mut self, mut bump: Pin<Box<PinBump>>) {
+    Pin::as_mut(&mut bump).reset();
+    self.bump_pool.push(bump)
   }
 
   fn fsync(&mut self) -> crate::Result<()> {
@@ -800,7 +808,6 @@ impl<'tx> DbRwIApi<'tx> for DBShared {
 #[derive(Clone)]
 pub struct DB {
   // TODO: Save a single Bump for RW transactions with a size hint
-  bump_pool: BumpPool,
   db: Arc<RwLock<DBShared>>,
   stats: Arc<RwLock<DbStats>>,
 }
@@ -857,8 +864,8 @@ impl DB {
     };
     let arc_stats = Arc::new(RwLock::new(stats));
     Ok(DB {
-      bump_pool: Default::default(),
       db: Arc::new(RwLock::new(DBShared {
+        bump_pool: Default::default(),
         stats: arc_stats.clone(),
         records: Mutex::new(records),
         backend: Box::new(backend),
@@ -892,8 +899,8 @@ impl DB {
     };
     let arc_stats = Arc::new(RwLock::new(stats));
     Ok(DB {
-      bump_pool: Default::default(),
       db: Arc::new(RwLock::new(DBShared {
+        bump_pool: Default::default(),
         stats: arc_stats.clone(),
         records: Mutex::new(records),
         backend: Box::new(backend),
@@ -951,15 +958,17 @@ impl DbApi for DB {
   }
 
   fn begin(&self) -> impl TxApi {
-    let bump = self.bump_pool.pop();
-    TxImpl::new(bump, self.db.read())
+    let lock = self.db.read();
+    let bump = lock.bump_pool.pop();
+    TxImpl::new(bump, lock)
   }
 
   fn view<'tx, F: FnMut(TxRef<'tx>) -> crate::Result<()>>(
     &'tx self, mut f: F,
   ) -> crate::Result<()> {
-    let bump = self.bump_pool.pop();
-    let tx = TxImpl::new(bump, self.db.read());
+    let lock = self.db.read();
+    let bump = lock.bump_pool.pop();
+    let tx = TxImpl::new(bump, lock);
     let tx_ref = tx.get_ref();
     let r = f(tx_ref);
     let _ = tx.rollback();
@@ -973,18 +982,18 @@ impl DbApi for DB {
 
 impl DbRwAPI for DB {
   fn begin_mut(&mut self) -> impl TxRwApi {
-    let bump = self.bump_pool.pop();
-    let write_lock = self.db.write();
-    TxRwImpl::new(bump, write_lock)
+    let lock = self.db.write();
+    let bump = lock.bump_pool.pop();
+    TxRwImpl::new(bump, lock)
   }
 
   fn update<'tx, F: Fn(TxRwRef<'tx>) -> crate::Result<()>>(
     &'tx mut self, mut f: F,
   ) -> crate::Result<()> {
-    let bump = self.bump_pool.pop();
-    let write_lock = self.db.write();
-    write_lock.free_pages();
-    let txrw = TxRwImpl::new(bump, write_lock);
+    let lock = self.db.write();
+    let bump = lock.bump_pool.pop();
+    lock.free_pages();
+    let txrw = TxRwImpl::new(bump, lock);
     let tx_ref = txrw.get_ref();
     match f(tx_ref) {
       Ok(_) => {

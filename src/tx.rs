@@ -13,7 +13,6 @@ use crate::{BucketApi, BucketRwApi, CursorApi, CursorRwApi, PinBump};
 use aliasable::boxed::AliasableBox;
 use aligners::{alignment, AlignedBytes};
 use bumpalo::Bump;
-use lockfree_object_pool::LinearOwnedReusable;
 use parking_lot::{RwLockReadGuard, RwLockWriteGuard};
 use std::alloc::Layout;
 use std::borrow::Cow;
@@ -658,9 +657,7 @@ pub struct TxImpl<'tx> {
 }
 
 impl<'tx> TxImpl<'tx> {
-  pub(crate) fn new(
-    bump: Pin<Box<PinBump>>, lock: RwLockReadGuard<'tx, DBShared>,
-  ) -> TxImpl<'tx> {
+  pub(crate) fn new(bump: Pin<Box<PinBump>>, lock: RwLockReadGuard<'tx, DBShared>) -> TxImpl<'tx> {
     let meta = lock.backend.meta();
     let page_size = meta.page_size() as usize;
     let inline_bucket = meta.root();

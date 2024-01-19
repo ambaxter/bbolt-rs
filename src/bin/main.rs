@@ -4,9 +4,6 @@ use std::time::Instant;
 fn main() -> bbolt_rs::Result<()> {
   println!("Hello, world!");
 
-  // TODO: overwrites freelist page, but fails somehow
-  // Meta is chosen correctly, but page is garbage
-
   for _ in 0..5 {
     let mut db = DB::open("test.db")?;
     widgets(&mut db)?;

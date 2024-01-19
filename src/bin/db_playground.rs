@@ -140,8 +140,6 @@ fn send_test<T: Send>(_s: &T) {}
 fn sync_test<T: Sync + Send>(_s: &T) {}
 
 fn main() -> bbolt_rs::Result<()> {
-  use qcell::{generativity::make_guard, LCell, LCellOwner};
-
   let pool = BumpPool::default();
   sync_test(&pool);
   let bump = pool.pop();
@@ -165,15 +163,5 @@ fn main() -> bbolt_rs::Result<()> {
 
   let w = db.w();
 
-  let pin_bump = pool.pop();
-  let bump = Pin::as_ref(&pin_bump).bump();
-  make_guard!(guard);
-  let mut owner = LCellOwner::new(guard);
-  let cell = &*bump.alloc(LCell::new(100));
-  assert_eq!(cell.ro(&owner), &100);
-  {
-    *cell.rw(&mut owner) = 200;
-  }
-  assert_eq!(cell.ro(&owner), &200);
   Ok(())
 }

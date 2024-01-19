@@ -26,9 +26,7 @@ thiserror = "1.0"
 anyhow = "1.0"
 fs4 = { version = "0.7.0", features = ["sync"] }
 parking_lot = "0.12.1"
-lockfree-object-pool = "0.1"
 aliasable = "0.1.3"
-qcell = { version = "0.5.4", features = ["generativity"] }
 pin-project = "1"
 
 [dev-dependencies]
