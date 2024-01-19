@@ -1,7 +1,6 @@
 use aliasable::boxed::AliasableBox;
 use aligners::AlignedBytes;
 use bbolt_rs::{BumpPool, PinBump, UpgradableGuard};
-use bumpalo::Bump;
 use parking_lot::{RwLock, RwLockReadGuard, RwLockUpgradableReadGuard, RwLockWriteGuard};
 use pin_project::pin_project;
 use std::cell::{RefCell, RefMut};

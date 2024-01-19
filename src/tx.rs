@@ -9,7 +9,7 @@ use crate::common::{BVec, HashMap, PgId, SplitRef, TxId};
 use crate::cursor::{CursorImpl, CursorRwIApi, CursorRwImpl, InnerCursor};
 use crate::db::{DBShared, DbGuard, DbIApi, DbRwIApi};
 use crate::tx::check::{TxICheck, UnsealTx};
-use crate::{BucketApi, BucketRwApi, CursorApi, CursorRwApi};
+use crate::{BucketApi, BucketRwApi, CursorApi, CursorRwApi, PinBump};
 use aliasable::boxed::AliasableBox;
 use aligners::{alignment, AlignedBytes};
 use bumpalo::Bump;
@@ -651,7 +651,7 @@ impl<'tx> TxRwIApi<'tx> for TxRwCell<'tx> {
 }
 
 pub struct TxImpl<'tx> {
-  bump: Pin<Box<LinearOwnedReusable<Bump>>>,
+  bump: Pin<Box<PinBump>>,
   db: Pin<AliasableBox<DbGuard<'tx>>>,
   pub(crate) tx: Pin<Rc<TxCell<'tx>>>,
   unpin: PhantomPinned,
@@ -659,7 +659,7 @@ pub struct TxImpl<'tx> {
 
 impl<'tx> TxImpl<'tx> {
   pub(crate) fn new(
-    bump: LinearOwnedReusable<Bump>, lock: RwLockReadGuard<'tx, DBShared>,
+    bump: Pin<Box<PinBump>>, lock: RwLockReadGuard<'tx, DBShared>,
   ) -> TxImpl<'tx> {
     let meta = lock.backend.meta();
     let page_size = meta.page_size() as usize;
@@ -667,8 +667,9 @@ impl<'tx> TxImpl<'tx> {
     let mut uninit: MaybeUninit<TxImpl<'tx>> = MaybeUninit::uninit();
     let ptr = uninit.as_mut_ptr();
     unsafe {
-      addr_of_mut!((*ptr).bump).write(Box::pin(bump));
-      let bump = &(**addr_of!((*ptr).bump));
+      addr_of_mut!((*ptr).bump).write(bump);
+
+      let bump = Pin::as_ref(&*addr_of!((*ptr).bump)).bump().get_ref();
       addr_of_mut!((*ptr).db).write(Pin::new(AliasableBox::from_unique(Box::new(
         DbGuard::Read(lock),
       ))));
@@ -807,7 +808,7 @@ impl<'tx> TxApi<'tx> for TxRef<'tx> {
 }
 
 pub struct TxRwImpl<'tx> {
-  bump: Pin<Box<LinearOwnedReusable<Bump>>>,
+  bump: Pin<Box<PinBump>>,
   db: Pin<AliasableBox<DbGuard<'tx>>>,
   pub(crate) tx: Pin<Rc<TxRwCell<'tx>>>,
   unpin: PhantomPinned,
@@ -821,7 +822,7 @@ impl<'tx> TxRwImpl<'tx> {
   }
 
   pub(crate) fn new(
-    bump: LinearOwnedReusable<Bump>, lock: RwLockWriteGuard<'tx, DBShared>,
+    bump: Pin<Box<PinBump>>, lock: RwLockWriteGuard<'tx, DBShared>,
   ) -> TxRwImpl<'tx> {
     let mut meta = lock.backend.meta();
     meta.set_txid(meta.txid() + 1);
@@ -830,8 +831,8 @@ impl<'tx> TxRwImpl<'tx> {
     let mut uninit: MaybeUninit<TxRwImpl<'tx>> = MaybeUninit::uninit();
     let ptr = uninit.as_mut_ptr();
     unsafe {
-      addr_of_mut!((*ptr).bump).write(Box::pin(bump));
-      let bump = &(**addr_of!((*ptr).bump));
+      addr_of_mut!((*ptr).bump).write(bump);
+      let bump = Pin::as_ref(&*addr_of!((*ptr).bump)).bump().get_ref();
       addr_of_mut!((*ptr).db).write(Pin::new(AliasableBox::from_unique(Box::new(
         DbGuard::Write(RefCell::new(lock)),
       ))));
