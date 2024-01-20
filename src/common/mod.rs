@@ -17,6 +17,7 @@ pub mod utility;
 pub mod bump;
 pub mod ids;
 pub mod lock;
+pub mod pool;
 
 pub use ids::{PgId, TxId};
 

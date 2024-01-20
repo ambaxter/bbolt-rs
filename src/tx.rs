@@ -3,6 +3,7 @@ use crate::bucket::{BucketCell, BucketIApi, BucketImpl, BucketRwCell, BucketRwIA
 use crate::common::memory::BCell;
 use crate::common::meta::{MappedMetaPage, Meta, MetaPage};
 use crate::common::page::{CoerciblePage, MutPage, Page, PageInfo, RefPage};
+use crate::common::pool::SyncReusable;
 use crate::common::self_owned::SelfOwned;
 use crate::common::tree::{MappedBranchPage, TreePage};
 use crate::common::{BVec, HashMap, PgId, SplitRef, TxId};
@@ -650,14 +651,16 @@ impl<'tx> TxRwIApi<'tx> for TxRwCell<'tx> {
 }
 
 pub struct TxImpl<'tx> {
-  bump: Pin<Box<PinBump>>,
+  bump: SyncReusable<Pin<Box<PinBump>>>,
   db: Pin<AliasableBox<DbGuard<'tx>>>,
   pub(crate) tx: Pin<Rc<TxCell<'tx>>>,
   unpin: PhantomPinned,
 }
 
 impl<'tx> TxImpl<'tx> {
-  pub(crate) fn new(bump: Pin<Box<PinBump>>, lock: RwLockReadGuard<'tx, DBShared>) -> TxImpl<'tx> {
+  pub(crate) fn new(
+    bump: SyncReusable<Pin<Box<PinBump>>>, lock: RwLockReadGuard<'tx, DBShared>,
+  ) -> TxImpl<'tx> {
     let meta = lock.backend.meta();
     let page_size = meta.page_size() as usize;
     let inline_bucket = meta.root();
@@ -805,7 +808,7 @@ impl<'tx> TxApi<'tx> for TxRef<'tx> {
 }
 
 pub struct TxRwImpl<'tx> {
-  bump: Pin<Box<PinBump>>,
+  bump: SyncReusable<Pin<Box<PinBump>>>,
   db: Pin<AliasableBox<DbGuard<'tx>>>,
   pub(crate) tx: Pin<Rc<TxRwCell<'tx>>>,
   unpin: PhantomPinned,
@@ -819,7 +822,7 @@ impl<'tx> TxRwImpl<'tx> {
   }
 
   pub(crate) fn new(
-    bump: Pin<Box<PinBump>>, lock: RwLockWriteGuard<'tx, DBShared>,
+    bump: SyncReusable<Pin<Box<PinBump>>>, lock: RwLockWriteGuard<'tx, DBShared>,
   ) -> TxRwImpl<'tx> {
     let mut meta = lock.backend.meta();
     meta.set_txid(meta.txid() + 1);

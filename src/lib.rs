@@ -20,3 +20,4 @@ pub use tx::{TxApi, TxRwApi};
 
 pub use common::bump::*;
 pub use common::lock::UpgradableGuard;
+pub use common::pool::*;

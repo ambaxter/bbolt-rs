@@ -11,7 +11,7 @@ use crate::common::tree::MappedLeafPage;
 use crate::common::{PgId, SplitRef, TxId};
 use crate::freelist::{Freelist, MappedFreeListPage};
 use crate::tx::{TxIApi, TxImpl, TxRef, TxRwCell, TxRwImpl, TxRwRef, TxStats};
-use crate::{BumpPool, Error, PinBump, TxApi, TxRwApi};
+use crate::{Error, PinBump, RefPool, RefReusable, SyncPool, TxApi, TxRwApi};
 use aligners::{alignment, AlignedBytes};
 use fs4::FileExt;
 use memmap2::{Advice, MmapOptions, MmapRaw};
@@ -21,9 +21,10 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::ops::Sub;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::{fs, io, mem};
-use std::pin::Pin;
 
 pub trait DbApi: Clone + Send + Sync
 where
@@ -601,8 +602,6 @@ pub(crate) trait DbRwIApi<'tx>: DbIApi<'tx> {
 
   fn repool_allocated(&mut self, page: AlignedBytes<alignment::Page>);
 
-  fn repool_bump(&mut self, bump: Pin<Box<PinBump>>);
-
   fn fsync(&mut self) -> crate::Result<()>;
   fn write_at(&mut self, buf: &[u8], offset: u64) -> crate::Result<usize>;
 }
@@ -646,10 +645,9 @@ impl<'tx> DbIApi<'tx> for DbGuard<'tx> {
 
 // In theory things are wired up ok. Here's hoping Miri is happy
 pub struct DBShared {
-  bump_pool: BumpPool,
   pub(crate) stats: Arc<RwLock<DbStats>>,
   pub(crate) records: Mutex<TxRecords>,
-  page_pool: Vec<AlignedBytes<alignment::Page>>,
+  page_pool: Rc<RefPool<AlignedBytes<alignment::Page>>>,
   pub(crate) backend: Box<dyn DBBackend>,
 }
 
@@ -717,8 +715,8 @@ impl<'tx> DbRwIApi<'tx> for DBShared {
     let tx_id = tx.api_id();
     let high_water = tx.meta().pgid();
     let mut r = self.records.lock();
-    let bytes = if page_count == 1 && !self.page_pool.is_empty() {
-      self.page_pool.pop().unwrap()
+    let bytes = if page_count == 1 {
+      self.page_pool.pull().detach()
     } else {
       AlignedBytes::new_zeroed(page_count as usize * self.backend.page_size())
     };
@@ -786,14 +784,8 @@ impl<'tx> DbRwIApi<'tx> for DBShared {
     stats.tx_stats += tx_stats;
   }
 
-  fn repool_allocated(&mut self, mut page: AlignedBytes<alignment::Page>) {
-    //page.fill(0);
-    self.page_pool.push(page);
-  }
-
-  fn repool_bump(&mut self, mut bump: Pin<Box<PinBump>>) {
-    Pin::as_mut(&mut bump).reset();
-    self.bump_pool.push(bump)
+  fn repool_allocated(&mut self, page: AlignedBytes<alignment::Page>) {
+    RefReusable::new(self.page_pool.clone(), page);
   }
 
   fn fsync(&mut self) -> crate::Result<()> {
@@ -808,6 +800,7 @@ impl<'tx> DbRwIApi<'tx> for DBShared {
 #[derive(Clone)]
 pub struct DB {
   // TODO: Save a single Bump for RW transactions with a size hint
+  bump_pool: Arc<SyncPool<Pin<Box<PinBump>>>>,
   db: Arc<RwLock<DBShared>>,
   stats: Arc<RwLock<DbStats>>,
 }
@@ -863,13 +856,19 @@ impl DB {
       ..Default::default()
     };
     let arc_stats = Arc::new(RwLock::new(stats));
+    let bump_pool = SyncPool::new(
+      || Box::pin(PinBump::default()),
+      |bump| Pin::as_mut(bump).reset(),
+    );
+
+    let page_pool = RefPool::new(move || AlignedBytes::new_zeroed(page_size), |p| p.fill(0));
     Ok(DB {
+      bump_pool,
       db: Arc::new(RwLock::new(DBShared {
-        bump_pool: Default::default(),
         stats: arc_stats.clone(),
         records: Mutex::new(records),
         backend: Box::new(backend),
-        page_pool: vec![],
+        page_pool,
       })),
       stats: arc_stats.clone(),
     })
@@ -898,13 +897,18 @@ impl DB {
       ..Default::default()
     };
     let arc_stats = Arc::new(RwLock::new(stats));
+    let bump_pool = SyncPool::new(
+      || Box::pin(PinBump::default()),
+      |bump| Pin::as_mut(bump).reset(),
+    );
+    let page_pool = RefPool::new(move || AlignedBytes::new_zeroed(page_size), |p| p.fill(0));
     Ok(DB {
+      bump_pool,
       db: Arc::new(RwLock::new(DBShared {
-        bump_pool: Default::default(),
         stats: arc_stats.clone(),
         records: Mutex::new(records),
         backend: Box::new(backend),
-        page_pool: vec![],
+        page_pool,
       })),
       stats: arc_stats.clone(),
     })
@@ -959,7 +963,7 @@ impl DbApi for DB {
 
   fn begin(&self) -> impl TxApi {
     let lock = self.db.read();
-    let bump = lock.bump_pool.pop();
+    let bump = self.bump_pool.pull();
     TxImpl::new(bump, lock)
   }
 
@@ -967,7 +971,7 @@ impl DbApi for DB {
     &'tx self, mut f: F,
   ) -> crate::Result<()> {
     let lock = self.db.read();
-    let bump = lock.bump_pool.pop();
+    let bump = self.bump_pool.pull();
     let tx = TxImpl::new(bump, lock);
     let tx_ref = tx.get_ref();
     let r = f(tx_ref);
@@ -983,7 +987,7 @@ impl DbApi for DB {
 impl DbRwAPI for DB {
   fn begin_mut(&mut self) -> impl TxRwApi {
     let lock = self.db.write();
-    let bump = lock.bump_pool.pop();
+    let bump = self.bump_pool.pull();
     TxRwImpl::new(bump, lock)
   }
 
@@ -991,7 +995,7 @@ impl DbRwAPI for DB {
     &'tx mut self, mut f: F,
   ) -> crate::Result<()> {
     let lock = self.db.write();
-    let bump = lock.bump_pool.pop();
+    let bump = self.bump_pool.pull();
     lock.free_pages();
     let txrw = TxRwImpl::new(bump, lock);
     let tx_ref = txrw.get_ref();

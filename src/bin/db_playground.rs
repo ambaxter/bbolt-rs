@@ -1,6 +1,6 @@
 use aliasable::boxed::AliasableBox;
 use aligners::AlignedBytes;
-use bbolt_rs::{BumpPool, PinBump, UpgradableGuard};
+use bbolt_rs::{PinBump, SyncPool, SyncReusable, UpgradableGuard};
 use parking_lot::{RwLock, RwLockReadGuard, RwLockUpgradableReadGuard, RwLockWriteGuard};
 use pin_project::pin_project;
 use std::cell::{RefCell, RefMut};
@@ -31,7 +31,7 @@ struct TxResources {
 
 #[derive(Clone)]
 struct Db {
-  bump_pool: BumpPool,
+  bump_pool: Arc<SyncPool<Pin<Box<PinBump>>>>,
   meta: Arc<Mutex<Meta>>,
   backend: Arc<RwLock<TxResources>>,
 }
@@ -39,7 +39,7 @@ struct Db {
 impl Db {
   fn new() -> Db {
     Db {
-      bump_pool: Default::default(),
+      bump_pool: SyncPool::pin_default(),
       meta: Mutex::new(Meta {}).into(),
       backend: RwLock::new(TxResources {
         backend: Default::default(),
@@ -52,7 +52,7 @@ impl Db {
     let meta_lock = self.meta.lock().unwrap();
     let lock = self.backend.read();
     Tx {
-      bump: self.bump_pool.pop(),
+      bump: self.bump_pool.pull(),
       meta: meta_lock.clone(),
       db: AliasableBox::from_unique_pin(Box::pin(PinDbGuard::new(lock))),
       tx_stats: TxStats {},
@@ -63,7 +63,7 @@ impl Db {
     let lock = self.backend.upgradable_read();
     let meta_lock = self.meta.lock().unwrap();
     Tx {
-      bump: self.bump_pool.pop(),
+      bump: self.bump_pool.pull(),
       meta: meta_lock.clone(),
       db: AliasableBox::from_unique_pin(Box::pin(PinDbGuard::new(lock))),
       tx_stats: TxStats {},
@@ -129,7 +129,7 @@ impl<'a, T> PinDbGuard<'a, T> {
 }
 
 struct Tx<'a> {
-  bump: Pin<Box<PinBump>>,
+  bump: SyncReusable<Pin<Box<PinBump>>>,
   meta: Meta,
   db: Pin<AliasableBox<PinDbGuard<'a, TxResources>>>,
   tx_stats: TxStats,
@@ -140,11 +140,11 @@ fn send_test<T: Send>(_s: &T) {}
 fn sync_test<T: Sync + Send>(_s: &T) {}
 
 fn main() -> bbolt_rs::Result<()> {
-  let pool = BumpPool::default();
+  let pool: Arc<SyncPool<Pin<Box<PinBump>>>> = SyncPool::pin_default();
   sync_test(&pool);
-  let bump = pool.pop();
+  let bump = pool.pull();
   send_test(&bump);
-  pool.push(bump);
+  drop(bump);
 
   let mut db = Db::new();
   sync_test(&db);
