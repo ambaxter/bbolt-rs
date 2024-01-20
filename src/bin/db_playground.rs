@@ -1,11 +1,8 @@
 use aliasable::boxed::AliasableBox;
 use aligners::AlignedBytes;
-use bbolt_rs::{PinBump, SyncPool, SyncReusable, UpgradableGuard};
-use parking_lot::{RwLock, RwLockReadGuard, RwLockUpgradableReadGuard, RwLockWriteGuard};
-use pin_project::pin_project;
-use std::cell::{RefCell, RefMut};
-use std::ops::{Deref, DerefMut};
-use std::pin::{pin, Pin};
+use bbolt_rs::{PinBump, PinLockGuard, SyncPool, SyncReusable};
+use parking_lot::RwLock;
+use std::pin::Pin;
 use std::sync::mpsc;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -54,7 +51,7 @@ impl Db {
     Tx {
       bump: self.bump_pool.pull(),
       meta: meta_lock.clone(),
-      db: AliasableBox::from_unique_pin(Box::pin(PinDbGuard::new(lock))),
+      db: AliasableBox::from_unique_pin(Box::pin(PinLockGuard::new(lock))),
       tx_stats: TxStats {},
     }
   }
@@ -65,7 +62,7 @@ impl Db {
     Tx {
       bump: self.bump_pool.pull(),
       meta: meta_lock.clone(),
-      db: AliasableBox::from_unique_pin(Box::pin(PinDbGuard::new(lock))),
+      db: AliasableBox::from_unique_pin(Box::pin(PinLockGuard::new(lock))),
       tx_stats: TxStats {},
     }
   }
@@ -74,64 +71,10 @@ impl Db {
 #[derive(Default, Clone)]
 struct TxStats {}
 
-enum DbGuard<'a, T> {
-  R(RwLockReadGuard<'a, T>),
-  U(RefCell<UpgradableGuard<'a, T>>),
-}
-
-impl<'a, T> DbGuard<'a, T> {
-  fn is_write(&self) -> bool {
-    if let DbGuard::U(g) = self {
-      g.borrow().is_write()
-    } else {
-      false
-    }
-  }
-
-  fn get_mut(&self) -> Option<RefMut<T>> {
-    match self {
-      DbGuard::R(_) => None,
-      DbGuard::U(g) => Some(RefMut::map(g.borrow_mut(), |l| l.deref_mut())),
-    }
-  }
-}
-
-impl<'a, T> From<RwLockReadGuard<'a, T>> for DbGuard<'a, T> {
-  fn from(value: RwLockReadGuard<'a, T>) -> Self {
-    DbGuard::R(value)
-  }
-}
-
-impl<'a, T> From<RwLockUpgradableReadGuard<'a, T>> for DbGuard<'a, T> {
-  fn from(value: RwLockUpgradableReadGuard<'a, T>) -> Self {
-    DbGuard::U(RefCell::new(UpgradableGuard::UR(value)))
-  }
-}
-
-impl<'a, T> From<RwLockWriteGuard<'a, T>> for DbGuard<'a, T> {
-  fn from(value: RwLockWriteGuard<'a, T>) -> Self {
-    DbGuard::U(RefCell::new(UpgradableGuard::W(value)))
-  }
-}
-
-// The empty derive prevents RustRover from having issues
-#[derive()]
-#[pin_project(!Unpin)]
-struct PinDbGuard<'a, T> {
-  #[pin]
-  guard: DbGuard<'a, T>,
-}
-
-impl<'a, T> PinDbGuard<'a, T> {
-  fn new<L: Into<DbGuard<'a, T>>>(lock: L) -> PinDbGuard<'a, T> {
-    PinDbGuard { guard: lock.into() }
-  }
-}
-
 struct Tx<'a> {
   bump: SyncReusable<Pin<Box<PinBump>>>,
   meta: Meta,
-  db: Pin<AliasableBox<PinDbGuard<'a, TxResources>>>,
+  db: Pin<AliasableBox<PinLockGuard<'a, TxResources>>>,
   tx_stats: TxStats,
 }
 
@@ -158,7 +101,7 @@ fn main() -> bbolt_rs::Result<()> {
   }
   {
     let w = db.w();
-    w.db.guard.get_mut();
+    Pin::as_ref(&w.db).guard().get_mut();
   }
 
   let w = db.w();
