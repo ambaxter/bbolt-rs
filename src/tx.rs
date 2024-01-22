@@ -8,7 +8,7 @@ use crate::common::self_owned::SelfOwned;
 use crate::common::tree::{MappedBranchPage, TreePage};
 use crate::common::{BVec, HashMap, PgId, SplitRef, TxId};
 use crate::cursor::{CursorImpl, CursorRwIApi, CursorRwImpl, InnerCursor};
-use crate::db::{DbShared, DbIApi, DbRwIApi};
+use crate::db::{DbIApi, DbRwIApi, DbShared};
 use crate::tx::check::{TxICheck, UnsealTx};
 use crate::{BucketApi, BucketRwApi, CursorApi, CursorRwApi, LockGuard, PinBump, PinLockGuard};
 use aliasable::boxed::AliasableBox;
@@ -661,7 +661,6 @@ pub struct TxImpl<'tx> {
   bump: SyncReusable<Pin<Box<PinBump>>>,
   db: Pin<AliasableBox<PinLockGuard<'tx, DbShared>>>,
   pub(crate) tx: Rc<TxCell<'tx>>,
-  unpin: PhantomPinned,
 }
 
 impl<'tx> TxImpl<'tx> {
@@ -713,22 +712,6 @@ impl<'tx> Drop for TxImpl<'tx> {
     let tx_id = self.id();
     let stats = self.stats();
     Pin::as_ref(&self.db).guard().remove_tx(tx_id, stats);
-  }
-}
-
-trait TxApi2<'tx> {
-  fn cursor2(&self) -> impl CursorApi<'tx>;
-
-  fn bucket2<T: AsRef<[u8]>>(&self, key: T) -> Option<impl BucketApi<'tx>>;
-}
-
-impl<'tx> TxApi2<'tx> for TxImpl<'tx> {
-  fn cursor2(&self) -> impl CursorApi<'tx> {
-    CursorImpl::new(self.tx.api_cursor())
-  }
-
-  fn bucket2<T: AsRef<[u8]>>(&self, name: T) -> Option<impl BucketApi<'tx>> {
-    self.tx.api_bucket(name.as_ref()).map(BucketImpl::from)
   }
 }
 
@@ -818,7 +801,6 @@ pub struct TxRwImpl<'tx> {
   bump: SyncReusable<Pin<Box<PinBump>>>,
   db: Pin<AliasableBox<PinLockGuard<'tx, DbShared>>>,
   pub(crate) tx: Rc<TxRwCell<'tx>>,
-  unpin: PhantomPinned,
 }
 
 impl<'tx> TxRwImpl<'tx> {

@@ -1,14 +1,16 @@
-use bbolt_rs::{BucketRwApi, DbRwAPI, TxCheck, TxRwApi, DB};
+use bbolt_rs::{BucketRwApi, DbApi, DbRwAPI, TxCheck, TxRwApi, DB};
 use std::time::Instant;
 
 fn main() -> bbolt_rs::Result<()> {
   println!("Hello, world!");
 
-  for _ in 0..5 {
-    let mut db = DB::new_mem()?;
+  let mut db = DB::new_mem()?;
+  for _ in 0..1 {
     widgets(&mut db)?;
   }
-
+  let db2 = db.clone();
+  db.close();
+  let _ = db2.begin()?;
   println!("Goodbye, world!");
   Ok(())
 }

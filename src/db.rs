@@ -22,7 +22,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::ops::Sub;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::{fs, io, mem};
 
@@ -52,7 +52,7 @@ where
   ///
   /// IMPORTANT: You must close read-only transactions after you are finished or
   /// else the database will not reclaim old pages.
-  fn begin(&self) -> impl TxApi;
+  fn begin(&self) -> crate::Result<impl TxApi>;
 
   /// View executes a function within the context of a managed read-only transaction.
   /// Any error that is returned from the function is returned from the View() method.
@@ -83,7 +83,7 @@ pub trait DbRwAPI: DbApi {
   ///
   /// IMPORTANT: You must close read-only transactions after you are finished or
   /// else the database will not reclaim old pages.
-  fn begin_mut(&mut self) -> impl TxRwApi;
+  fn begin_mut(&mut self) -> crate::Result<impl TxRwApi>;
 
   /// Update executes a function within the context of a read-write managed transaction.
   /// If no error is returned from the function then the transaction is committed.
@@ -224,6 +224,46 @@ pub(crate) trait DBBackend: Send + Sync {
   fn write_all_at(&mut self, buffer: &[u8], offset: u64) -> crate::Result<usize>;
 }
 
+struct ClosedBackend {}
+
+impl DBBackend for ClosedBackend {
+  fn page_size(&self) -> usize {
+    unreachable!()
+  }
+
+  fn data_size(&self) -> u64 {
+    unreachable!()
+  }
+
+  fn meta0(&self) -> MappedMetaPage {
+    unreachable!()
+  }
+
+  fn meta1(&self) -> MappedMetaPage {
+    unreachable!()
+  }
+
+  fn page<'tx>(&self, _pg_id: PgId) -> RefPage<'tx> {
+    unreachable!()
+  }
+
+  fn grow(&mut self, _size: u64) -> crate::Result<()> {
+    unreachable!()
+  }
+
+  fn mmap(&mut self, _min_size: u64, _tx: TxRwCell) -> crate::Result<()> {
+    unreachable!()
+  }
+
+  fn fsync(&mut self) -> crate::Result<()> {
+    unreachable!()
+  }
+
+  fn write_all_at(&mut self, _buffer: &[u8], _offset: u64) -> crate::Result<usize> {
+    unreachable!()
+  }
+}
+
 struct MemBackend {
   mmap: Mutex<AlignedBytes<alignment::Page>>,
   page_size: usize,
@@ -281,10 +321,10 @@ impl DBBackend for MemBackend {
   fn mmap(&mut self, min_size: u64, _tx: TxRwCell) -> crate::Result<()> {
     let mut size = {
       let mmap = self.mmap.lock();
-    if mmap.len() < self.page_size * 2 {
-      return Err(Error::MMapFileSizeTooSmall);
-    }
-    (mmap.len() as u64).max(min_size)
+      if mmap.len() < self.page_size * 2 {
+        return Err(Error::MMapFileSizeTooSmall);
+      }
+      (mmap.len() as u64).max(min_size)
     };
     size = mmap_size(self.page_size, size)?;
     let r0 = self.meta0().meta.validate();
@@ -639,6 +679,10 @@ pub struct DbShared {
   pub(crate) backend: Box<dyn DBBackend>,
 }
 
+// Safe because this is all protected by RwLock
+unsafe impl Sync for DbShared {}
+unsafe impl Send for DbShared {}
+
 impl<'tx> DbIApi<'tx> for DbShared {
   fn page(&self, pg_id: PgId) -> RefPage<'tx> {
     self.backend.page(pg_id)
@@ -789,10 +833,12 @@ impl<'tx> DbRwIApi<'tx> for DbShared {
 
 #[derive(Clone)]
 pub struct DB {
-  // TODO: Save a single Bump for RW transactions with a size hint
+  // TODO: Save a single Bump for RW transactions with a size hint?
   bump_pool: Arc<SyncPool<Pin<Box<PinBump>>>>,
   db: Arc<RwLock<DbShared>>,
   stats: Arc<RwLock<DbStats>>,
+  // TODO: Fold this into the meta lock
+  is_open: Arc<AtomicBool>,
 }
 unsafe impl Send for DB {}
 unsafe impl Sync for DB {}
@@ -802,6 +848,14 @@ impl DB {
   /// If the file does not exist then it will be created automatically.
   /// Passing in nil options will cause Bolt to open the database with the default options.
   pub fn open<T: Into<PathBuf>>(path: T) -> crate::Result<Self> {
+    DB::open_internal(path, false)
+  }
+
+  pub fn open_ro<T: Into<PathBuf>>(path: T) -> crate::Result<impl DbApi> {
+    DB::open_internal(path, true)
+  }
+
+  fn open_internal<T: Into<PathBuf>>(path: T, read_only: bool) -> crate::Result<Self> {
     let path = path.into();
 
     if !path.exists() || path.metadata()?.len() == 0 {
@@ -809,8 +863,8 @@ impl DB {
       DB::init(&path, page_size)?;
     }
     let mut file = fs::OpenOptions::new()
-      .write(true)
-      .create(true)
+      .write(!read_only)
+      .create(!read_only)
       .read(true)
       .open(&path)?;
     file.lock_exclusive()?;
@@ -859,7 +913,8 @@ impl DB {
         backend: Box::new(backend),
         page_pool: vec![],
       })),
-      stats: arc_stats.clone(),
+      stats: arc_stats,
+      is_open: Arc::new(AtomicBool::new(true)),
     })
   }
 
@@ -898,7 +953,8 @@ impl DB {
         backend: Box::new(backend),
         page_pool: vec![],
       })),
-      stats: arc_stats.clone(),
+      stats: arc_stats,
+      is_open: Arc::new(AtomicBool::new(true)),
     })
   }
 
@@ -942,22 +998,39 @@ impl DB {
     db.flush()?;
     Ok(buffer.len())
   }
+
+  fn require_open(&self) -> crate::Result<()> {
+    if !self.is_open.load(Ordering::Relaxed) {
+      return Err(Error::DatabaseNotOpen);
+    }
+    Ok(())
+  }
 }
 
 impl DbApi for DB {
   fn close(self) {
-    todo!()
+    let is_open = self.is_open.swap(false, Ordering::Relaxed);
+    if !is_open {
+      return;
+    }
+    let mut lock = self.db.write();
+    let mut closed_db: Box<dyn DBBackend> = Box::new(ClosedBackend {});
+    mem::swap(&mut closed_db, &mut lock.backend);
+    lock.page_pool.clear();
+    self.bump_pool.clear();
   }
 
-  fn begin(&self) -> impl TxApi {
+  fn begin(&self) -> crate::Result<impl TxApi> {
+    self.require_open()?;
     let lock = self.db.read();
     let bump = self.bump_pool.pull();
-    TxImpl::new(bump, lock)
+    Ok(TxImpl::new(bump, lock))
   }
 
   fn view<'tx, F: FnMut(TxRef<'tx>) -> crate::Result<()>>(
     &'tx self, mut f: F,
   ) -> crate::Result<()> {
+    self.require_open()?;
     let lock = self.db.read();
     let bump = self.bump_pool.pull();
     let tx = TxImpl::new(bump, lock);
@@ -973,15 +1046,17 @@ impl DbApi for DB {
 }
 
 impl DbRwAPI for DB {
-  fn begin_mut(&mut self) -> impl TxRwApi {
+  fn begin_mut(&mut self) -> crate::Result<impl TxRwApi> {
+    self.require_open()?;
     let lock = self.db.write();
     let bump = self.bump_pool.pull();
-    TxRwImpl::new(bump, lock)
+    Ok(TxRwImpl::new(bump, lock))
   }
 
   fn update<'tx, F: Fn(TxRwRef<'tx>) -> crate::Result<()>>(
     &'tx mut self, mut f: F,
   ) -> crate::Result<()> {
+    self.require_open()?;
     let lock = self.db.write();
     let bump = self.bump_pool.pull();
     lock.free_pages();

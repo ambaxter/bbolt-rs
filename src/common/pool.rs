@@ -63,6 +63,10 @@ impl<T> SyncPool<T> {
     let object = self.objects.lock().pop().unwrap_or_else(&*self.init);
     SyncReusable::new(self.clone(), object)
   }
+
+  pub fn clear(&self) {
+    self.objects.lock().clear();
+  }
 }
 
 impl<T> SyncPool<T>
