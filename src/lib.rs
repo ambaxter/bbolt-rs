@@ -9,8 +9,6 @@ mod node;
 mod test_support;
 mod tx;
 
-mod tx_check;
-
 pub use bucket::{BucketApi, BucketRwApi};
 pub use common::errors::{Error, Result};
 pub use cursor::{CursorApi, CursorRwApi};

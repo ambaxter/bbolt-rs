@@ -11,7 +11,7 @@ use crate::common::tree::MappedLeafPage;
 use crate::common::{PgId, SplitRef, TxId};
 use crate::freelist::{Freelist, MappedFreeListPage};
 use crate::tx::{TxIApi, TxImpl, TxRef, TxRwCell, TxRwImpl, TxRwRef, TxStats};
-use crate::{Error, PinBump, RefPool, RefReusable, SyncPool, TxApi, TxRwApi};
+use crate::{Error, LockGuard, PinBump, RefPool, RefReusable, SyncPool, TxApi, TxRwApi};
 use aligners::{alignment, AlignedBytes};
 use fs4::FileExt;
 use memmap2::{Advice, MmapOptions, MmapRaw};
@@ -606,39 +606,25 @@ pub(crate) trait DbRwIApi<'tx>: DbIApi<'tx> {
   fn write_at(&mut self, buf: &[u8], offset: u64) -> crate::Result<usize>;
 }
 
-pub(crate) enum DbGuard<'tx> {
-  Read(RwLockReadGuard<'tx, DBShared>),
-  Write(RefCell<RwLockWriteGuard<'tx, DBShared>>),
-}
-
-impl<'tx> DbGuard<'tx> {
-  pub(crate) fn get_rw(&self) -> Option<RefMut<DBShared>> {
-    match self {
-      DbGuard::Read(_) => None,
-      DbGuard::Write(guard) => Some(RefMut::map(guard.borrow_mut(), |g| &mut **g)),
-    }
-  }
-}
-
-impl<'tx> DbIApi<'tx> for DbGuard<'tx> {
+impl<'tx> DbIApi<'tx> for LockGuard<'tx, DBShared> {
   fn page(&self, pg_id: PgId) -> RefPage<'tx> {
     match self {
-      DbGuard::Read(guard) => guard.page(pg_id),
-      DbGuard::Write(guard) => guard.borrow().page(pg_id),
+      LockGuard::R(guard) => guard.page(pg_id),
+      LockGuard::U(guard) => guard.borrow().page(pg_id),
     }
   }
 
   fn is_page_free(&self, pg_id: PgId) -> bool {
     match self {
-      DbGuard::Read(guard) => guard.is_page_free(pg_id),
-      DbGuard::Write(guard) => guard.borrow().is_page_free(pg_id),
+      LockGuard::R(guard) => guard.is_page_free(pg_id),
+      LockGuard::U(guard) => guard.borrow().is_page_free(pg_id),
     }
   }
 
   fn remove_tx(&self, rem_tx: TxId, tx_stats: TxStats) {
     match self {
-      DbGuard::Read(guard) => guard.remove_tx(rem_tx, tx_stats),
-      DbGuard::Write(guard) => guard.borrow().remove_tx(rem_tx, tx_stats),
+      LockGuard::R(guard) => guard.remove_tx(rem_tx, tx_stats),
+      LockGuard::U(guard) => guard.borrow().remove_tx(rem_tx, tx_stats),
     }
   }
 }

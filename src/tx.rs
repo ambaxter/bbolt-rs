@@ -8,9 +8,9 @@ use crate::common::self_owned::SelfOwned;
 use crate::common::tree::{MappedBranchPage, TreePage};
 use crate::common::{BVec, HashMap, PgId, SplitRef, TxId};
 use crate::cursor::{CursorImpl, CursorRwIApi, CursorRwImpl, InnerCursor};
-use crate::db::{DBShared, DbGuard, DbIApi, DbRwIApi};
+use crate::db::{DBShared, DbIApi, DbRwIApi};
 use crate::tx::check::{TxICheck, UnsealTx};
-use crate::{BucketApi, BucketRwApi, CursorApi, CursorRwApi, PinBump};
+use crate::{BucketApi, BucketRwApi, CursorApi, CursorRwApi, LockGuard, PinBump, PinLockGuard};
 use aliasable::boxed::AliasableBox;
 use aligners::{alignment, AlignedBytes};
 use bumpalo::Bump;
@@ -380,7 +380,7 @@ pub(crate) trait TxRwIApi<'tx>: TxIApi<'tx> + TxICheck<'tx> {
 pub struct TxR<'tx> {
   b: &'tx Bump,
   page_size: usize,
-  db: &'tx DbGuard<'tx>,
+  db: &'tx LockGuard<'tx, DBShared>,
   pub(crate) stats: TxStats,
   pub(crate) meta: Meta,
   is_rollback: bool,
@@ -522,7 +522,14 @@ impl<'tx> TxRwIApi<'tx> for TxRwCell<'tx> {
   type CursorRwType = InnerCursor<'tx, Self, Self::BucketType>;
 
   fn freelist_free_page(self, txid: TxId, p: &Page) {
-    self.cell.borrow().r.db.get_rw().unwrap().free_page(txid, p)
+    self
+      .cell
+      .borrow()
+      .r
+      .db
+      .get_mut()
+      .unwrap()
+      .free_page(txid, p)
   }
 
   fn root_bucket_mut(self) -> BucketRwCell<'tx> {
@@ -532,7 +539,7 @@ impl<'tx> TxRwIApi<'tx> for TxRwCell<'tx> {
   fn allocate(
     self, count: usize,
   ) -> crate::Result<SelfOwned<AlignedBytes<alignment::Page>, MutPage<'tx>>> {
-    let mut db = { self.cell.borrow().r.db.get_rw().unwrap() };
+    let mut db = { self.cell.borrow().r.db.get_mut().unwrap() };
     let page = db.allocate(self, count as u64)?;
 
     let mut tx = self.cell.borrow_mut();
@@ -547,7 +554,7 @@ impl<'tx> TxRwIApi<'tx> for TxRwCell<'tx> {
       if pending.overflow == 0 {
         tx.r
           .db
-          .get_rw()
+          .get_mut()
           .unwrap()
           .repool_allocated(pending.into_owner());
       }
@@ -584,7 +591,7 @@ impl<'tx> TxRwIApi<'tx> for TxRwCell<'tx> {
 
       // Sort pages by id.
       pages.sort_by_key(|page| page.id);
-      (pages, tx.r.db.get_rw().unwrap(), tx.r.page_size)
+      (pages, tx.r.db.get_mut().unwrap(), tx.r.page_size)
     };
 
     let mut stats = self.mut_stats();
@@ -636,7 +643,7 @@ impl<'tx> TxRwIApi<'tx> for TxRwCell<'tx> {
     let mut meta_page = unsafe { MappedMetaPage::new(ptr.as_ptr()) };
     r.meta.write(&mut meta_page);
 
-    let mut db = r.db.get_rw().unwrap();
+    let mut db = r.db.get_mut().unwrap();
     let offset = meta_page.page.id.0 * page_size as u64;
     let buf = unsafe { from_raw_parts_mut(ptr.as_ptr(), page_size) };
     db.write_at(buf, offset)?;
@@ -652,8 +659,8 @@ impl<'tx> TxRwIApi<'tx> for TxRwCell<'tx> {
 
 pub struct TxImpl<'tx> {
   bump: SyncReusable<Pin<Box<PinBump>>>,
-  db: Pin<AliasableBox<DbGuard<'tx>>>,
-  pub(crate) tx: Pin<Rc<TxCell<'tx>>>,
+  db: Pin<AliasableBox<PinLockGuard<'tx, DBShared>>>,
+  pub(crate) tx: Rc<TxCell<'tx>>,
   unpin: PhantomPinned,
 }
 
@@ -670,10 +677,10 @@ impl<'tx> TxImpl<'tx> {
       addr_of_mut!((*ptr).bump).write(bump);
 
       let bump = Pin::as_ref(&*addr_of!((*ptr).bump)).bump().get_ref();
-      addr_of_mut!((*ptr).db).write(Pin::new(AliasableBox::from_unique(Box::new(
-        DbGuard::Read(lock),
+      addr_of_mut!((*ptr).db).write(AliasableBox::from_unique_pin(Box::pin(PinLockGuard::new(
+        lock,
       ))));
-      let db = &(**addr_of!((*ptr).db));
+      let db = Pin::as_ref(&*addr_of!((*ptr).db)).guard().get_ref();
       let tx = Rc::new_cyclic(|weak| {
         let r = TxR {
           b: bump,
@@ -689,7 +696,7 @@ impl<'tx> TxImpl<'tx> {
           cell: BCell::new_in(r, bucket, bump),
         }
       });
-      addr_of_mut!((*ptr).tx).write(Pin::new(tx));
+      addr_of_mut!((*ptr).tx).write(tx);
       uninit.assume_init()
     }
   }
@@ -705,7 +712,7 @@ impl<'tx> Drop for TxImpl<'tx> {
   fn drop(&mut self) {
     let tx_id = self.id();
     let stats = self.stats();
-    self.db.remove_tx(tx_id, stats);
+    Pin::as_ref(&self.db).guard().remove_tx(tx_id, stats);
   }
 }
 
@@ -809,8 +816,8 @@ impl<'tx> TxApi<'tx> for TxRef<'tx> {
 
 pub struct TxRwImpl<'tx> {
   bump: SyncReusable<Pin<Box<PinBump>>>,
-  db: Pin<AliasableBox<DbGuard<'tx>>>,
-  pub(crate) tx: Pin<Rc<TxRwCell<'tx>>>,
+  db: Pin<AliasableBox<PinLockGuard<'tx, DBShared>>>,
+  pub(crate) tx: Rc<TxRwCell<'tx>>,
   unpin: PhantomPinned,
 }
 
@@ -833,10 +840,10 @@ impl<'tx> TxRwImpl<'tx> {
     unsafe {
       addr_of_mut!((*ptr).bump).write(bump);
       let bump = Pin::as_ref(&*addr_of!((*ptr).bump)).bump().get_ref();
-      addr_of_mut!((*ptr).db).write(Pin::new(AliasableBox::from_unique(Box::new(
-        DbGuard::Write(RefCell::new(lock)),
+      addr_of_mut!((*ptr).db).write(AliasableBox::from_unique_pin(Box::pin(PinLockGuard::new(
+        lock,
       ))));
-      let db = &(**addr_of!((*ptr).db));
+      let db = Pin::as_ref(&*addr_of!((*ptr).db)).guard().get_ref();
       let tx = Rc::new_cyclic(|weak| {
         let r = TxR {
           b: bump,
@@ -857,21 +864,25 @@ impl<'tx> TxRwImpl<'tx> {
           cell: BCell::new_in(TxRW { r, w }, bucket, bump),
         }
       });
-      addr_of_mut!((*ptr).tx).write(Pin::new(tx));
+      addr_of_mut!((*ptr).tx).write(tx);
       uninit.assume_init()
     }
   }
 
   fn commit_freelist(&mut self) -> crate::Result<()> {
-    let freelist_page = self.db.get_rw().unwrap().commit_freelist(*self.tx)?;
+    let freelist_page = Pin::as_ref(&self.db)
+      .guard()
+      .get_mut()
+      .unwrap()
+      .commit_freelist(*self.tx)?;
     let pg_id = freelist_page.id;
     let mut tx = self.tx.cell.borrow_mut();
     tx.r.meta.set_free_list(pg_id);
     if let Some(old_page) = tx.w.pages.insert(pg_id, freelist_page) {
       if old_page.overflow == 0 {
-        tx.r
-          .db
-          .get_rw()
+        Pin::as_ref(&self.db)
+          .guard()
+          .get_mut()
           .unwrap()
           .repool_allocated(old_page.into_owner());
       }
@@ -883,7 +894,11 @@ impl<'tx> TxRwImpl<'tx> {
 impl<'tx> Drop for TxRwImpl<'tx> {
   fn drop(&mut self) {
     let stats = self.stats();
-    self.db.get_rw().unwrap().remove_rw_tx(stats);
+    Pin::as_ref(&self.db)
+      .guard()
+      .get_mut()
+      .unwrap()
+      .remove_rw_tx(stats);
   }
 }
 
@@ -986,7 +1001,11 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
       //TODO: implement pgidNoFreeList
       let freelist_pg = tx.r.db.page(tx.r.meta.free_list());
       let tx_id = tx.r.meta.txid();
-      self.db.get_rw().unwrap().free_page(tx_id, &freelist_pg);
+      Pin::as_ref(&self.db)
+        .guard()
+        .get_mut()
+        .unwrap()
+        .free_page(tx_id, &freelist_pg);
     }
     // TODO: implement noFreelistSync
 
@@ -1007,9 +1026,9 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
       }
     }
     if new_pgid > opgid {
-      self
-        .db
-        .get_rw()
+      Pin::as_ref(&self.db)
+        .guard()
+        .get_mut()
         .unwrap()
         .grow((new_pgid.0 + 1) * page_size as u64)?;
     }
@@ -1182,7 +1201,7 @@ pub(crate) mod check {
       let mut errors = Vec::new();
       let bump = self.bump();
       // TODO: Rework the DB api to get the freelist?
-      let db = self.split_r().db.get_rw().unwrap();
+      let db = self.split_r().db.get_mut().unwrap();
       let records = db.records.lock();
 
       let freelist_count = records.freelist.count();

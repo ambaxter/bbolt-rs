@@ -67,7 +67,7 @@ impl<'a, T> LockGuard<'a, T> {
   pub fn get_mut(&self) -> Option<RefMut<T>> {
     match self {
       LockGuard::R(_) => None,
-      LockGuard::U(g) => Some(RefMut::map(g.borrow_mut(), |l| l.deref_mut())),
+      LockGuard::U(cell) => Some(RefMut::map(cell.borrow_mut(), |guard| guard.deref_mut())),
     }
   }
 }
