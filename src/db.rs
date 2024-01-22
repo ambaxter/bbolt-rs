@@ -279,11 +279,13 @@ impl DBBackend for MemBackend {
   }
 
   fn mmap(&mut self, min_size: u64, _tx: TxRwCell) -> crate::Result<()> {
-    let mmap = self.mmap.lock();
+    let mut size = {
+      let mmap = self.mmap.lock();
     if mmap.len() < self.page_size * 2 {
       return Err(Error::MMapFileSizeTooSmall);
     }
-    let mut size = (mmap.len() as u64).max(min_size);
+    (mmap.len() as u64).max(min_size)
+    };
     size = mmap_size(self.page_size, size)?;
     let r0 = self.meta0().meta.validate();
     let r1 = self.meta1().meta.validate();
@@ -606,7 +608,7 @@ pub(crate) trait DbRwIApi<'tx>: DbIApi<'tx> {
   fn write_at(&mut self, buf: &[u8], offset: u64) -> crate::Result<usize>;
 }
 
-impl<'tx> DbIApi<'tx> for LockGuard<'tx, DBShared> {
+impl<'tx> DbIApi<'tx> for LockGuard<'tx, DbShared> {
   fn page(&self, pg_id: PgId) -> RefPage<'tx> {
     match self {
       LockGuard::R(guard) => guard.page(pg_id),
@@ -630,14 +632,14 @@ impl<'tx> DbIApi<'tx> for LockGuard<'tx, DBShared> {
 }
 
 // In theory things are wired up ok. Here's hoping Miri is happy
-pub struct DBShared {
+pub struct DbShared {
   pub(crate) stats: Arc<RwLock<DbStats>>,
   pub(crate) records: Mutex<TxRecords>,
-  page_pool: Rc<RefPool<AlignedBytes<alignment::Page>>>,
+  page_pool: Vec<AlignedBytes<alignment::Page>>,
   pub(crate) backend: Box<dyn DBBackend>,
 }
 
-impl<'tx> DbIApi<'tx> for DBShared {
+impl<'tx> DbIApi<'tx> for DbShared {
   fn page(&self, pg_id: PgId) -> RefPage<'tx> {
     self.backend.page(pg_id)
   }
@@ -659,7 +661,7 @@ impl<'tx> DbIApi<'tx> for DBShared {
   }
 }
 
-impl<'tx> DbRwIApi<'tx> for DBShared {
+impl<'tx> DbRwIApi<'tx> for DbShared {
   fn free_page(&self, txid: TxId, p: &Page) {
     self.records.lock().freelist.free(txid, p)
   }
@@ -701,8 +703,10 @@ impl<'tx> DbRwIApi<'tx> for DBShared {
     let tx_id = tx.api_id();
     let high_water = tx.meta().pgid();
     let mut r = self.records.lock();
-    let bytes = if page_count == 1 {
-      self.page_pool.pull().detach()
+    let bytes = if page_count == 1 && !self.page_pool.is_empty() {
+      let mut page = self.page_pool.pop().unwrap();
+      page.fill(0);
+      page
     } else {
       AlignedBytes::new_zeroed(page_count as usize * self.backend.page_size())
     };
@@ -771,7 +775,7 @@ impl<'tx> DbRwIApi<'tx> for DBShared {
   }
 
   fn repool_allocated(&mut self, page: AlignedBytes<alignment::Page>) {
-    RefReusable::new(self.page_pool.clone(), page);
+    self.page_pool.push(page);
   }
 
   fn fsync(&mut self) -> crate::Result<()> {
@@ -787,7 +791,7 @@ impl<'tx> DbRwIApi<'tx> for DBShared {
 pub struct DB {
   // TODO: Save a single Bump for RW transactions with a size hint
   bump_pool: Arc<SyncPool<Pin<Box<PinBump>>>>,
-  db: Arc<RwLock<DBShared>>,
+  db: Arc<RwLock<DbShared>>,
   stats: Arc<RwLock<DbStats>>,
 }
 unsafe impl Send for DB {}
@@ -847,14 +851,13 @@ impl DB {
       |bump| Pin::as_mut(bump).reset(),
     );
 
-    let page_pool = RefPool::new(move || AlignedBytes::new_zeroed(page_size), |p| p.fill(0));
     Ok(DB {
       bump_pool,
-      db: Arc::new(RwLock::new(DBShared {
+      db: Arc::new(RwLock::new(DbShared {
         stats: arc_stats.clone(),
         records: Mutex::new(records),
         backend: Box::new(backend),
-        page_pool,
+        page_pool: vec![],
       })),
       stats: arc_stats.clone(),
     })
@@ -887,14 +890,13 @@ impl DB {
       || Box::pin(PinBump::default()),
       |bump| Pin::as_mut(bump).reset(),
     );
-    let page_pool = RefPool::new(move || AlignedBytes::new_zeroed(page_size), |p| p.fill(0));
     Ok(DB {
       bump_pool,
-      db: Arc::new(RwLock::new(DBShared {
+      db: Arc::new(RwLock::new(DbShared {
         stats: arc_stats.clone(),
         records: Mutex::new(records),
         backend: Box::new(backend),
-        page_pool,
+        page_pool: vec![],
       })),
       stats: arc_stats.clone(),
     })

@@ -5,7 +5,7 @@ fn main() -> bbolt_rs::Result<()> {
   println!("Hello, world!");
 
   for _ in 0..5 {
-    let mut db = DB::open("test.db")?;
+    let mut db = DB::new_mem()?;
     widgets(&mut db)?;
   }
 

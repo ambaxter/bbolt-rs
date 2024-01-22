@@ -8,7 +8,7 @@ use crate::common::self_owned::SelfOwned;
 use crate::common::tree::{MappedBranchPage, TreePage};
 use crate::common::{BVec, HashMap, PgId, SplitRef, TxId};
 use crate::cursor::{CursorImpl, CursorRwIApi, CursorRwImpl, InnerCursor};
-use crate::db::{DBShared, DbIApi, DbRwIApi};
+use crate::db::{DbShared, DbIApi, DbRwIApi};
 use crate::tx::check::{TxICheck, UnsealTx};
 use crate::{BucketApi, BucketRwApi, CursorApi, CursorRwApi, LockGuard, PinBump, PinLockGuard};
 use aliasable::boxed::AliasableBox;
@@ -380,7 +380,7 @@ pub(crate) trait TxRwIApi<'tx>: TxIApi<'tx> + TxICheck<'tx> {
 pub struct TxR<'tx> {
   b: &'tx Bump,
   page_size: usize,
-  db: &'tx LockGuard<'tx, DBShared>,
+  db: &'tx LockGuard<'tx, DbShared>,
   pub(crate) stats: TxStats,
   pub(crate) meta: Meta,
   is_rollback: bool,
@@ -659,14 +659,14 @@ impl<'tx> TxRwIApi<'tx> for TxRwCell<'tx> {
 
 pub struct TxImpl<'tx> {
   bump: SyncReusable<Pin<Box<PinBump>>>,
-  db: Pin<AliasableBox<PinLockGuard<'tx, DBShared>>>,
+  db: Pin<AliasableBox<PinLockGuard<'tx, DbShared>>>,
   pub(crate) tx: Rc<TxCell<'tx>>,
   unpin: PhantomPinned,
 }
 
 impl<'tx> TxImpl<'tx> {
   pub(crate) fn new(
-    bump: SyncReusable<Pin<Box<PinBump>>>, lock: RwLockReadGuard<'tx, DBShared>,
+    bump: SyncReusable<Pin<Box<PinBump>>>, lock: RwLockReadGuard<'tx, DbShared>,
   ) -> TxImpl<'tx> {
     let meta = lock.backend.meta();
     let page_size = meta.page_size() as usize;
@@ -816,7 +816,7 @@ impl<'tx> TxApi<'tx> for TxRef<'tx> {
 
 pub struct TxRwImpl<'tx> {
   bump: SyncReusable<Pin<Box<PinBump>>>,
-  db: Pin<AliasableBox<PinLockGuard<'tx, DBShared>>>,
+  db: Pin<AliasableBox<PinLockGuard<'tx, DbShared>>>,
   pub(crate) tx: Rc<TxRwCell<'tx>>,
   unpin: PhantomPinned,
 }
@@ -829,7 +829,7 @@ impl<'tx> TxRwImpl<'tx> {
   }
 
   pub(crate) fn new(
-    bump: SyncReusable<Pin<Box<PinBump>>>, lock: RwLockWriteGuard<'tx, DBShared>,
+    bump: SyncReusable<Pin<Box<PinBump>>>, lock: RwLockWriteGuard<'tx, DbShared>,
   ) -> TxRwImpl<'tx> {
     let mut meta = lock.backend.meta();
     meta.set_txid(meta.txid() + 1);
