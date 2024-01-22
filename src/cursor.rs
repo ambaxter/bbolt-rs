@@ -795,7 +795,7 @@ mod tests {
       b.put(b"bar", [1])?;
       Ok(())
     })?;
-    let tx = db.begin();
+    let tx = db.begin()?;
     {
       let b = tx.bucket(b"widgets").unwrap();
       let mut c = b.cursor();
@@ -818,7 +818,7 @@ mod tests {
       b.put(b"bar", [1])?;
       Ok(())
     })?;
-    let tx = db.begin();
+    let tx = db.begin()?;
     {
       let b = tx.bucket(b"widgets").unwrap();
       let mut c = b.cursor();
@@ -840,7 +840,7 @@ mod tests {
       b.put(b"bar", &[])?;
       Ok(())
     })?;
-    let tx = db.begin();
+    let tx = db.begin()?;
     {
       let b = tx.bucket(b"widgets").unwrap();
       let mut c = b.cursor();

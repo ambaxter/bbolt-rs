@@ -59,7 +59,7 @@ impl TestDb {
   }
 
   pub(crate) fn must_check_rw(&mut self) {
-    let tx = self.db.begin_mut();
+    let tx = self.db.begin_mut().unwrap();
     let errors = tx.check();
     if !errors.is_empty() {
       for error in errors {
