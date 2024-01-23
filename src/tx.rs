@@ -1437,17 +1437,17 @@ mod test {
 
   #[test]
   fn test_tx_commit_err_tx_closed() {
-    todo!()
+    todo!("not possible")
   }
 
   #[test]
   fn test_tx_rollback_err_tx_closed() {
-    todo!()
+    todo!("not possible")
   }
 
   #[test]
   fn test_tx_commit_err_tx_not_writable() {
-    todo!()
+    todo!("not possible")
   }
 
   #[test]
@@ -1457,12 +1457,12 @@ mod test {
 
   #[test]
   fn test_tx_create_bucket_err_tx_not_writable() {
-    todo!()
+    todo!("not possible")
   }
 
   #[test]
   fn test_tx_create_bucket_err_tx_closed() {
-    todo!()
+    todo!("not possible")
   }
 
   #[test]
@@ -1516,12 +1516,12 @@ mod test {
 
   #[test]
   fn test_tx_delete_bucket_err_tx_closed() {
-    todo!()
+    todo!("not possible")
   }
 
   #[test]
   fn test_tx_delete_bucket_read_only() {
-    todo!()
+    todo!("not possible")
   }
 
   #[test]

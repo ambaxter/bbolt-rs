@@ -915,8 +915,6 @@ impl DB {
       .create(!read_only)
       .read(true)
       .open(&path)?;
-    file.lock_exclusive()?;
-
     let page_size = FileBackend::get_page_size(&mut file)?;
     assert!(page_size > 0, "invalid page size");
 
@@ -924,8 +922,10 @@ impl DB {
     let options = MmapOptions::new();
     let open_options = options.clone();
     let mmap = if read_only {
+      file.lock_shared()?;
       open_options.map_raw_read_only(&file)?
     } else {
+      file.lock_exclusive()?;
       open_options.map_raw(&file)?
     };
     mmap.advise(Advice::Random)?;
@@ -940,7 +940,7 @@ impl DB {
       data_size: 0,
       use_mlock: false,
       grow_async: false,
-      read_only: false,
+      read_only,
     };
     let meta = backend.meta();
     let freelist_pgid = meta.free_list();
