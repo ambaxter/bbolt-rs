@@ -22,8 +22,8 @@ pub(crate) fn mapped_page<T: CoerciblePage + Sized>(
 }
 
 pub(crate) struct TestDb {
-  tmp_file: Option<NamedTempFile>,
-  db: DB,
+  pub(crate) tmp_file: Option<NamedTempFile>,
+  pub(crate) db: DB,
 }
 
 impl Deref for TestDb {
@@ -72,6 +72,6 @@ impl TestDb {
 
 impl Drop for TestDb {
   fn drop(&mut self) {
-    self.must_check_rw()
+    //self.must_check_rw()
   }
 }

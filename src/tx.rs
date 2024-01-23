@@ -28,7 +28,7 @@ use std::rc::Rc;
 use std::slice::from_raw_parts_mut;
 use std::time::{Duration, Instant};
 
-pub trait TxApi<'tx> {
+pub trait TxApi<'tx>: UnsealTx<'tx> {
   /// ID returns the transaction id.
   fn id(&self) -> TxId;
 
@@ -1409,12 +1409,30 @@ pub(crate) mod check {
 #[cfg(test)]
 mod test {
   use crate::test_support::TestDb;
-  use crate::{DbApi, DbRwAPI, TxApi, TxRwApi};
+  use crate::{DbApi, DbRwAPI, TxApi, TxRwApi, BucketRwApi, BucketApi, DB};
+  use crate::tx::check::{UnsealTx, TxICheck};
   use bumpalo::Bump;
 
   #[test]
-  fn test_tx_check_read_only() {
-    todo!()
+  fn test_tx_check_read_only() -> crate::Result<()>{
+    let mut db = TestDb::new_tmp()?;
+    db.update(|mut tx| {
+      let mut b = tx.create_bucket("widgets")?;
+      b.put("foo", "bar")?;
+      Ok(())
+    })?;
+    let close_db = db.db.clone();
+    close_db.close();
+
+    let file = db.tmp_file.as_ref().unwrap();
+    let ro = DB::open_ro(file.as_ref());
+    let ro_db = ro.unwrap();
+    let tx = ro_db.begin()?;
+    let tx_unseal = tx.unseal();
+    let errors = tx_unseal.check();
+    assert!(errors.is_empty(), "{:?}", errors);
+
+    Ok(())
   }
 
   #[test]

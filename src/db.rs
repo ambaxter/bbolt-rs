@@ -923,7 +923,11 @@ impl DB {
     let file_size = file.metadata()?.len();
     let options = MmapOptions::new();
     let open_options = options.clone();
-    let mut mmap = open_options.map_raw(&file)?;
+    let mmap = if read_only {
+      open_options.map_raw_read_only(&file)?
+    } else {
+      open_options.map_raw(&file)?
+    };
     mmap.advise(Advice::Random)?;
     let mut backend = FileBackend {
       path,
