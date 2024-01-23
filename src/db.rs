@@ -488,7 +488,7 @@ impl FileBackend {
         break;
       }
       let bw = file
-        .seek(SeekFrom::Start(0))
+        .seek(SeekFrom::Start(pos))
         .and_then(|_| file.read(&mut buffer))
         .map_err(|_| Error::InvalidDatabase(meta_can_read))? as u64;
       if bw == buffer.len() as u64 || bw == file_size - pos {
@@ -770,7 +770,6 @@ impl<'tx> DbRwIApi<'tx> for DbShared {
   ) -> crate::Result<SelfOwned<AlignedBytes<alignment::Page>, MutPage<'tx>>> {
     let tx_id = tx.api_id();
     let high_water = tx.meta().pgid();
-    let mut r = self.db_state.lock();
     let bytes = if page_count == 1 && !self.page_pool.is_empty() {
       let mut page = self.page_pool.pop().unwrap();
       page.fill(0);
@@ -808,7 +807,6 @@ impl<'tx> DbRwIApi<'tx> for DbShared {
     // Allocate new pages for the new free list. This will overestimate
     // the size of the freelist but not underestimate the size (which would be bad).
     let count = {
-      let records = self.db_state.lock();
       let page_size = self.backend.page_size();
       let freelist_size = self.backend.freelist().size();
       (freelist_size / page_size as u64) + 1
@@ -816,7 +814,6 @@ impl<'tx> DbRwIApi<'tx> for DbShared {
 
     let mut freelist_page = self.allocate(tx, count)?;
 
-    let records = self.db_state.lock();
     self
       .backend
       .freelist_mut()
@@ -1047,8 +1044,8 @@ impl DB {
   }
 
   fn begin_rw_tx(&mut self) -> crate::Result<TxRwImpl> {
-    let mut lock = self.db.upgradable_read();
-    let mut state = self.db_state.lock();
+    let lock = self.db.upgradable_read();
+    let state = self.db_state.lock();
     DB::require_open(&state)?;
     let bump = self.bump_pool.pull();
     Ok(TxRwImpl::new(bump, lock, state.current_meta))
@@ -1057,9 +1054,9 @@ impl DB {
 
 impl DbApi for DB {
   fn close(self) {
+    let mut lock = self.db.write();
     let mut state = self.db_state.lock();
     if DB::require_open(&state).is_ok() {
-      let mut lock = self.db.write();
       state.is_open = false;
       let mut closed_db: Box<dyn DBBackend> = Box::new(ClosedBackend {});
       mem::swap(&mut closed_db, &mut lock.backend);
@@ -1093,7 +1090,7 @@ impl DbRwAPI for DB {
   }
 
   fn update<'tx, F: Fn(TxRwRef<'tx>) -> crate::Result<()>>(
-    &'tx mut self, mut f: F,
+    &'tx mut self, f: F,
   ) -> crate::Result<()> {
     let txrw = self.begin_rw_tx()?;
     let tx_ref = txrw.get_ref();
