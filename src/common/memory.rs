@@ -133,7 +133,7 @@ impl<'tx, T: Pod> Deref for CodSlice<'tx, T> {
   type Target = [T];
 
   #[inline]
-  fn deref(&self) -> &'tx Self::Target {
+  fn deref(&self) -> &Self::Target {
     match self {
       CodSlice::Owned(s) => s,
       CodSlice::Mapped(m) => m,

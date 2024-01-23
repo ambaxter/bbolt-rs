@@ -14,7 +14,7 @@ use crate::{BucketApi, BucketRwApi, CursorApi, CursorRwApi, LockGuard, PinBump, 
 use aliasable::boxed::AliasableBox;
 use aligners::{alignment, AlignedBytes};
 use bumpalo::Bump;
-use parking_lot::{RwLockReadGuard, RwLockWriteGuard};
+use parking_lot::{RwLockReadGuard, RwLockUpgradableReadGuard, RwLockWriteGuard};
 use std::alloc::Layout;
 use std::borrow::Cow;
 use std::cell::{Ref, RefCell, RefMut};
@@ -665,9 +665,8 @@ pub struct TxImpl<'tx> {
 
 impl<'tx> TxImpl<'tx> {
   pub(crate) fn new(
-    bump: SyncReusable<Pin<Box<PinBump>>>, lock: RwLockReadGuard<'tx, DbShared>,
+    bump: SyncReusable<Pin<Box<PinBump>>>, lock: RwLockReadGuard<'tx, DbShared>, meta: Meta,
   ) -> TxImpl<'tx> {
-    let meta = lock.backend.meta();
     let page_size = meta.page_size() as usize;
     let inline_bucket = meta.root();
     let mut uninit: MaybeUninit<TxImpl<'tx>> = MaybeUninit::uninit();
@@ -811,9 +810,9 @@ impl<'tx> TxRwImpl<'tx> {
   }
 
   pub(crate) fn new(
-    bump: SyncReusable<Pin<Box<PinBump>>>, lock: RwLockWriteGuard<'tx, DbShared>,
+    bump: SyncReusable<Pin<Box<PinBump>>>, lock: RwLockUpgradableReadGuard<'tx, DbShared>,
+    mut meta: Meta,
   ) -> TxRwImpl<'tx> {
-    let mut meta = lock.backend.meta();
     meta.set_txid(meta.txid() + 1);
     let page_size = meta.page_size() as usize;
     let inline_bucket = meta.root();
@@ -954,6 +953,14 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
   }
 
   fn commit(mut self) -> crate::Result<()> {
+    {
+      Pin::as_ref(&self.db)
+        .guard()
+        .get_mut()
+        .unwrap()
+        .free_pages();
+    }
+
     let start_time = Instant::now();
     self.tx.root_bucket().rebalance();
     {
@@ -1184,9 +1191,9 @@ pub(crate) mod check {
       let bump = self.bump();
       // TODO: Rework the DB api to get the freelist?
       let db = self.split_r().db.get_mut().unwrap();
-      let records = db.records.lock();
+      let records = db.db_state.lock();
 
-      let freelist_count = records.freelist.count();
+      let freelist_count = db.backend.freelist().count();
       let high_water = self.meta().pgid();
       // TODO: ReadOnly mode handling
 
@@ -1196,7 +1203,7 @@ pub(crate) mod check {
       for i in 0..freelist_count {
         all.push(ZERO_PGID);
       }
-      records.freelist.copy_all(&mut all);
+      db.backend.freelist().copy_all(&mut all);
       drop(records);
       drop(db);
       for id in &all {

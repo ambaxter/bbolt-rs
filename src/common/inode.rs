@@ -7,7 +7,6 @@ use crate::common::PgId;
 use bumpalo::collections::Vec as BVec;
 use bumpalo::Bump;
 use std::marker::PhantomData;
-use std::ops::Deref;
 
 #[derive(Debug, Clone)]
 pub struct INode<'tx> {
