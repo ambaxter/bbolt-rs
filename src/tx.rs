@@ -9,19 +9,19 @@ use crate::common::tree::{MappedBranchPage, TreePage};
 use crate::common::{BVec, HashMap, PgId, SplitRef, TxId};
 use crate::cursor::{CursorImpl, CursorRwIApi, CursorRwImpl, InnerCursor};
 use crate::db::{DbIApi, DbRwIApi, DbShared};
-use crate::tx::check::{TxICheck, UnsealTx};
+use crate::tx::check::{TxICheck, UnsealRwTx, UnsealTx};
 use crate::{BucketApi, BucketRwApi, CursorApi, CursorRwApi, LockGuard, PinBump, PinLockGuard};
 use aliasable::boxed::AliasableBox;
 use aligners::{alignment, AlignedBytes};
 use bumpalo::Bump;
-use parking_lot::{RwLockReadGuard, RwLockUpgradableReadGuard, RwLockWriteGuard};
+use parking_lot::{RwLockReadGuard, RwLockUpgradableReadGuard};
 use std::alloc::Layout;
 use std::borrow::Cow;
-use std::cell::{Ref, RefCell, RefMut};
-use std::marker::{PhantomData, PhantomPinned};
+use std::cell::{Ref, RefMut};
+use std::marker::{PhantomData};
 use std::mem;
 use std::mem::MaybeUninit;
-use std::ops::{AddAssign, Deref, DerefMut, Sub};
+use std::ops::{AddAssign, Deref, Sub};
 use std::pin::Pin;
 use std::ptr::{addr_of, addr_of_mut};
 use std::rc::Rc;
@@ -63,7 +63,7 @@ pub trait TxApi<'tx> {
   fn page(&self, id: PgId) -> crate::Result<Option<PageInfo>>;
 }
 
-pub trait TxRwApi<'tx>: TxApi<'tx> + UnsealTx<'tx> {
+pub trait TxRwApi<'tx>: TxApi<'tx> + UnsealRwTx<'tx> {
   /// Cursor creates a cursor associated with the root bucket.
   /// All items in the cursor will return a nil value because all root bucket keys point to buckets.
   /// The cursor is only valid as long as the transaction is open.
@@ -1134,35 +1134,51 @@ pub(crate) mod check {
   use crate::common::page::{CoerciblePage, RefPage};
   use crate::common::tree::{MappedBranchPage, MappedLeafPage, TreePage};
   use crate::common::{BVec, HashMap, HashSet, PgId, ZERO_PGID};
-  use crate::tx::{TxCell, TxIApi, TxRwCell, TxRwIApi, TxRwImpl, TxRwRef};
+  use crate::db::DbIApi;
+  use crate::tx::{TxCell, TxIApi, TxImpl, TxRef, TxRwCell, TxRwIApi, TxRwImpl, TxRwRef};
 
   pub(crate) trait UnsealTx<'tx> {
+    fn unseal(&self) -> impl TxIApi<'tx> + TxICheck<'tx>;
+  }
+
+
+  pub(crate) trait UnsealRwTx<'tx>: UnsealTx<'tx> {
     fn unseal_rw(&self) -> impl TxRwIApi<'tx>;
   }
-  /*
-  impl<'tx> UnsealTx<'tx> for TxImpl<'tx> {
-    type Unsealed = TxCell<'tx>;
 
-    fn unseal(&self) -> Self::Unsealed {
+  impl<'tx> UnsealTx<'tx> for TxImpl<'tx> {
+
+    fn unseal(&self) -> impl TxIApi<'tx> + TxICheck<'tx> {
       TxCell { cell: self.tx.cell }
     }
   }
 
   impl<'tx> UnsealTx<'tx> for TxRef<'tx> {
-    type Unsealed = TxCell<'tx>;
 
-    fn unseal(&self) -> Self::Unsealed {
+    fn unseal(&self) -> impl TxIApi<'tx> + TxICheck<'tx>{
       TxCell { cell: self.tx.cell }
     }
-  }*/
+  }
 
   impl<'tx> UnsealTx<'tx> for TxRwImpl<'tx> {
-    fn unseal_rw(&self) -> impl TxRwIApi<'tx> {
+    fn unseal(&self) -> impl TxIApi<'tx> + TxICheck<'tx>{
       TxRwCell { cell: self.tx.cell }
     }
   }
 
   impl<'tx> UnsealTx<'tx> for TxRwRef<'tx> {
+    fn unseal(&self) -> impl TxIApi<'tx> + TxICheck<'tx>{
+      self.tx
+    }
+  }
+
+  impl<'tx> UnsealRwTx<'tx> for TxRwImpl<'tx> {
+    fn unseal_rw(&self) -> impl TxRwIApi<'tx> {
+      TxRwCell { cell: self.tx.cell }
+    }
+  }
+
+  impl<'tx> UnsealRwTx<'tx> for TxRwRef<'tx> {
     fn unseal_rw(&self) -> impl TxRwIApi<'tx> {
       self.tx
     }
@@ -1178,7 +1194,7 @@ pub(crate) mod check {
   /// the same time.
   pub trait TxCheck<'tx>: UnsealTx<'tx> {
     fn check(&self) -> Vec<String> {
-      let i_tx = self.unseal_rw();
+      let i_tx = self.unseal();
       i_tx.check()
     }
   }
@@ -1189,11 +1205,8 @@ pub(crate) mod check {
     fn check(self) -> Vec<String> {
       let mut errors = Vec::new();
       let bump = self.bump();
-      // TODO: Rework the DB api to get the freelist?
-      let db = self.split_r().db.get_mut().unwrap();
-      let records = db.db_state.lock();
-
-      let freelist_count = db.backend.freelist().count();
+      let db = self.split_r().db;
+      let freelist_count = db.freelist_count();
       let high_water = self.meta().pgid();
       // TODO: ReadOnly mode handling
 
@@ -1203,9 +1216,7 @@ pub(crate) mod check {
       for i in 0..freelist_count {
         all.push(ZERO_PGID);
       }
-      db.backend.freelist().copy_all(&mut all);
-      drop(records);
-      drop(db);
+      db.freelist_copyall(&mut all);
       for id in &all {
         if freed.contains(id) {
           errors.push(format!("page {}: already freed", id));

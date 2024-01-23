@@ -8,21 +8,19 @@ use crate::common::meta::{MappedMetaPage, Meta};
 use crate::common::page::{CoerciblePage, MutPage, Page, RefPage};
 use crate::common::self_owned::SelfOwned;
 use crate::common::tree::MappedLeafPage;
-use crate::common::{PgId, SplitRef, TxId};
+use crate::common::{BVec, PgId, SplitRef, TxId};
 use crate::freelist::{Freelist, MappedFreeListPage};
 use crate::tx::{TxIApi, TxImpl, TxRef, TxRwCell, TxRwImpl, TxRwRef, TxStats};
 use crate::{Error, LockGuard, PinBump, SyncPool, TxApi, TxRwApi};
 use aligners::{alignment, AlignedBytes};
 use fs4::FileExt;
 use memmap2::{Advice, MmapOptions, MmapRaw};
-use once_cell::sync::Lazy;
 use parking_lot::{Mutex, RwLock};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::ops::Sub;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::{fs, io, mem};
 
@@ -655,6 +653,10 @@ pub(crate) trait DbIApi<'tx>: 'tx {
   fn is_page_free(&self, pg_id: PgId) -> bool;
 
   fn remove_tx(&self, rem_tx: TxId, tx_stats: TxStats);
+
+  fn freelist_count(&self) -> u64;
+
+  fn freelist_copyall(&self, all: &mut BVec<PgId>);
 }
 
 pub(crate) trait DbRwIApi<'tx>: DbIApi<'tx> {
@@ -701,6 +703,20 @@ impl<'tx> DbIApi<'tx> for LockGuard<'tx, DbShared> {
       LockGuard::U(guard) => guard.borrow().remove_tx(rem_tx, tx_stats),
     }
   }
+
+  fn freelist_count(&self) -> u64 {
+    match self {
+      LockGuard::R(guard) => guard.freelist_count(),
+      LockGuard::U(guard) => guard.borrow().freelist_count(),
+    }
+  }
+
+  fn freelist_copyall(&self, all: &mut BVec<PgId>) {
+    match self {
+      LockGuard::R(guard) => guard.freelist_copyall(all),
+      LockGuard::U(guard) => guard.borrow().freelist_copyall(all),
+    }
+  }
 }
 
 // In theory things are wired up ok. Here's hoping Miri is happy
@@ -734,6 +750,14 @@ impl<'tx> DbIApi<'tx> for DbShared {
     let n = records.txs.len();
     stats.open_tx_n = n as i64;
     stats.tx_stats += tx_stats;
+  }
+
+  fn freelist_count(&self) -> u64 {
+    self.backend.freelist().count()
+  }
+
+  fn freelist_copyall(&self, all: &mut BVec<PgId>) {
+    self.backend.freelist().copy_all(all)
   }
 }
 
@@ -1096,7 +1120,6 @@ impl DbRwAPI for DB {
     let tx_ref = txrw.get_ref();
     match f(tx_ref) {
       Ok(_) => {
-        let bytes = txrw.tx.bump().allocated_bytes();
         txrw.commit()?;
         Ok(())
       }

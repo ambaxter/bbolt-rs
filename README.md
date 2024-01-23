@@ -22,7 +22,7 @@ Features:
 
 ### General
 - [x] Read-only DB access
-- [ ] Rework Meta storage in DbShared
+- [x] Rework Meta storage in DbShared
 - [ ] Optional freelist loading
 - [ ] Quick Check analog
 - [ ] Logging capabilities
@@ -37,7 +37,7 @@ Features:
 ### Open Questions
 - [x] How do we properly pin memory for the transactions?
 - [x] How do we properly set up sync and send for the database?
-- [ ] Why do I need to transmute the key deref in key(&'a self) -> &'tx [u8] in inode.rs?
+- [x] Why do I need to transmute the key deref in key(&'a self) -> &'tx [u8] in inode.rs?
 - [ ] Why do we leak memory when dropping TxRwImpl?
 - [ ] Why do we need so much memory on large commits? Almost 3x the Go version
 - [ ] Can we squeeze performance by moving the leaf keys all next to each other?
@@ -54,7 +54,7 @@ Features:
 
 ### src/db.rs
 - [ ] Rework page size determination functions
-- [ ] Access freelist easier
+- [x] Access freelist easier
 
 ### src/bucket.rs
 - [ ] Centralize memory aligned bump allocation (BucketIApi.open_bucket)
@@ -79,7 +79,7 @@ Features:
 - [ ] TxIAPI Double check api_for_each -> api_for_each_bucket call 
 - [ ] TxIAPI.\*rollback\*
 - [ ] TxApi.for_each
-- [ ] TxCheck for TxImpl, TxRef
+- [x] TxCheck for TxImpl, TxRef
 - [ ] Copy file
 - [ ] test_tx_check_read_only
 - [ ] test_tx_commit_err_tx_closed
@@ -122,7 +122,7 @@ Features:
 - [ ] Rework page size determination functions
 - [ ] Log IO Errors
 - [ ] Save a special bump just for the RW?
-- [ ] DbApi.close (?)
+- [x] DbApi.close
 - [ ] DbApi.batch
 - [ ] test_open
 - [ ] test_open_multiple_goroutines

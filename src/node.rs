@@ -9,7 +9,6 @@ use crate::common::{BVec, PgId, SplitRef, ZERO_PGID};
 use crate::tx::{TxIApi, TxRwIApi};
 use bumpalo::Bump;
 use std::mem;
-use std::ops::Deref;
 
 /// NodeW represents an in-memory, deserialized page.
 pub struct NodeW<'tx> {
@@ -578,7 +577,7 @@ impl<'tx> NodeRwCell<'tx> {
         self_borrow.children.clear();
         mem::swap(&mut self_borrow.children, &mut child_borrow.children);
 
-        let (r, _, w) = self_borrow.bucket.split_ref_mut();
+        let w = self_borrow.bucket.split_ow_mut();
         let mut wb = w.unwrap();
 
         // Reparent all child nodes being moved.
@@ -733,7 +732,7 @@ mod test {
   use crate::common::page::LEAF_PAGE_FLAG;
   use crate::common::{SplitRef, ZERO_PGID};
   use crate::test_support::TestDb;
-  use crate::tx::check::UnsealTx;
+  use crate::tx::check::UnsealRwTx;
   use crate::tx::{TxIApi, TxRwIApi};
   use crate::DbRwAPI;
   use itertools::Itertools;
