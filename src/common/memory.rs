@@ -121,6 +121,12 @@ where
       *self = CodSlice::Owned(o);
     }
   }
+  pub fn get_ref(&self) -> &'tx [T] {
+    match self {
+      CodSlice::Owned(s) => s,
+      CodSlice::Mapped(m) => m,
+    }
+  }
 }
 
 impl<'tx, T: Pod> Deref for CodSlice<'tx, T> {

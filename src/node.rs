@@ -110,8 +110,7 @@ impl<'tx> NodeW<'tx> {
   }
 
   pub(crate) fn key(&self) -> &'tx [u8] {
-    // I solemnly swear the key is owned by the transaction, not by the node
-    unsafe { mem::transmute(self.key.deref()) }
+    self.key.get_ref()
   }
 
   /// size returns the size of the node after serialization.

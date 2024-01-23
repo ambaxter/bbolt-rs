@@ -69,13 +69,9 @@ impl<'tx> INode<'tx> {
     self.value.own_in(bump);
   }
 
-  // WARNING! MAYBE UNSOUND/UNSAFE
-  //TODO: I am not sure why I need to transmute. If deref() provides a 'tx lifetime, why is
-  // Rust convinced is actually has a lifetime of 'a?
   #[inline]
   pub fn key<'a>(&'a self) -> &'tx [u8] {
-    // I solemnly swear the key is owned by the transaction, not by the node
-    unsafe { std::mem::transmute(self.key.deref()) }
+    self.key.get_ref()
   }
 
   pub(crate) fn cod_key(&self) -> CodSlice<'tx, u8> {
@@ -84,7 +80,7 @@ impl<'tx> INode<'tx> {
 
   #[inline]
   pub fn value<'a>(&'a self) -> &'tx [u8] {
-    unsafe { std::mem::transmute(self.value.deref()) }
+    self.value.get_ref()
   }
 
   #[inline]
