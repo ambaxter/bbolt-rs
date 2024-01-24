@@ -202,7 +202,7 @@ impl<'tx> NodeSplit<'tx> {
     parent.cell.borrow_mut().children.push(next);
 
     // Update the statistics
-    cell.bucket.api_tx().mut_stats().split += 1;
+    cell.bucket.api_tx().split_r().stats.inc_split(1);
 
     ((node, split_index), Some(next))
   }
@@ -507,7 +507,7 @@ impl<'tx> NodeRwCell<'tx> {
         node_cell.key = inodes[0].cod_key();
       }
 
-      tx.mut_stats().spill += 1;
+      tx.split_r().stats.inc_spill(1);
     }
 
     // If the root node split and created a new root then we need to spill that
@@ -708,7 +708,12 @@ impl<'tx> NodeRwCell<'tx> {
     }
 
     // Update statistics.
-    self_borrow.bucket.api_tx().mut_stats().node_deref += 1;
+    self_borrow
+      .bucket
+      .api_tx()
+      .split_r()
+      .stats
+      .inc_node_deref(1);
   }
 
   /// free adds the node's underlying page to the freelist.

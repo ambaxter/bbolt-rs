@@ -21,11 +21,13 @@ use std::cell::{Ref, RefMut};
 use std::marker::{PhantomData};
 use std::mem;
 use std::mem::MaybeUninit;
-use std::ops::{AddAssign, Deref, Sub};
+use std::ops::{Deref, SubAssign};
 use std::pin::Pin;
 use std::ptr::{addr_of, addr_of_mut};
 use std::rc::Rc;
 use std::slice::from_raw_parts_mut;
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 pub trait TxApi<'tx>: UnsealTx<'tx> {
@@ -45,7 +47,7 @@ pub trait TxApi<'tx>: UnsealTx<'tx> {
   fn cursor(&self) -> impl CursorApi<'tx>;
 
   /// Stats retrieves a copy of the current transaction statistics.
-  fn stats(&self) -> TxStats;
+  fn stats(&self) -> Arc<TxStats>;
 
   /// Bucket retrieves a bucket by name.
   /// Returns nil if the bucket does not exist.
@@ -95,85 +97,199 @@ pub trait TxRwApi<'tx>: TxApi<'tx> + UnsealRwTx<'tx> {
 }
 
 // TODO: Add functions to simplify access
-#[derive(Copy, Clone, Default)]
+#[derive(Default)]
 pub struct TxStats {
   // Page statistics.
   //
   /// number of page allocations
-  pub(crate) page_count: i64,
+  page_count: AtomicI64,
   /// total bytes allocated
-  pub(crate) page_alloc: i64,
+  page_alloc: AtomicI64,
 
   // Cursor statistics.
   //
   /// number of cursors created
-  pub(crate) cursor_count: i64,
+  cursor_count: AtomicI64,
 
   // Node statistics
   //
   /// number of node allocations
-  pub(crate) node_count: i64,
+  node_count: AtomicI64,
   /// number of node dereferences
-  pub(crate) node_deref: i64,
+  node_deref: AtomicI64,
 
   // Rebalance statistics.
   //
   /// number of node rebalances
-  pub(crate) rebalance: i64,
+  rebalance: AtomicI64,
   /// total time spent rebalancing
-  pub(crate) rebalance_time: Duration,
+  rebalance_time: Mutex<Duration>,
 
   // Split/Spill statistics.
   //
   /// number of nodes split
-  pub(crate) split: i64,
+  split: AtomicI64,
   /// number of nodes spilled
-  pub(crate) spill: i64,
+  spill: AtomicI64,
   /// total time spent spilling
-  pub(crate) spill_time: Duration,
+  spill_time: Mutex<Duration>,
 
   // Write statistics.
   //
   /// number of writes performed
-  pub(crate) write: i64,
+  write: AtomicI64,
   /// total time spent writing to disk
-  pub(crate) write_time: Duration,
+  write_time: Mutex<Duration>,
 }
 
-impl AddAssign<TxStats> for TxStats {
-  fn add_assign(&mut self, rhs: TxStats) {
-    self.page_count += rhs.page_count;
-    self.page_alloc += rhs.page_alloc;
-    self.cursor_count += rhs.cursor_count;
-    self.node_count += rhs.node_count;
-    self.node_deref += rhs.node_deref;
-    self.rebalance += rhs.rebalance;
-    self.rebalance_time += rhs.rebalance_time;
-    self.split += rhs.split;
-    self.spill += rhs.spill;
-    self.spill_time += rhs.spill_time;
-    self.write += rhs.write;
-    self.write_time += rhs.write_time;
+impl TxStats {
+  pub fn get_page_alloc(&self) -> i64 {
+    self.page_alloc.load(Ordering::Acquire)
+  }
+
+  pub(crate) fn inc_page_alloc(&self, delta: i64) {
+    self.page_alloc.fetch_add(delta, Ordering::AcqRel);
+  }
+
+  pub fn get_page_count(&self) -> i64 {
+    self.page_count.load(Ordering::Acquire)
+  }
+
+  pub(crate) fn inc_page_count(&self, delta: i64) {
+    self.page_count.fetch_add(delta, Ordering::AcqRel);
+  }
+
+  pub fn get_cursor_count(&self) -> i64 {
+    self.cursor_count.load(Ordering::Acquire)
+  }
+
+  pub(crate) fn inc_cursor_count(&self, delta: i64) {
+    self.cursor_count.fetch_add(delta, Ordering::AcqRel);
+  }
+
+  pub fn get_node_count(&self) -> i64 {
+    self.node_count.load(Ordering::Acquire)
+  }
+
+  pub(crate) fn inc_node_count(&self, delta: i64) {
+    self.node_count.fetch_add(delta, Ordering::AcqRel);
+  }
+
+  pub fn get_node_deref(&self) -> i64 {
+    self.node_deref.load(Ordering::Acquire)
+  }
+
+  pub(crate) fn inc_node_deref(&self, delta: i64) {
+    self.node_deref.fetch_add(delta, Ordering::AcqRel);
+  }
+
+  pub fn get_rebalance(&self) -> i64 {
+    self.rebalance.load(Ordering::Acquire)
+  }
+
+  pub(crate) fn inc_rebalance(&self, delta: i64) {
+    self.rebalance.fetch_add(delta, Ordering::AcqRel);
+  }
+
+  pub fn get_rebalance_time(&self) -> Duration {
+    *self.rebalance_time.lock()
+  }
+
+  pub(crate) fn inc_rebalance_time(&self, delta: Duration) {
+    *self.rebalance_time.lock() += delta;
+  }
+
+  pub fn get_split(&self) -> i64 {
+    self.split.load(Ordering::Acquire)
+  }
+
+  pub(crate) fn inc_split(&self, delta: i64) {
+    self.split.fetch_add(delta, Ordering::AcqRel);
+  }
+
+  pub fn get_spill(&self) -> i64 {
+    self.spill.load(Ordering::Acquire)
+  }
+
+  pub(crate) fn inc_spill(&self, delta: i64) {
+    self.spill.fetch_add(delta, Ordering::AcqRel);
+  }
+
+  pub fn get_spill_time(&self) -> Duration {
+    *self.spill_time.lock()
+  }
+
+  pub(crate) fn inc_spill_time(&self, delta: Duration) {
+    *self.spill_time.lock() += delta;
+  }
+
+  pub fn get_write(&self) -> i64 {
+    self.write.load(Ordering::Acquire)
+  }
+
+  pub(crate) fn inc_write(&self, delta: i64) {
+    self.write.fetch_add(delta, Ordering::AcqRel);
+  }
+
+  pub fn get_write_time(&self) -> Duration {
+    *self.write_time.lock()
+  }
+
+  pub(crate) fn inc_write_time(&self, delta: Duration) {
+    *self.write_time.lock() += delta;
+  }
+
+  pub fn add_assign(&self, rhs: &TxStats) {
+    self.inc_page_count(rhs.get_page_count());
+    self.inc_page_alloc(rhs.get_page_alloc());
+    self.inc_cursor_count(rhs.get_cursor_count());
+    self.inc_node_count(rhs.get_node_count());
+    self.inc_node_deref(rhs.get_node_deref());
+    self.inc_rebalance(rhs.get_rebalance());
+    self.inc_rebalance_time(rhs.get_rebalance_time());
+    self.inc_split(rhs.get_split());
+    self.inc_spill(rhs.get_spill());
+    self.inc_spill_time(rhs.get_spill_time());
+    self.inc_write(rhs.get_write());
+    self.inc_write_time(rhs.get_write_time());
+  }
+
+  pub fn sub(&self, rhs: &TxStats) -> TxStats {
+    let stats = self.clone();
+    self.inc_page_count(rhs.get_page_count() * -1);
+    self.inc_page_alloc(rhs.get_page_alloc() * -1);
+    self.inc_cursor_count(rhs.get_cursor_count() * -1);
+    self.inc_node_count(rhs.get_node_count() * -1);
+    self.inc_node_deref(rhs.get_node_deref() * -1);
+    self.inc_rebalance(rhs.get_rebalance() * -1);
+    self
+      .rebalance_time
+      .lock()
+      .sub_assign(rhs.get_rebalance_time());
+    self.inc_split(rhs.get_split() * -1);
+    self.inc_spill(rhs.get_spill() * -1);
+    self.spill_time.lock().sub_assign(rhs.get_spill_time());
+    self.inc_write(rhs.get_write() * -1);
+    self.write_time.lock().sub_assign(rhs.get_write_time());
+    stats
   }
 }
 
-impl Sub<TxStats> for TxStats {
-  type Output = TxStats;
-
-  fn sub(self, rhs: TxStats) -> Self::Output {
+impl Clone for TxStats {
+  fn clone(&self) -> Self {
     TxStats {
-      page_count: self.page_count - rhs.page_count,
-      page_alloc: self.page_alloc - rhs.page_alloc,
-      cursor_count: self.cursor_count - rhs.cursor_count,
-      node_count: self.node_count - rhs.node_count,
-      node_deref: self.node_deref - rhs.node_deref,
-      rebalance: self.rebalance - rhs.rebalance,
-      rebalance_time: self.rebalance_time - rhs.rebalance_time,
-      split: self.split - rhs.split,
-      spill: self.spill - rhs.spill,
-      spill_time: self.spill_time - rhs.spill_time,
-      write: self.write - rhs.write,
-      write_time: self.write_time - rhs.write_time,
+      page_count: self.get_page_count().into(),
+      page_alloc: self.get_page_alloc().into(),
+      cursor_count: self.get_cursor_count().into(),
+      node_count: self.get_node_count().into(),
+      node_deref: self.get_node_deref().into(),
+      rebalance: self.get_rebalance().into(),
+      rebalance_time: self.get_rebalance_time().into(),
+      split: self.get_split().into(),
+      spill: self.get_spill().into(),
+      spill_time: self.get_spill_time().into(),
+      write: self.get_write().into(),
+      write_time: self.get_write_time().into(),
     }
   }
 }
@@ -248,15 +364,8 @@ pub(crate) trait TxIApi<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
   }
 
   /// See [TxApi::stats]
-  fn api_stats(self) -> TxStats {
-    self.split_r().stats
-  }
-
-  fn mut_stats<'a>(&'a self) -> RefMut<'a, TxStats>
-  where
-    'tx: 'a,
-  {
-    RefMut::map(self.split_r_mut(), |r| &mut r.stats)
+  fn api_stats(self) -> Arc<TxStats> {
+    self.split_r().stats.clone()
   }
 
   fn root_bucket(self) -> Self::BucketType {
@@ -542,9 +651,9 @@ impl<'tx> TxRwIApi<'tx> for TxRwCell<'tx> {
     let mut db = { self.cell.borrow().r.db.get_mut().unwrap() };
     let page = db.allocate(self, count as u64)?;
 
-    let mut tx = self.cell.borrow_mut();
-    tx.r.stats.page_count += 1;
-    tx.r.stats.page_alloc += (count * tx.r.page_size) as i64;
+    let tx = self.cell.borrow();
+    tx.r.stats.inc_page_count(1);
+    tx.r.stats.inc_page_alloc((count * tx.r.page_size) as i64);
     Ok(page)
   }
 
@@ -594,7 +703,7 @@ impl<'tx> TxRwIApi<'tx> for TxRwCell<'tx> {
       (pages, tx.r.db.get_mut().unwrap(), tx.r.page_size)
     };
 
-    let mut stats = self.mut_stats();
+    let r = self.split_r();
 
     // Write pages to disk in order.
     for page in &pages {
@@ -610,7 +719,7 @@ impl<'tx> TxRwIApi<'tx> for TxRwCell<'tx> {
         let size = db.write_at(buf, offset)?;
 
         // Update statistics.
-        stats.write += 1;
+        r.stats.inc_write(1);
 
         rem -= size;
         if rem == 0 {
@@ -634,7 +743,7 @@ impl<'tx> TxRwIApi<'tx> for TxRwCell<'tx> {
   }
 
   fn write_meta(self) -> crate::Result<()> {
-    let mut r = self.split_r_mut();
+    let r = self.split_r();
     let page_size = r.page_size;
 
     let layout = Layout::from_size_align(page_size, mem::align_of::<MetaPage>()).unwrap();
@@ -651,7 +760,7 @@ impl<'tx> TxRwIApi<'tx> for TxRwCell<'tx> {
     //TODO: Ignore sync
     db.fsync()?;
 
-    r.stats.write += 1;
+    r.stats.inc_write(1);
 
     Ok(())
   }
@@ -731,7 +840,7 @@ impl<'tx> TxApi<'tx> for TxImpl<'tx> {
     CursorImpl::new(self.tx.api_cursor())
   }
 
-  fn stats(&self) -> TxStats {
+  fn stats(&self) -> Arc<TxStats> {
     self.tx.api_stats()
   }
 
@@ -775,7 +884,7 @@ impl<'tx> TxApi<'tx> for TxRef<'tx> {
     CursorImpl::new(self.tx.api_cursor())
   }
 
-  fn stats(&self) -> TxStats {
+  fn stats(&self) -> Arc<TxStats> {
     self.tx.api_stats()
   }
 
@@ -964,9 +1073,9 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
     let start_time = Instant::now();
     self.tx.root_bucket().rebalance();
     {
-      let mut stats = self.tx.mut_stats();
-      if stats.rebalance > 0 {
-        stats.rebalance_time += start_time.elapsed();
+      let r = self.tx.split_r();
+      if r.stats.get_rebalance() > 0 {
+        r.stats.inc_rebalance_time(start_time.elapsed());
       }
     }
     let opgid = self.tx.meta().pgid();
@@ -974,8 +1083,7 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
     let start_time = Instant::now();
     match self.tx.root_bucket().spill(bump) {
       Ok(_) => {
-        let mut stats = self.tx.mut_stats();
-        stats.spill_time += start_time.elapsed();
+        self.tx.split_r().stats.inc_spill_time(start_time.elapsed());
       }
       Err(e) => {
         let _ = self.rollback();
@@ -1034,8 +1142,7 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
 
     match self.tx.write_meta() {
       Ok(_) => {
-        let mut stats = self.tx.mut_stats();
-        stats.write_time += start_time.elapsed();
+        self.tx.split_r().stats.inc_write_time(start_time.elapsed());
       }
       Err(e) => {
         let _ = self.rollback();

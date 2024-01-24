@@ -21,6 +21,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::ops::Sub;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 use std::{fs, io, mem};
 
@@ -101,7 +102,7 @@ pub trait DbRwAPI: DbApi {
   fn sync(&mut self) -> crate::Result<()>;
 }
 
-#[derive(Copy, Clone, Default)]
+#[derive(Default)]
 /// Stats represents statistics about the database.
 pub struct DbStats {
   /// global, ongoing stats.
@@ -109,33 +110,96 @@ pub struct DbStats {
 
   // Freelist stats
   /// total number of free pages on the freelist
-  free_page_n: i64,
+  free_page_n: AtomicI64,
   /// total number of pending pages on the freelist
-  pending_page_n: i64,
+  pending_page_n: AtomicI64,
   /// total bytes allocated in free pages
-  free_alloc: i64,
+  free_alloc: AtomicI64,
   /// total bytes used by the freelist
-  free_list_in_use: i64,
+  free_list_in_use: AtomicI64,
 
   // transaction stats
   /// total number of started read transactions
-  tx_n: i64,
+  tx_n: AtomicI64,
   /// number of currently open read transactions
-  open_tx_n: i64,
+  open_tx_n: AtomicI64,
 }
 
-impl Sub<&DbStats> for &DbStats {
-  type Output = DbStats;
+impl DbStats {
+  pub fn get_tx_stats(&self) -> &TxStats {
+    &self.tx_stats
+  }
 
-  fn sub(self, rhs: &DbStats) -> Self::Output {
+  pub fn get_free_page_n(&self) -> i64 {
+    self.free_page_n.load(Ordering::Acquire)
+  }
+
+  pub(crate) fn inc_free_page_n(&self, delta: i64) {
+    self.free_page_n.fetch_add(delta, Ordering::AcqRel);
+  }
+
+  pub fn get_pending_page_n(&self) -> i64 {
+    self.pending_page_n.load(Ordering::Acquire)
+  }
+
+  pub(crate) fn inc_pending_page_n(&self, delta: i64) {
+    self.pending_page_n.fetch_add(delta, Ordering::AcqRel);
+  }
+
+  pub fn get_free_alloc(&self) -> i64 {
+    self.free_alloc.load(Ordering::Acquire)
+  }
+
+  pub(crate) fn inc_free_alloc(&self, delta: i64) {
+    self.free_alloc.fetch_add(delta, Ordering::AcqRel);
+  }
+
+  pub fn get_free_list_in_use(&self) -> i64 {
+    self.free_list_in_use.load(Ordering::Acquire)
+  }
+
+  pub(crate) fn inc_free_list_in_use(&self, delta: i64) {
+    self.free_list_in_use.fetch_add(delta, Ordering::AcqRel);
+  }
+
+  pub fn get_tx_n(&self) -> i64 {
+    self.tx_n.load(Ordering::Acquire)
+  }
+
+  pub(crate) fn inc_tx_n(&self, delta: i64) {
+    self.tx_n.fetch_add(delta, Ordering::AcqRel);
+  }
+
+  pub fn get_open_tx_n(&self) -> i64 {
+    self.open_tx_n.load(Ordering::Acquire)
+  }
+
+  pub(crate) fn inc_open_tx_n(&self, delta: i64) {
+    self.open_tx_n.fetch_add(delta, Ordering::AcqRel);
+  }
+
+  pub fn sub(&self, rhs: &DbStats) -> DbStats {
+    let stats = self.clone();
+    self.inc_free_page_n(rhs.get_free_page_n() * -1);
+    self.inc_pending_page_n(rhs.get_pending_page_n() * -1);
+    self.inc_free_alloc(rhs.get_free_alloc() * -1);
+    self.inc_free_list_in_use(rhs.get_free_list_in_use() * -1);
+    self.inc_tx_n(rhs.get_tx_n() * -1);
+    self.inc_open_tx_n(rhs.get_open_tx_n() * -1);
+    stats
+  }
+}
+
+impl Clone for DbStats {
+  fn clone(&self) -> Self {
     DbStats {
-      tx_stats: self.tx_stats - rhs.tx_stats,
-      free_page_n: self.free_page_n - rhs.free_page_n,
-      pending_page_n: self.pending_page_n - rhs.pending_page_n,
-      free_alloc: self.free_alloc - rhs.free_alloc,
-      free_list_in_use: self.free_list_in_use - rhs.free_list_in_use,
-      tx_n: self.tx_n - rhs.tx_n,
-      open_tx_n: self.open_tx_n - rhs.open_tx_n,
+      tx_stats: self.tx_stats.clone(),
+      free_page_n: self.get_free_page_n().into(),
+      pending_page_n: self.get_pending_page_n().into(),
+      free_alloc: self.get_free_alloc().into(),
+      free_list_in_use: self.get_free_list_in_use().into(),
+      tx_n: self.get_tx_n().into(),
+      open_tx_n: self.get_open_tx_n().into(),
     }
   }
 }
@@ -652,7 +716,7 @@ pub(crate) trait DbIApi<'tx>: 'tx {
 
   fn is_page_free(&self, pg_id: PgId) -> bool;
 
-  fn remove_tx(&self, rem_tx: TxId, tx_stats: TxStats);
+  fn remove_tx(&self, rem_tx: TxId, tx_stats: Arc<TxStats>);
 
   fn freelist_count(&self) -> u64;
 
@@ -674,7 +738,7 @@ pub(crate) trait DbRwIApi<'tx>: DbIApi<'tx> {
     &mut self, tx: TxRwCell<'tx>,
   ) -> crate::Result<SelfOwned<AlignedBytes<alignment::Page>, MutPage<'tx>>>;
 
-  fn remove_rw_tx(&mut self, tx_stats: TxStats);
+  fn remove_rw_tx(&mut self, tx_stats: Arc<TxStats>);
 
   fn repool_allocated(&mut self, page: AlignedBytes<alignment::Page>);
 
@@ -697,7 +761,7 @@ impl<'tx> DbIApi<'tx> for LockGuard<'tx, DbShared> {
     }
   }
 
-  fn remove_tx(&self, rem_tx: TxId, tx_stats: TxStats) {
+  fn remove_tx(&self, rem_tx: TxId, tx_stats: Arc<TxStats>) {
     match self {
       LockGuard::R(guard) => guard.remove_tx(rem_tx, tx_stats),
       LockGuard::U(guard) => guard.borrow().remove_tx(rem_tx, tx_stats),
@@ -740,7 +804,7 @@ impl<'tx> DbIApi<'tx> for DbShared {
     self.backend.freelist().freed(pg_id)
   }
 
-  fn remove_tx(&self, rem_tx: TxId, tx_stats: TxStats) {
+  fn remove_tx(&self, rem_tx: TxId, tx_stats: Arc<TxStats>) {
     let mut records = self.db_state.lock();
     let mut stats = self.stats.write();
     if let Some(pos) = records.txs.iter().position(|tx| *tx == rem_tx) {
@@ -748,8 +812,8 @@ impl<'tx> DbIApi<'tx> for DbShared {
     }
 
     let n = records.txs.len();
-    stats.open_tx_n = n as i64;
-    stats.tx_stats += tx_stats;
+    stats.inc_open_tx_n(n as i64);
+    stats.tx_stats.add_assign(&tx_stats);
   }
 
   fn freelist_count(&self) -> u64 {
@@ -846,7 +910,7 @@ impl<'tx> DbRwIApi<'tx> for DbShared {
     Ok(freelist_page)
   }
 
-  fn remove_rw_tx(&mut self, tx_stats: TxStats) {
+  fn remove_rw_tx(&mut self, tx_stats: Arc<TxStats>) {
     let mut state = self.db_state.lock();
     let mut stats = self.stats.write();
     let page_size = self.backend.page_size();
@@ -860,11 +924,16 @@ impl<'tx> DbRwIApi<'tx> for DbShared {
 
     state.rwtx = None;
 
-    stats.free_page_n = free_list_free_n as i64;
-    stats.pending_page_n = free_list_pending_n as i64;
-    stats.free_alloc = ((free_list_free_n + free_list_pending_n) * page_size as u64) as i64;
-    stats.free_list_in_use = free_list_alloc as i64;
-    stats.tx_stats += tx_stats;
+    stats
+      .inc_free_page_n(free_list_free_n as i64);
+    stats
+      .inc_pending_page_n(free_list_pending_n as i64);
+    stats.inc_free_alloc(
+      ((free_list_free_n + free_list_pending_n) * page_size as u64) as i64
+    );
+    stats
+      .inc_free_list_in_use(free_list_alloc as i64);
+    stats.tx_stats.add_assign(&tx_stats);
   }
 
   fn repool_allocated(&mut self, page: AlignedBytes<alignment::Page>) {
@@ -951,7 +1020,7 @@ impl DB {
     backend.freelist = Some(freelist);
     let db_state = Arc::new(Mutex::new(DbState::new(meta)));
     let stats = DbStats {
-      free_page_n: free_count as i64,
+      free_page_n: (free_count as i64).into(),
       ..Default::default()
     };
     let arc_stats = Arc::new(RwLock::new(stats));
@@ -994,7 +1063,7 @@ impl DB {
     backend.freelist = Some(freelist);
     let db_state = Arc::new(Mutex::new(DbState::new(meta)));
     let stats = DbStats {
-      free_page_n: free_count as i64,
+      free_page_n: (free_count as i64).into(),
       ..Default::default()
     };
     let arc_stats = Arc::new(RwLock::new(stats));

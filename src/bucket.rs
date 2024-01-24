@@ -1278,7 +1278,13 @@ impl<'tx> BucketRwIApi<'tx> for BucketRwCell<'tx> {
     wb.nodes.insert(pgid, n);
 
     // Update statistics.
-    self.split_bound().upgrade().unwrap().mut_stats().node_count += 1;
+    self
+      .split_bound()
+      .upgrade()
+      .unwrap()
+      .split_r()
+      .stats
+      .inc_node_count(1);
 
     n
   }

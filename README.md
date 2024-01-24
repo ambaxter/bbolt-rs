@@ -75,7 +75,7 @@ Features:
 ## To Complete
 
 ### src/tx.rs
-- [ ] TxStats getter/setters
+- [x] TxStats getter/setters
 - [ ] TxIAPI Double check api_for_each -> api_for_each_bucket call 
 - [ ] TxIAPI.\*rollback\*
 - [ ] TxApi.for_each
