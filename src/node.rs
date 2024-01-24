@@ -738,14 +738,13 @@ mod test {
   use crate::common::{SplitRef, ZERO_PGID};
   use crate::test_support::TestDb;
   use crate::tx::check::UnsealRwTx;
-  use crate::tx::{TxIApi, TxRwIApi};
-  use crate::DbRwAPI;
+  use crate::tx::TxRwIApi;
   use itertools::Itertools;
 
   #[test]
   fn test_node_put() -> crate::Result<()> {
     let mut test_db = TestDb::new()?;
-    let tx = test_db.begin_mut()?;
+    let tx = test_db.begin_rw_unseal()?;
     let txrw = tx.unseal_rw();
     let root_bucket = txrw.root_bucket_mut();
     let n = root_bucket.materialize_root();
@@ -768,7 +767,7 @@ mod test {
   #[test]
   fn test_node_read_leaf_page() -> crate::Result<()> {
     let mut test_db = TestDb::new()?;
-    let tx = test_db.begin_mut()?;
+    let tx = test_db.begin_rw_unseal()?;
     let txrw = tx.unseal_rw();
     let root_bucket = txrw.root_bucket_mut();
     root_bucket.materialize_root();
@@ -779,7 +778,7 @@ mod test {
   #[test]
   fn test_node_write_leaf_page() -> crate::Result<()> {
     let mut test_db = TestDb::new()?;
-    let tx = test_db.begin_mut()?;
+    let tx = test_db.begin_rw_unseal()?;
     let txrw = tx.unseal_rw();
     let root_bucket = txrw.root_bucket_mut();
     root_bucket.materialize_root();
@@ -790,7 +789,7 @@ mod test {
   #[test]
   fn test_node_split() -> crate::Result<()> {
     let mut test_db = TestDb::new()?;
-    let tx = test_db.begin_mut()?;
+    let tx = test_db.begin_rw_unseal()?;
     let txrw = tx.unseal_rw();
     let root_bucket = txrw.root_bucket_mut();
     let n = root_bucket.materialize_root();
@@ -811,7 +810,7 @@ mod test {
   #[test]
   fn test_node_split_min_keys() -> crate::Result<()> {
     let mut test_db = TestDb::new()?;
-    let tx = test_db.begin_mut()?;
+    let tx = test_db.begin_rw_unseal()?;
     let txrw = tx.unseal_rw();
     let root_bucket = txrw.root_bucket_mut();
     let n = root_bucket.materialize_root();
@@ -825,7 +824,7 @@ mod test {
   #[test]
   fn test_node_split_single_page() -> crate::Result<()> {
     let mut test_db = TestDb::new()?;
-    let tx = test_db.begin_mut()?;
+    let tx = test_db.begin_rw_unseal()?;
     let txrw = tx.unseal_rw();
     let root_bucket = txrw.root_bucket_mut();
     let n = root_bucket.materialize_root();

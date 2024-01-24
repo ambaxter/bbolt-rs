@@ -385,7 +385,7 @@ pub(crate) trait BucketIApi<'tx, T: TxIApi<'tx>>:
   /// Create a new cursor for this Bucket
   fn i_cursor(self) -> InnerCursor<'tx, T, Self> {
     let tx = self.api_tx();
-    tx.split_r_mut().stats.cursor_count += 1;
+    tx.split_r().stats.inc_cursor_count(1);
     InnerCursor::new(self, tx.bump())
   }
 
@@ -1590,13 +1590,13 @@ mod tests {
       b.put(b"bar", b"0000")?;
       Ok(())
     })?;
-    db.must_check_rw();
+    db.must_check();
     db.update(|mut tx| {
       let mut b = tx.bucket_mut(b"widgets").unwrap();
       b.put(b"bar", b"xxxx")?;
       Ok(())
     })?;
-    db.must_check_rw();
+    db.must_check();
     db.update(|mut tx| {
       let mut b = tx.bucket_mut(b"widgets").unwrap();
       for i in 0..10000 {
@@ -1605,7 +1605,7 @@ mod tests {
       }
       Ok(())
     })?;
-    db.must_check_rw();
+    db.must_check();
     db.update(|mut tx| {
       let mut b = tx.bucket_mut(b"widgets").unwrap();
       {
@@ -1615,7 +1615,7 @@ mod tests {
       b.put(b"bar", b"xxxx")?;
       Ok(())
     })?;
-    db.must_check_rw();
+    db.must_check();
     db.view(|tx| {
       let b = tx.bucket(b"widgets").unwrap();
       let foo = b.bucket(b"foo").unwrap();

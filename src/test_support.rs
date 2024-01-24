@@ -1,16 +1,10 @@
-use crate::common::meta::MappedMetaPage;
+use crate::common::page::CoerciblePage;
 use crate::common::self_owned::SelfOwned;
-use std::mem;
-use std::ops::{Deref, DerefMut};
-//use crate::freelist::MappedFreeListPage;
-use crate::common::page::{CoerciblePage, MutPage};
-use crate::common::tree::{MappedBranchPage, MappedLeafPage};
-use crate::tx::check::TxCheck;
-use crate::tx::check::TxICheck;
-use crate::tx::{TxCell, TxIApi, TxImpl, TxRwCell, TxRwImpl, TxRwRef};
-use crate::{DbApi, DbRwAPI, DB};
+use crate::tx::check::{TxCheck, UnsealRwTx, UnsealTx};
+use crate::{DbApi, TxApi, TxRwApi, DB};
 use aligners::{alignment, AlignedBytes};
-use tempfile::{tempfile, Builder, NamedTempFile};
+use std::ops::{Deref, DerefMut};
+use tempfile::{Builder, NamedTempFile};
 
 pub(crate) fn mapped_page<T: CoerciblePage + Sized>(
   bytes: usize,
@@ -58,20 +52,29 @@ impl TestDb {
     Ok(TestDb { tmp_file: None, db })
   }
 
-  pub(crate) fn must_check_rw(&mut self) {
-    let tx = self.db.begin_mut().unwrap();
-    let errors = tx.check();
-    if !errors.is_empty() {
-      for error in errors {
-        eprintln!("{}", error);
+  pub(crate) fn must_check(&mut self) {
+    if let Ok(tx) = self.db.begin() {
+      let errors = tx.check();
+      if !errors.is_empty() {
+        for error in errors {
+          eprintln!("{}", error);
+        }
+        panic!()
       }
-      panic!()
     }
+  }
+
+  pub(crate) fn begin_unseal(&self) -> crate::Result<impl TxApi + UnsealTx> {
+    self.db.begin_tx()
+  }
+
+  pub(crate) fn begin_rw_unseal(&mut self) -> crate::Result<impl TxRwApi + UnsealRwTx> {
+    self.db.begin_rw_tx()
   }
 }
 
 impl Drop for TestDb {
   fn drop(&mut self) {
-    //self.must_check_rw()
+    self.must_check()
   }
 }

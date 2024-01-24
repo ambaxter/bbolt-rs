@@ -1132,7 +1132,7 @@ impl DB {
     Ok(())
   }
 
-  fn begin_tx(&self) -> crate::Result<TxImpl> {
+  pub(crate) fn begin_tx(&self) -> crate::Result<TxImpl> {
     let state = self.db_state.lock();
     DB::require_open(&state)?;
     let lock = self.db.read();
@@ -1140,7 +1140,7 @@ impl DB {
     Ok(TxImpl::new(bump, lock, state.current_meta))
   }
 
-  fn begin_rw_tx(&mut self) -> crate::Result<TxRwImpl> {
+  pub(crate) fn begin_rw_tx(&mut self) -> crate::Result<TxRwImpl> {
     let lock = self.db.upgradable_read();
     let state = self.db_state.lock();
     DB::require_open(&state)?;

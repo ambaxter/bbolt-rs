@@ -620,8 +620,6 @@ impl<'tx, B: BucketRwIApi<'tx>> CursorRwIApi<'tx> for InnerCursor<'tx, TxRwCell<
 #[cfg(test)]
 mod tests {
   use crate::test_support::TestDb;
-  use crate::tx::check::TxICheck;
-  use crate::tx::check::UnsealTx;
   use crate::{
     BucketApi, BucketRwApi, CursorApi, CursorRwApi, DbApi, DbRwAPI, Error, TxApi, TxRwApi,
   };
@@ -688,7 +686,7 @@ mod tests {
       let _ = b.create_bucket(b"sub")?;
       Ok(())
     })?;
-    db.must_check_rw();
+    db.must_check();
     db.update(|mut tx| {
       let b = tx.bucket_mut(b"widgets").unwrap();
       let mut c = b.cursor_mut();
@@ -702,7 +700,7 @@ mod tests {
       assert_eq!(Err(Error::IncompatibleValue), c.delete());
       Ok(())
     })?;
-    db.must_check_rw();
+    db.must_check();
     db.view(|tx| {
       let b = tx.bucket(b"widgets").unwrap();
       let stats = b.stats();

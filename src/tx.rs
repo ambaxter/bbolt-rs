@@ -9,16 +9,18 @@ use crate::common::tree::{MappedBranchPage, TreePage};
 use crate::common::{BVec, HashMap, PgId, SplitRef, TxId};
 use crate::cursor::{CursorImpl, CursorRwIApi, CursorRwImpl, InnerCursor};
 use crate::db::{DbIApi, DbRwIApi, DbShared};
-use crate::tx::check::{TxICheck, UnsealRwTx, UnsealTx};
-use crate::{BucketApi, BucketRwApi, CursorApi, CursorRwApi, LockGuard, PinBump, PinLockGuard};
+use crate::tx::check::TxICheck;
+use crate::{
+  BucketApi, BucketRwApi, CursorApi, CursorRwApi, LockGuard, PinBump, PinLockGuard, TxCheck,
+};
 use aliasable::boxed::AliasableBox;
 use aligners::{alignment, AlignedBytes};
 use bumpalo::Bump;
-use parking_lot::{RwLockReadGuard, RwLockUpgradableReadGuard};
+use parking_lot::{Mutex, RwLockReadGuard, RwLockUpgradableReadGuard};
 use std::alloc::Layout;
 use std::borrow::Cow;
 use std::cell::{Ref, RefMut};
-use std::marker::{PhantomData};
+use std::marker::PhantomData;
 use std::mem;
 use std::mem::MaybeUninit;
 use std::ops::{Deref, SubAssign};
@@ -30,7 +32,7 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-pub trait TxApi<'tx>: UnsealTx<'tx> {
+pub trait TxApi<'tx>: TxCheck<'tx> {
   /// ID returns the transaction id.
   fn id(&self) -> TxId;
 
@@ -65,7 +67,7 @@ pub trait TxApi<'tx>: UnsealTx<'tx> {
   fn page(&self, id: PgId) -> crate::Result<Option<PageInfo>>;
 }
 
-pub trait TxRwApi<'tx>: TxApi<'tx> + UnsealRwTx<'tx> {
+pub trait TxRwApi<'tx>: TxApi<'tx> {
   /// Cursor creates a cursor associated with the root bucket.
   /// All items in the cursor will return a nil value because all root bucket keys point to buckets.
   /// The cursor is only valid as long as the transaction is open.
@@ -490,7 +492,7 @@ pub struct TxR<'tx> {
   b: &'tx Bump,
   page_size: usize,
   db: &'tx LockGuard<'tx, DbShared>,
-  pub(crate) stats: TxStats,
+  pub(crate) stats: Arc<TxStats>,
   pub(crate) meta: Meta,
   is_rollback: bool,
   p: PhantomData<&'tx u8>,
@@ -1009,7 +1011,7 @@ impl<'tx> TxApi<'tx> for TxRwImpl<'tx> {
     CursorImpl::new(self.tx.api_cursor())
   }
 
-  fn stats(&self) -> TxStats {
+  fn stats(&self) -> Arc<TxStats> {
     self.tx.api_stats()
   }
 
@@ -1181,7 +1183,7 @@ impl<'tx> TxApi<'tx> for TxRwRef<'tx> {
     CursorImpl::new(self.tx.api_cursor())
   }
 
-  fn stats(&self) -> TxStats {
+  fn stats(&self) -> Arc<TxStats> {
     self.tx.api_stats()
   }
 
@@ -1248,33 +1250,30 @@ pub(crate) mod check {
     fn unseal(&self) -> impl TxIApi<'tx> + TxICheck<'tx>;
   }
 
-
   pub(crate) trait UnsealRwTx<'tx>: UnsealTx<'tx> {
     fn unseal_rw(&self) -> impl TxRwIApi<'tx>;
   }
 
   impl<'tx> UnsealTx<'tx> for TxImpl<'tx> {
-
     fn unseal(&self) -> impl TxIApi<'tx> + TxICheck<'tx> {
       TxCell { cell: self.tx.cell }
     }
   }
 
   impl<'tx> UnsealTx<'tx> for TxRef<'tx> {
-
-    fn unseal(&self) -> impl TxIApi<'tx> + TxICheck<'tx>{
+    fn unseal(&self) -> impl TxIApi<'tx> + TxICheck<'tx> {
       TxCell { cell: self.tx.cell }
     }
   }
 
   impl<'tx> UnsealTx<'tx> for TxRwImpl<'tx> {
-    fn unseal(&self) -> impl TxIApi<'tx> + TxICheck<'tx>{
+    fn unseal(&self) -> impl TxIApi<'tx> + TxICheck<'tx> {
       TxRwCell { cell: self.tx.cell }
     }
   }
 
   impl<'tx> UnsealTx<'tx> for TxRwRef<'tx> {
-    fn unseal(&self) -> impl TxIApi<'tx> + TxICheck<'tx>{
+    fn unseal(&self) -> impl TxIApi<'tx> + TxICheck<'tx> {
       self.tx
     }
   }
@@ -1299,14 +1298,19 @@ pub(crate) mod check {
   /// because of caching. This overhead can be removed if running on a read-only
   /// transaction, however, it is not safe to execute other writer transactions at
   /// the same time.
-  pub trait TxCheck<'tx>: UnsealTx<'tx> {
-    fn check(&self) -> Vec<String> {
-      let i_tx = self.unseal();
-      i_tx.check()
-    }
+  pub trait TxCheck<'tx> {
+    fn check(&self) -> Vec<String>;
   }
 
-  impl<'tx, T> TxCheck<'tx> for T where T: UnsealTx<'tx> {}
+  impl<'tx, T> TxCheck<'tx> for T
+  where
+    T: UnsealTx<'tx>,
+  {
+    fn check(&self) -> Vec<String> {
+      let tx = self.unseal();
+      tx.check()
+    }
+  }
 
   pub(crate) trait TxICheck<'tx>: TxIApi<'tx> {
     fn check(self) -> Vec<String> {
@@ -1516,12 +1520,11 @@ pub(crate) mod check {
 #[cfg(test)]
 mod test {
   use crate::test_support::TestDb;
-  use crate::{DbApi, DbRwAPI, TxApi, TxRwApi, BucketRwApi, BucketApi, DB};
-  use crate::tx::check::{UnsealTx, TxICheck};
-  use bumpalo::Bump;
+  use crate::tx::check::TxCheck;
+  use crate::{BucketRwApi, DbApi, DbRwAPI, TxApi, TxRwApi, DB};
 
   #[test]
-  fn test_tx_check_read_only() -> crate::Result<()>{
+  fn test_tx_check_read_only() -> crate::Result<()> {
     let mut db = TestDb::new_tmp()?;
     db.update(|mut tx| {
       let mut b = tx.create_bucket("widgets")?;
@@ -1535,8 +1538,7 @@ mod test {
     let ro = DB::open_ro(file.as_ref());
     let ro_db = ro.unwrap();
     let tx = ro_db.begin()?;
-    let tx_unseal = tx.unseal();
-    let errors = tx_unseal.check();
+    let errors = tx.check();
     assert!(errors.is_empty(), "{:?}", errors);
 
     Ok(())
