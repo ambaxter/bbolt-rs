@@ -21,9 +21,13 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::ops::Sub;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Arc;
 use std::{fs, io, mem};
+
+thread_local! {
+  pub(crate) static OWNED: AtomicBool = AtomicBool::new(false);
+}
 
 pub trait DbApi: Clone + Send + Sync
 where
@@ -82,7 +86,7 @@ pub trait DbRwAPI: DbApi {
   ///
   /// IMPORTANT: You must close read-only transactions after you are finished or
   /// else the database will not reclaim old pages.
-  fn begin_mut(&mut self) -> crate::Result<impl TxRwApi>;
+  fn begin_rw(&mut self) -> crate::Result<impl TxRwApi>;
 
   /// Update executes a function within the context of a read-write managed transaction.
   /// If no error is returned from the function then the transaction is committed.
@@ -644,8 +648,13 @@ impl DBBackend for FileBackend {
 
     size = mmap_size(self.page_size, size)?;
     if let Some(mmap) = self.mmap.take() {
-      mmap.unlock()?;
+      if self.use_mlock {
+        mmap.unlock()?;
+      }
       tx.cell.bound().own_in();
+      OWNED.with(|owned| {
+        owned.store(true, Ordering::Release);
+      });
     }
 
     let mmap = MmapOptions::new().len(size as usize).map_raw(&self.file)?;
@@ -924,15 +933,10 @@ impl<'tx> DbRwIApi<'tx> for DbShared {
 
     state.rwtx = None;
 
-    stats
-      .inc_free_page_n(free_list_free_n as i64);
-    stats
-      .inc_pending_page_n(free_list_pending_n as i64);
-    stats.inc_free_alloc(
-      ((free_list_free_n + free_list_pending_n) * page_size as u64) as i64
-    );
-    stats
-      .inc_free_list_in_use(free_list_alloc as i64);
+    stats.inc_free_page_n(free_list_free_n as i64);
+    stats.inc_pending_page_n(free_list_pending_n as i64);
+    stats.inc_free_alloc(((free_list_free_n + free_list_pending_n) * page_size as u64) as i64);
+    stats.inc_free_list_in_use(free_list_alloc as i64);
     stats.tx_stats.add_assign(&tx_stats);
   }
 
@@ -1133,6 +1137,8 @@ impl DB {
   }
 
   pub(crate) fn begin_tx(&self) -> crate::Result<TxImpl> {
+    OWNED.with(|owned| owned.store(false, Ordering::Release));
+
     let state = self.db_state.lock();
     DB::require_open(&state)?;
     let lock = self.db.read();
@@ -1141,6 +1147,7 @@ impl DB {
   }
 
   pub(crate) fn begin_rw_tx(&mut self) -> crate::Result<TxRwImpl> {
+    OWNED.with(|owned| owned.store(false, Ordering::Release));
     let lock = self.db.upgradable_read();
     let state = self.db_state.lock();
     DB::require_open(&state)?;
@@ -1182,7 +1189,7 @@ impl DbApi for DB {
 }
 
 impl DbRwAPI for DB {
-  fn begin_mut(&mut self) -> crate::Result<impl TxRwApi> {
+  fn begin_rw(&mut self) -> crate::Result<impl TxRwApi> {
     self.begin_rw_tx()
   }
 
@@ -1213,231 +1220,277 @@ impl DbRwAPI for DB {
 mod test {
 
   #[test]
+  #[ignore]
   fn test_open() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_open_multiple_goroutines() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_open_err_path_required() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_open_err_not_exists() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_open_err_invalid() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_open_err_version_mismatch() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_open_err_checksum() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_open_read_page_size_from_meta1_os() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_open_read_page_size_from_meta1_given() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_open_size() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_open_size_large() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_open_check() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_open_meta_init_write_error() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_open_file_too_small() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_db_open_initial_mmap_size() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_db_open_read_only() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_open_big_page() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_open_recover_free_list() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_db_begin_err_database_not_open() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_db_begin_rw() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_db_concurrent_write_to() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_db_begin_rw_closed() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_db_close_pending_tx_rw() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_db_close_pending_tx_ro() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_db_update() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_db_update_closed() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_db_update_manual_commit() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_db_update_manual_rollback() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_db_view_manual_commit() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_db_update_panic() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_db_view_error() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_db_view_panic() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_db_stats() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_db_consistency() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_dbstats_sub() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_db_batch() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_db_batch_panic() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_db_batch_full() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_db_batch_time() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_dbunmap() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn example_db_update() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn example_db_view() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn example_db_begin() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn benchmark_dbbatch_automatic() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn benchmark_dbbatch_single() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn benchmark_dbbatch_manual10x100() {
     todo!()
   }

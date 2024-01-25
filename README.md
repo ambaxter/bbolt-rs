@@ -38,7 +38,8 @@ Features:
 - [x] How do we properly pin memory for the transactions?
 - [x] How do we properly set up sync and send for the database?
 - [x] Why do I need to transmute the key deref in key(&'a self) -> &'tx [u8] in inode.rs?
-- [ ] Why do we leak memory when dropping TxRwImpl?
+- [x] Why do we leak memory when dropping TxRwImpl?
+- [ ] We leak memory when dropping TxImpl/TxRwImpl due to Rc's Weak pointers. As long as they're alive Rc's memory will not be de-allocated. Fix this later.
 - [ ] Why do we need so much memory on large commits? Almost 3x the Go version
 - [ ] Can we squeeze performance by moving the leaf keys all next to each other?
 
@@ -62,7 +63,7 @@ Features:
 - [ ] Bucket tests: test_bucket_get_capacity - allow editing values?
 
 ### src/common/mod.rs
-- [ ] Remove unnecessary functions for SplitRef
+- [x] Remove unnecessary functions for SplitRef
 
 ### src/common/page.rs
 - [ ] CoerciblePage API needs cleanup and renaming

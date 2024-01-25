@@ -821,6 +821,7 @@ mod tests {
   }
 
   #[test]
+  #[ignore]
   fn freelist_merge_with_exist() {
     todo!()
   }

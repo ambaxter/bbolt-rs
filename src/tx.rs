@@ -519,7 +519,7 @@ impl<'tx> SplitRef<TxR<'tx>, BucketCell<'tx>, TxW<'tx>> for TxCell<'tx> {
     self.cell.borrow()
   }
 
-  fn split_r_ow(&self) -> (Ref<TxR<'tx>>, Option<Ref<TxW<'tx>>>) {
+  fn split_ref(&self) -> (Ref<TxR<'tx>>, Option<Ref<TxW<'tx>>>) {
     (self.cell.borrow(), None)
   }
 
@@ -531,24 +531,16 @@ impl<'tx> SplitRef<TxR<'tx>, BucketCell<'tx>, TxW<'tx>> for TxCell<'tx> {
     self.cell.bound()
   }
 
-  fn split_ref(&self) -> (Ref<TxR<'tx>>, BucketCell<'tx>, Option<Ref<TxW<'tx>>>) {
-    (self.cell.borrow(), self.cell.bound(), None)
-  }
-
   fn split_r_mut(&self) -> RefMut<TxR<'tx>> {
     self.cell.borrow_mut()
   }
 
-  fn split_r_ow_mut(&self) -> (RefMut<TxR<'tx>>, Option<RefMut<TxW<'tx>>>) {
+  fn split_ref_mut(&self) -> (RefMut<TxR<'tx>>, Option<RefMut<TxW<'tx>>>) {
     (self.cell.borrow_mut(), None)
   }
 
   fn split_ow_mut(&self) -> Option<RefMut<TxW<'tx>>> {
     None
-  }
-
-  fn split_ref_mut(&self) -> (RefMut<TxR<'tx>>, BucketCell<'tx>, Option<RefMut<TxW<'tx>>>) {
-    (self.cell.borrow_mut(), self.cell.bound(), None)
   }
 }
 
@@ -574,7 +566,7 @@ impl<'tx> SplitRef<TxR<'tx>, BucketRwCell<'tx>, TxW<'tx>> for TxRwCell<'tx> {
     Ref::map(self.cell.borrow(), |c| &c.r)
   }
 
-  fn split_r_ow(&self) -> (Ref<TxR<'tx>>, Option<Ref<TxW<'tx>>>) {
+  fn split_ref(&self) -> (Ref<TxR<'tx>>, Option<Ref<TxW<'tx>>>) {
     let (r, w) = Ref::map_split(self.cell.borrow(), |b| (&b.r, &b.w));
     (r, Some(w))
   }
@@ -587,33 +579,17 @@ impl<'tx> SplitRef<TxR<'tx>, BucketRwCell<'tx>, TxW<'tx>> for TxRwCell<'tx> {
     self.cell.bound()
   }
 
-  fn split_ref(&self) -> (Ref<TxR<'tx>>, BucketRwCell<'tx>, Option<Ref<TxW<'tx>>>) {
-    let (r, w) = Ref::map_split(self.cell.borrow(), |b| (&b.r, &b.w));
-    (r, self.cell.bound(), Some(w))
-  }
-
   fn split_r_mut(&self) -> RefMut<TxR<'tx>> {
     RefMut::map(self.cell.borrow_mut(), |c| &mut c.r)
   }
 
-  fn split_r_ow_mut(&self) -> (RefMut<TxR<'tx>>, Option<RefMut<TxW<'tx>>>) {
+  fn split_ref_mut(&self) -> (RefMut<TxR<'tx>>, Option<RefMut<TxW<'tx>>>) {
     let (r, w) = RefMut::map_split(self.cell.borrow_mut(), |b| (&mut b.r, &mut b.w));
     (r, Some(w))
   }
 
   fn split_ow_mut(&self) -> Option<RefMut<TxW<'tx>>> {
     Some(RefMut::map(self.cell.borrow_mut(), |c| &mut c.w))
-  }
-
-  fn split_ref_mut(
-    &self,
-  ) -> (
-    RefMut<TxR<'tx>>,
-    BucketRwCell<'tx>,
-    Option<RefMut<TxW<'tx>>>,
-  ) {
-    let (r, w) = RefMut::map_split(self.cell.borrow_mut(), |b| (&mut b.r, &mut b.w));
-    (r, self.cell.bound(), Some(w))
   }
 }
 
@@ -991,6 +967,14 @@ impl<'tx> Drop for TxRwImpl<'tx> {
       .get_mut()
       .unwrap()
       .remove_rw_tx(stats);
+    {
+      let stats = self.stats();
+      let ptr = Arc::into_raw(stats);
+      unsafe {
+        Arc::decrement_strong_count(ptr);
+        Arc::decrement_strong_count(ptr);
+      }
+    }
   }
 }
 
@@ -1545,41 +1529,49 @@ mod test {
   }
 
   #[test]
+  #[ignore]
   fn test_tx_commit_err_tx_closed() {
     todo!("not possible")
   }
 
   #[test]
+  #[ignore]
   fn test_tx_rollback_err_tx_closed() {
     todo!("not possible")
   }
 
   #[test]
+  #[ignore]
   fn test_tx_commit_err_tx_not_writable() {
     todo!("not possible")
   }
 
   #[test]
+  #[ignore]
   fn test_tx_cursor() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_tx_create_bucket_err_tx_not_writable() {
     todo!("not possible")
   }
 
   #[test]
+  #[ignore]
   fn test_tx_create_bucket_err_tx_closed() {
     todo!("not possible")
   }
 
   #[test]
+  #[ignore]
   fn test_tx_bucket() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_tx_get_not_found() {
     todo!()
   }
@@ -1599,116 +1591,139 @@ mod test {
   }
 
   #[test]
+  #[ignore]
   fn test_tx_create_bucket_if_not_exists() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_tx_create_bucket_if_not_exists_err_bucket_name_required() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_tx_create_bucket_err_bucket_exists() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_tx_create_bucket_err_bucket_name_required() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_tx_delete_bucket() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_tx_delete_bucket_err_tx_closed() {
     todo!("not possible")
   }
 
   #[test]
+  #[ignore]
   fn test_tx_delete_bucket_read_only() {
     todo!("not possible")
   }
 
   #[test]
+  #[ignore]
   fn test_tx_delete_bucket_not_found() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_tx_for_each_no_error() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_tx_for_each_with_error() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_tx_on_commit() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_tx_on_commit_rollback() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_tx_copy_file() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_tx_copy_file_error_meta() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_tx_copy_file_error_normal() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_tx_rollback() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_tx_release_range() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn example_tx_rollback() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn example_tx_copy_file() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_tx_stats_get_and_inc_atomically() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_tx_stats_sub() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_tx_truncate_before_write() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_tx_stats_add() {
     todo!()
   }

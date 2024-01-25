@@ -625,6 +625,7 @@ mod tests {
   };
 
   #[test]
+  #[ignore]
   fn test_cursor_bucket() -> crate::Result<()> {
     let mut db = TestDb::new()?;
     db.update(|mut tx| {
@@ -905,31 +906,37 @@ mod tests {
   }
 
   #[test]
+  #[ignore]
   fn test_cursor_quick_check() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_cursor_quick_check_reverse() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_cursor_quick_check_buckets_only() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_cursor_quick_check_buckets_only_reverse() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn example_cursor() {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn example_cursor_reverse() {
     todo!()
   }

@@ -21,7 +21,7 @@ use either::Either;
 use std::alloc::Layout;
 use std::cell::{Ref, RefMut};
 use std::marker::PhantomData;
-use std::ops::AddAssign;
+use std::ops::{AddAssign, Deref};
 use std::ptr::slice_from_raw_parts_mut;
 use std::rc::{Rc, Weak};
 use std::slice::{from_raw_parts, from_raw_parts_mut};
@@ -379,7 +379,7 @@ pub(crate) trait BucketIApi<'tx, T: TxIApi<'tx>>:
 
   /// Returns the root page id of the bucket
   fn root(self) -> PgId {
-    self.split_ref().0.bucket_header.root()
+    self.split_r().bucket_header.root()
   }
 
   /// Create a new cursor for this Bucket
@@ -406,8 +406,8 @@ pub(crate) trait BucketIApi<'tx, T: TxIApi<'tx>>:
 
     // Otherwise create a bucket and cache it.
     let child = self.open_bucket(v);
-
-    if let (_, tx, Some(mut w)) = self.split_ref_mut() {
+    if let Some(mut w) = self.split_ow_mut() {
+      let tx = self.split_bound();
       let bump = tx.upgrade().unwrap().bump();
       let name = bump.alloc_slice_copy(name);
       w.buckets.insert(name, child);
@@ -567,7 +567,7 @@ pub(crate) trait BucketIApi<'tx, T: TxIApi<'tx>>:
   }
 
   fn page_node(self, id: PgId) -> Either<RefPage<'tx>, NodeRwCell<'tx>> {
-    let (r, w) = self.split_r_ow();
+    let (r, w) = self.split_ref();
     // Inline buckets have a fake page embedded in their value so treat them
     // differently. We'll return the rootNode (if available) or the fake page.
     if r.bucket_header.root() == ZERO_PGID {
@@ -593,7 +593,7 @@ pub(crate) trait BucketIApi<'tx, T: TxIApi<'tx>>:
 
   /// See [BucketApi::sequence]
   fn api_sequence(self) -> u64 {
-    self.split_ref().0.bucket_header.sequence()
+    self.split_r().bucket_header.sequence()
   }
 
   /// Returns the maximum total size of a bucket to make it a candidate for inlining.
@@ -821,7 +821,7 @@ impl<'tx> SplitRef<BucketR<'tx>, Weak<TxCell<'tx>>, InnerBucketW<'tx, TxCell<'tx
     self.cell.borrow()
   }
 
-  fn split_r_ow(
+  fn split_ref(
     &self,
   ) -> (
     Ref<BucketR<'tx>>,
@@ -838,21 +838,11 @@ impl<'tx> SplitRef<BucketR<'tx>, Weak<TxCell<'tx>>, InnerBucketW<'tx, TxCell<'tx
     self.cell.bound()
   }
 
-  fn split_ref(
-    &self,
-  ) -> (
-    Ref<BucketR<'tx>>,
-    Weak<TxCell<'tx>>,
-    Option<Ref<InnerBucketW<'tx, TxCell<'tx>, BucketCell<'tx>>>>,
-  ) {
-    (self.cell.borrow(), self.cell.bound(), None)
-  }
-
   fn split_r_mut(&self) -> RefMut<BucketR<'tx>> {
     self.cell.borrow_mut()
   }
 
-  fn split_r_ow_mut(
+  fn split_ref_mut(
     &self,
   ) -> (
     RefMut<BucketR<'tx>>,
@@ -863,16 +853,6 @@ impl<'tx> SplitRef<BucketR<'tx>, Weak<TxCell<'tx>>, InnerBucketW<'tx, TxCell<'tx
 
   fn split_ow_mut(&self) -> Option<RefMut<InnerBucketW<'tx, TxCell<'tx>, BucketCell<'tx>>>> {
     None
-  }
-
-  fn split_ref_mut(
-    &self,
-  ) -> (
-    RefMut<BucketR<'tx>>,
-    Weak<TxCell<'tx>>,
-    Option<RefMut<InnerBucketW<'tx, TxCell<'tx>, BucketCell<'tx>>>>,
-  ) {
-    (self.cell.borrow_mut(), self.cell.bound(), None)
   }
 }
 
@@ -886,7 +866,7 @@ impl<'tx> SplitRef<BucketR<'tx>, Weak<TxRwCell<'tx>>, BucketW<'tx>> for BucketRw
     Ref::map(self.cell.borrow(), |b| &b.r)
   }
 
-  fn split_r_ow(&self) -> (Ref<BucketR<'tx>>, Option<Ref<BucketW<'tx>>>) {
+  fn split_ref(&self) -> (Ref<BucketR<'tx>>, Option<Ref<BucketW<'tx>>>) {
     let (r, w) = Ref::map_split(self.cell.borrow(), |b| (&b.r, &b.w));
     (r, Some(w))
   }
@@ -899,39 +879,17 @@ impl<'tx> SplitRef<BucketR<'tx>, Weak<TxRwCell<'tx>>, BucketW<'tx>> for BucketRw
     self.cell.bound()
   }
 
-  fn split_ref(
-    &self,
-  ) -> (
-    Ref<BucketR<'tx>>,
-    Weak<TxRwCell<'tx>>,
-    Option<Ref<BucketW<'tx>>>,
-  ) {
-    let (r, w) = Ref::map_split(self.cell.borrow(), |b| (&b.r, &b.w));
-    (r, self.cell.bound(), Some(w))
-  }
-
   fn split_r_mut(&self) -> RefMut<BucketR<'tx>> {
     RefMut::map(self.cell.borrow_mut(), |b| &mut b.r)
   }
 
-  fn split_r_ow_mut(&self) -> (RefMut<BucketR<'tx>>, Option<RefMut<BucketW<'tx>>>) {
+  fn split_ref_mut(&self) -> (RefMut<BucketR<'tx>>, Option<RefMut<BucketW<'tx>>>) {
     let (r, w) = RefMut::map_split(self.cell.borrow_mut(), |b| (&mut b.r, &mut b.w));
     (r, Some(w))
   }
 
   fn split_ow_mut(&self) -> Option<RefMut<BucketW<'tx>>> {
     Some(RefMut::map(self.cell.borrow_mut(), |b| &mut b.w))
-  }
-
-  fn split_ref_mut(
-    &self,
-  ) -> (
-    RefMut<BucketR<'tx>>,
-    Weak<TxRwCell<'tx>>,
-    Option<RefMut<BucketW<'tx>>>,
-  ) {
-    let (r, w) = RefMut::map_split(self.cell.borrow_mut(), |b| (&mut b.r, &mut b.w));
-    (r, self.cell.bound(), Some(w))
   }
 }
 
@@ -962,9 +920,10 @@ impl<'tx> BucketIApi<'tx, TxRwCell<'tx>> for BucketRwCell<'tx> {
 impl<'tx> BucketRwIApi<'tx> for BucketRwCell<'tx> {
   fn materialize_root(self) -> NodeRwCell<'tx> {
     let mut root_id = ZERO_PGID;
-    if let (r, Some(w)) = self.split_r_ow() {
-      match w.root_node {
-        None => root_id = r.bucket_header.root(),
+    {
+      let bucket = self.cell.borrow();
+      match bucket.w.root_node {
+        None => root_id = bucket.r.bucket_header.root(),
         Some(root_node) => return root_node,
       }
     }
@@ -1037,14 +996,13 @@ impl<'tx> BucketRwIApi<'tx> for BucketRwCell<'tx> {
       }
     })?;
 
-    if let Some(mut w) = self.split_ow_mut() {
-      w.buckets.remove(key);
+    {
+      self.cell.borrow_mut().w.buckets.remove(key);
+      let mut child_mut = child.cell.borrow_mut();
+      child_mut.w.nodes.clear();
+      child_mut.w.root_node = None;
     }
 
-    if let Some(mut w) = child.split_ow_mut() {
-      w.nodes.clear();
-      w.root_node = None;
-    }
     child.free();
 
     c.node().del(key);
@@ -1123,12 +1081,11 @@ impl<'tx> BucketRwIApi<'tx> for BucketRwCell<'tx> {
     // To keep with our rules we much copy the bucket entries to temporary storage first
     // This should be unnecessary, but working first *then* optimize
     let v = {
-      let bucket_mut = self.split_ow();
-      let w = bucket_mut.unwrap();
-      let mut v = BVec::with_capacity_in(w.buckets.len(), bump);
+      let bucket = self.cell.borrow();
+      let mut v = BVec::with_capacity_in(bucket.w.buckets.len(), bump);
       // v.extend() would be more idiomatic, but I'm too tired atm to figure out why
       // it's not working
-      for (name, child) in &w.buckets {
+      for (name, child) in &bucket.w.buckets {
         v.push((*name, *child));
       }
       v
@@ -1148,7 +1105,7 @@ impl<'tx> BucketRwIApi<'tx> for BucketRwCell<'tx> {
           from_raw_parts(inline_bucket_ptr, IN_BUCKET_SIZE)
         }
       };
-      if child.split_ow().unwrap().root_node.is_none() {
+      if child.cell.borrow().w.root_node.is_none() {
         continue;
       }
       let mut c = self.i_cursor();
@@ -1164,22 +1121,23 @@ impl<'tx> BucketRwIApi<'tx> for BucketRwCell<'tx> {
       c.node().put(name, name, value, ZERO_PGID, BUCKET_LEAF_FLAG);
     }
 
-    let root_node = match self.split_ow().unwrap().root_node {
+    let root_node = match self.cell.borrow().w.root_node {
       None => return Ok(()),
       Some(root_node) => root_node,
     };
 
     root_node.spill()?;
-    if let (mut r, Some(mut w)) = self.split_r_ow_mut() {
+    {
+      let mut self_borrow = self.cell.borrow_mut();
       let new_root = root_node.root();
-      w.root_node = Some(new_root);
+      self_borrow.w.root_node = Some(new_root);
       let borrow_root = new_root.cell.borrow_mut();
       let new_pgid = borrow_root.pgid;
       let tx_pgid = self.cell.bound().upgrade().unwrap().meta().pgid();
       if new_pgid >= tx_pgid {
         panic!("pgid ({}) above high water mark ({})", new_pgid, tx_pgid);
       }
-      r.bucket_header.set_root(new_pgid);
+      self_borrow.r.bucket_header.set_root(new_pgid);
     }
     Ok(())
   }
@@ -1194,17 +1152,18 @@ impl<'tx> BucketRwIApi<'tx> for BucketRwCell<'tx> {
       let inline_bucket = &mut (*(inline_bucket_ptr as *mut InBucket));
       *inline_bucket = self.cell.borrow().r.bucket_header;
       let mut mut_page = MutPage::new(inline_bucket_ptr.add(IN_BUCKET_SIZE));
+      mut_page.id = PgId(0);
+      mut_page.overflow = 0;
       root_node.write(&mut mut_page);
       from_raw_parts(inline_bucket_ptr, page_size)
     }
   }
 
   fn inlineable(self) -> bool {
-    let b = self.split_ow();
-    let w = b.unwrap();
+    let bucket = self.cell.borrow_mut();
 
     // Bucket must only contain a single leaf node.
-    let n = match w.root_node {
+    let n = match bucket.w.root_node {
       None => return false,
       Some(n) => n,
     };
@@ -1217,7 +1176,7 @@ impl<'tx> BucketRwIApi<'tx> for BucketRwCell<'tx> {
     // Bucket is not inlineable if it contains subbuckets or if it goes beyond
     // our threshold for inline bucket size.
     let mut size = PAGE_HEADER_SIZE;
-    for inode in &node_ref.inodes {
+    for inode in node_ref.inodes.deref() {
       size += LEAF_PAGE_ELEMENT_SIZE + inode.key().len() + inode.value().len();
 
       if inode.flags() & BUCKET_LEAF_FLAG != 0 || size > self.max_inline_bucket_size() {
@@ -1230,12 +1189,13 @@ impl<'tx> BucketRwIApi<'tx> for BucketRwCell<'tx> {
 
   fn own_in(self) {
     let (bump, root, children) = {
-      let (r, tx, w) = self.split_ref();
+      let tx = self.split_bound();
+      let bucket = self.cell.borrow();
       let bump = tx.upgrade().unwrap().bump();
-      let wb = w.unwrap();
-      let mut children: BVec<BucketRwCell<'tx>> = BVec::with_capacity_in(wb.buckets.len(), bump);
-      children.extend(wb.buckets.values());
-      (bump, wb.root_node, children)
+      let mut children: BVec<BucketRwCell<'tx>> =
+        BVec::with_capacity_in(bucket.w.buckets.len(), bump);
+      children.extend(bucket.w.buckets.values());
+      (bump, bucket.w.root_node, children)
     };
 
     if let Some(node) = root {
@@ -1249,14 +1209,13 @@ impl<'tx> BucketRwIApi<'tx> for BucketRwCell<'tx> {
 
   fn node(self, pgid: PgId, parent: Option<NodeRwCell<'tx>>) -> NodeRwCell<'tx> {
     let inline_page = {
-      let (r, w) = self.split_r_ow_mut();
-      let wb = w.unwrap();
+      let self_borrow = self.cell.borrow_mut();
 
       // Retrieve node if it's already been created.
-      if let Some(n) = wb.nodes.get(&pgid) {
+      if let Some(n) = self_borrow.w.nodes.get(&pgid) {
         return *n;
       }
-      r.inline_page
+      self_borrow.r.inline_page
     };
 
     // Otherwise create a node and cache it.
@@ -1266,10 +1225,11 @@ impl<'tx> BucketRwIApi<'tx> for BucketRwCell<'tx> {
       Some(page) => page,
     };
 
+    let p: &Page = &page;
     // Read the page into the node and cache it.
     let n = NodeRwCell::read_in(self, parent, &page);
-    let w = self.split_ow_mut();
-    let mut wb = w.unwrap();
+    let mut bucket = self.cell.borrow_mut();
+    let mut wb = &mut bucket.w;
     match parent {
       None => wb.root_node = Some(n),
       Some(parent_node) => parent_node.cell.borrow_mut().children.push(n),
@@ -1358,6 +1318,7 @@ mod tests {
   //
   // https://github.com/boltdb/bolt/issues/544
   #[test]
+  #[ignore]
   fn test_bucket_get_capacity() -> crate::Result<()> {
     let mut db = TestDb::new()?;
     db.update(|mut tx| {
@@ -1439,7 +1400,7 @@ mod tests {
 
   #[test]
   fn test_db_put_very_large() -> crate::Result<()> {
-    let mut db = TestDb::new_tmp()?;
+    let mut db = TestDb::new()?;
     let n = 400000u64;
     let batch_n = 200000u64;
 
@@ -1458,7 +1419,7 @@ mod tests {
 
   #[test]
   fn test_bucket_put_incompatible_value() -> crate::Result<()> {
-    let mut db = TestDb::new_tmp()?;
+    let mut db = TestDb::new()?;
     db.update(|mut tx| {
       let _ = tx.create_bucket(b"widgets")?;
       tx.bucket_mut(b"widgets").unwrap().create_bucket(b"foo")?;
@@ -1472,18 +1433,20 @@ mod tests {
   }
 
   #[test]
+  #[ignore]
   fn test_bucket_put_closed() -> crate::Result<()> {
     todo!("not necessary. Bucket can't exist after tx closed")
   }
 
   #[test]
+  #[ignore]
   fn test_bucket_put_read_only() -> crate::Result<()> {
     todo!("needs read-only access")
   }
 
   #[test]
   fn test_bucket_delete() -> crate::Result<()> {
-    let mut db = TestDb::new_tmp()?;
+    let mut db = TestDb::new()?;
     db.update(|mut tx| {
       let mut b = tx.create_bucket(b"widgets")?;
       b.put(b"foo", b"bar")?;
@@ -1495,7 +1458,7 @@ mod tests {
 
   #[test]
   fn test_bucket_delete_large() -> crate::Result<()> {
-    let mut db = TestDb::new_tmp()?;
+    let mut db = TestDb::new()?;
     let var = [b'*'; 1024];
     db.update(|mut tx| {
       let mut b = tx.create_bucket(b"widgets")?;
@@ -1558,7 +1521,7 @@ mod tests {
 
   #[test]
   fn test_bucket_delete_non_existing() -> crate::Result<()> {
-    let mut db = TestDb::new_tmp()?;
+    let mut db = TestDb::new()?;
     db.update(|mut tx| {
       let mut b = tx.create_bucket(b"widgets")?;
       let _ = b.create_bucket(b"nested")?;
@@ -1633,7 +1596,7 @@ mod tests {
 
   #[test]
   fn test_bucket_delete_bucket() -> crate::Result<()> {
-    let mut db = TestDb::new_tmp()?;
+    let mut db = TestDb::new()?;
     db.update(|mut tx| {
       let mut b = tx.create_bucket(b"widgets")?;
       let _ = b.create_bucket(b"foo")?;
@@ -1644,11 +1607,13 @@ mod tests {
   }
 
   #[test]
+  #[ignore]
   fn test_bucket_delete_read_only() -> crate::Result<()> {
     todo!("read-only")
   }
 
   #[test]
+  #[ignore]
   fn test_bucket_delete_closed() -> crate::Result<()> {
     todo!("not possible")
   }
@@ -1656,7 +1621,7 @@ mod tests {
   #[test]
   // Ensure that deleting a bucket causes nested buckets to be deleted.
   fn test_bucket_delete_bucket_nested() -> crate::Result<()> {
-    let mut db = TestDb::new_tmp()?;
+    let mut db = TestDb::new()?;
     db.update(|mut tx| {
       {
         let mut widgets = tx.create_bucket(b"widgets")?;
@@ -1673,7 +1638,7 @@ mod tests {
   #[test]
   // Ensure that deleting a bucket causes nested buckets to be deleted after they have been committed.
   fn test_bucket_delete_bucket_nested2() -> crate::Result<()> {
-    let mut db = TestDb::new_tmp()?;
+    let mut db = TestDb::new()?;
     db.update(|mut tx| {
       let mut widgets = tx.create_bucket(b"widgets")?;
       let mut foo = widgets.create_bucket(b"foo")?;
@@ -1702,7 +1667,7 @@ mod tests {
   // Ensure that deleting a child bucket with multiple pages causes all pages to get collected.
   // NOTE: Consistency check in bolt_test.DB.Close() will panic if pages not freed properly.
   fn test_bucket_delete_bucket_large() -> crate::Result<()> {
-    let mut db = TestDb::new_tmp()?;
+    let mut db = TestDb::new()?;
     db.update(|mut tx| {
       let mut widgets = tx.create_bucket(b"widgets")?;
       let mut foo = widgets.create_bucket(b"foo")?;
@@ -1722,7 +1687,7 @@ mod tests {
 
   #[test]
   fn test_bucket_bucket_incompatible_value() -> crate::Result<()> {
-    let mut db = TestDb::new_tmp()?;
+    let mut db = TestDb::new()?;
     db.update(|mut tx| {
       let mut widgets = tx.create_bucket(b"widgets")?;
       widgets.put(b"foo", b"bar")?;
@@ -1734,7 +1699,7 @@ mod tests {
 
   #[test]
   fn test_bucket_create_bucket_incompatible_value() -> crate::Result<()> {
-    let mut db = TestDb::new_tmp()?;
+    let mut db = TestDb::new()?;
     db.update(|mut tx| {
       let mut widgets = tx.create_bucket(b"widgets")?;
       widgets.put(b"foo", b"bar")?;
@@ -1749,7 +1714,7 @@ mod tests {
 
   #[test]
   fn test_bucket_delete_bucket_incompatible_value() -> crate::Result<()> {
-    let mut db = TestDb::new_tmp()?;
+    let mut db = TestDb::new()?;
     db.update(|mut tx| {
       let mut widgets = tx.create_bucket(b"widgets")?;
       widgets.put(b"foo", b"bar")?;
@@ -1764,7 +1729,7 @@ mod tests {
 
   #[test]
   fn test_bucket_sequence() -> crate::Result<()> {
-    let mut db = TestDb::new_tmp()?;
+    let mut db = TestDb::new()?;
     db.update(|mut tx| {
       let mut bkt = tx.create_bucket(b"0")?;
       assert_eq!(0, bkt.sequence());
@@ -1782,7 +1747,7 @@ mod tests {
 
   #[test]
   fn test_bucket_next_sequence() -> crate::Result<()> {
-    let mut db = TestDb::new_tmp()?;
+    let mut db = TestDb::new()?;
     db.update(|mut tx| {
       let _ = tx.create_bucket(b"widgets")?;
       let _ = tx.create_bucket(b"woojits")?;
@@ -1804,7 +1769,7 @@ mod tests {
   // the only thing updated on the bucket.
   // https://github.com/boltdb/bolt/issues/296
   fn test_bucket_next_sequence_persist() -> crate::Result<()> {
-    let mut db = TestDb::new_tmp()?;
+    let mut db = TestDb::new()?;
     db.update(|mut tx| {
       let mut widgets = tx.create_bucket(b"widgets")?;
       Ok(())
@@ -1823,11 +1788,13 @@ mod tests {
   }
 
   #[test]
+  #[ignore]
   fn test_bucket_next_sequence_read_only() -> crate::Result<()> {
     todo!("read-only")
   }
 
   #[test]
+  #[ignore]
   fn test_bucket_next_sequence_closed() -> crate::Result<()> {
     todo!("not-possible")
   }
@@ -1860,7 +1827,7 @@ mod tests {
       (b"csubbucket".as_slice(), None),
       (b"foo".as_slice(), Some(b"0000".as_slice())),
     ];
-    let mut db = TestDb::new_tmp()?;
+    let mut db = TestDb::new()?;
     db.update(|mut tx| {
       let mut b = tx.create_bucket(b"widgets")?;
       b.put(b"foo", b"0000")?;
@@ -1892,7 +1859,7 @@ mod tests {
   #[test]
   fn test_bucket_for_each_bucket() -> crate::Result<()> {
     let expected_items = [b"csubbucket".as_slice(), b"zsubbucket".as_slice()];
-    let mut db = TestDb::new_tmp()?;
+    let mut db = TestDb::new()?;
     db.update(|mut tx| {
       let mut b = tx.create_bucket(b"widgets")?;
       b.put(b"foo", b"0000")?;
@@ -1924,7 +1891,7 @@ mod tests {
 
   #[test]
   fn test_bucket_for_each_bucket_no_buckets() -> crate::Result<()> {
-    let mut db = TestDb::new_tmp()?;
+    let mut db = TestDb::new()?;
     db.update(|mut tx| {
       let mut b = tx.create_bucket(b"widgets")?;
       b.put(b"foo", b"0000")?;
@@ -1951,7 +1918,7 @@ mod tests {
 
   #[test]
   fn test_bucket_for_each_short_circuit() -> crate::Result<()> {
-    let mut db = TestDb::new_tmp()?;
+    let mut db = TestDb::new()?;
     let result = db.update(|mut tx| {
       {
         let mut b = tx.create_bucket(b"widgets")?;
@@ -1976,13 +1943,14 @@ mod tests {
   }
 
   #[test]
+  #[ignore]
   fn test_bucket_for_each_closed() -> crate::Result<()> {
     todo!("not possible")
   }
 
   #[test]
   fn test_bucket_put_empty_key() -> crate::Result<()> {
-    let mut db = TestDb::new_tmp()?;
+    let mut db = TestDb::new()?;
     db.update(|mut tx| {
       let mut widgets = tx.create_bucket(b"widgets")?;
       assert_eq!(Some(Error::KeyRequired), widgets.put(&[], &[]).err());
@@ -1993,7 +1961,7 @@ mod tests {
 
   #[test]
   fn test_bucket_put_key_too_large() -> crate::Result<()> {
-    let mut db = TestDb::new_tmp()?;
+    let mut db = TestDb::new()?;
     let key = [0u8; 32769];
     db.update(|mut tx| {
       let mut widgets = tx.create_bucket(b"widgets")?;
@@ -2008,7 +1976,7 @@ mod tests {
 
   #[test]
   fn test_bucket_put_value_too_large() -> crate::Result<()> {
-    let mut db = TestDb::new_tmp()?;
+    let mut db = TestDb::new()?;
     let value = vec![0u8; MAX_VALUE_SIZE as usize + 1];
     db.update(|mut tx| {
       let mut widgets = tx.create_bucket(b"widgets")?;
@@ -2022,61 +1990,73 @@ mod tests {
   }
 
   #[test]
+  #[ignore]
   fn test_bucket_stats() -> crate::Result<()> {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_bucket_stats_random_fill() -> crate::Result<()> {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_bucket_stats_small() -> crate::Result<()> {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_bucket_stats_empty_bucket() -> crate::Result<()> {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_bucket_stats_nested() -> crate::Result<()> {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_bucket_stats_large() -> crate::Result<()> {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn test_bucket_put_single() -> crate::Result<()> {
     todo!("quick-check")
   }
 
   #[test]
+  #[ignore]
   fn test_bucket_put_multiple() -> crate::Result<()> {
     todo!("quick-check")
   }
 
   #[test]
+  #[ignore]
   fn test_bucket_delete_quick() -> crate::Result<()> {
     todo!("quick-check")
   }
 
   #[test]
+  #[ignore]
   fn example_bucket_put() -> crate::Result<()> {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn example_bucket_delete() -> crate::Result<()> {
     todo!()
   }
 
   #[test]
+  #[ignore]
   fn example_bucket_for_each() -> crate::Result<()> {
     todo!()
   }

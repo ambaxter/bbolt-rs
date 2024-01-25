@@ -32,7 +32,7 @@ pub(crate) trait SplitRef<R, B, W>: Copy + Clone {
   fn split_r(&self) -> cell::Ref<R>;
 
   /// Access the read and optional write section of the struct
-  fn split_r_ow(&self) -> (cell::Ref<R>, Option<cell::Ref<W>>);
+  fn split_ref(&self) -> (cell::Ref<R>, Option<cell::Ref<W>>);
 
   /// Access the option write section of the struct
   fn split_ow(&self) -> Option<cell::Ref<W>>;
@@ -40,18 +40,12 @@ pub(crate) trait SplitRef<R, B, W>: Copy + Clone {
   /// Access the bound section of the struct
   fn split_bound(&self) -> B;
 
-  /// Access the read, bound, and optional write section of the struct
-  fn split_ref(&self) -> (cell::Ref<R>, B, Option<cell::Ref<W>>);
-
   /// Mutably access the read section of the struct
   fn split_r_mut(&self) -> cell::RefMut<R>;
 
   /// Mutably access the read and optional write section of the struct
-  fn split_r_ow_mut(&self) -> (cell::RefMut<R>, Option<cell::RefMut<W>>);
+  fn split_ref_mut(&self) -> (cell::RefMut<R>, Option<cell::RefMut<W>>);
 
   /// Mutably access the option write section of the struct
   fn split_ow_mut(&self) -> Option<cell::RefMut<W>>;
-
-  /// Mutably access the read, bound, and optional write section of the struct
-  fn split_ref_mut(&self) -> (cell::RefMut<R>, B, Option<cell::RefMut<W>>);
 }

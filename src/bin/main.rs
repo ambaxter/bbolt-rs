@@ -8,6 +8,7 @@ fn main() -> bbolt_rs::Result<()> {
   for _ in 0..1 {
     widgets(&mut db)?;
   }
+  db.begin().unwrap().check();
   let db2 = db.clone();
   db.close();
   let _ = db2.begin()?;
