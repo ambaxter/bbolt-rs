@@ -4,7 +4,6 @@ use crate::common::page::{
   CoerciblePage, Page, BRANCH_PAGE_FLAG, BUCKET_LEAF_FLAG, LEAF_PAGE_FLAG, PAGE_HEADER_SIZE,
 };
 use crate::common::PgId;
-use crate::db::OWNED;
 use bytemuck::{Pod, Zeroable};
 use getset::{CopyGetters, Setters};
 use itertools::izip;
@@ -12,7 +11,6 @@ use std::marker::PhantomData;
 use std::mem;
 use std::ops::{Deref, DerefMut};
 use std::slice::{from_raw_parts, from_raw_parts_mut};
-use std::sync::atomic::Ordering;
 
 pub const BRANCH_PAGE_ELEMENT_SIZE: usize = mem::size_of::<BranchPageElement>();
 pub const LEAF_PAGE_ELEMENT_SIZE: usize = mem::size_of::<LeafPageElement>();

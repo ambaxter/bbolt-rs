@@ -4,14 +4,15 @@ use std::time::Instant;
 fn main() -> bbolt_rs::Result<()> {
   println!("Hello, world!");
 
-  let mut db = DB::new_mem()?;
-  for _ in 0..1 {
+  let mut db = DB::open("test.db")?;
+  for _ in 0..5 {
     widgets(&mut db)?;
+    db.clone().close();
   }
   db.begin().unwrap().check();
   let db2 = db.clone();
   db.close();
-  let _ = db2.begin()?;
+  //let _ = db2.begin()?;
   println!("Goodbye, world!");
   Ok(())
 }

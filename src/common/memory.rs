@@ -262,7 +262,7 @@ pub(crate) struct SubArray<'a, T> {
 }
 
 impl<'a, T> SubArray<'a, T> {
-  pub(crate) fn new(ptr: *const T, len: usize) -> Self {
+  pub(crate) unsafe fn new(ptr: *const T, len: usize) -> Self {
     SubArray {
       phantom: Default::default(),
       ptr,
@@ -273,6 +273,12 @@ impl<'a, T> SubArray<'a, T> {
 
 unsafe impl<'a, T: Send> Send for SubArray<'a, T> {}
 unsafe impl<'a, T: Sync> Sync for SubArray<'a, T> {}
+
+impl<'a, T> From<&BVec<'a, T>> for SubArray<'a, T> {
+  fn from(value: &BVec<'a, T>) -> Self {
+    unsafe { SubArray::new(value.as_ptr(), value.len()) }
+  }
+}
 
 impl<'a, T> Deref for SubArray<'a, T> {
   type Target = [T];
@@ -285,6 +291,18 @@ impl<'a, T> Deref for SubArray<'a, T> {
 impl<'a, T> DerefMut for SubArray<'a, T> {
   fn deref_mut(&mut self) -> &mut Self::Target {
     unsafe { from_raw_parts_mut(self.ptr.cast_mut(), self.len) }
+  }
+}
+
+impl<'a, T> AsRef<[T]> for SubArray<'a, T> {
+  fn as_ref(&self) -> &[T] {
+    self.deref()
+  }
+}
+
+impl<'a, T> AsMut<[T]> for SubArray<'a, T> {
+  fn as_mut(&mut self) -> &mut [T] {
+    self.deref_mut()
   }
 }
 
@@ -326,6 +344,18 @@ impl<'a, T> DerefMut for VecOrSub<'a, T> {
       VecOrSub::Vec(v) => v,
       VecOrSub::Sub(s) => s,
     }
+  }
+}
+
+impl<'a, T> AsRef<[T]> for VecOrSub<'a, T> {
+  fn as_ref(&self) -> &[T] {
+    self.deref()
+  }
+}
+
+impl<'a, T> AsMut<[T]> for VecOrSub<'a, T> {
+  fn as_mut(&mut self) -> &mut [T] {
+    self.deref_mut()
   }
 }
 

@@ -174,9 +174,7 @@ impl<'tx> NodeSplit<'tx> {
     // Ignore the split if the page doesn't have at least enough nodes for
     // two pages or if the nodes can fit in a single page.
     if rem.len() <= MIN_KEYS_PER_PAGE * 2 || self.size_less_than(rem) {
-      let cell_sub_ptr = rem.as_ptr();
-      let cell_sub_len = rem.len();
-      cell.inodes = SubArray::new(cell_sub_ptr, cell_sub_len).into();
+      cell.inodes = unsafe { SubArray::new(rem.as_ptr(), rem.len()) }.into();
       return (node, None);
     }
 
@@ -184,14 +182,9 @@ impl<'tx> NodeSplit<'tx> {
     let (split_index, _) = self.split_index(rem);
 
     let cell_sub = &rem[..split_index];
-    let cell_sub_ptr = cell_sub.as_ptr();
-    let cell_sub_len = cell_sub.len();
-
-    cell.inodes = SubArray::new(cell_sub_ptr, cell_sub_len).into();
+    cell.inodes = unsafe { SubArray::new(cell_sub.as_ptr(), cell_sub.len()) }.into();
 
     let next_sub = &rem[split_index..];
-    let next_sub_ptr = next_sub.as_ptr();
-    let nex_sub_len = next_sub.len();
     self.offset += split_index;
 
     // Split node into two separate nodes.
@@ -210,7 +203,7 @@ impl<'tx> NodeSplit<'tx> {
     // Create a new node and add it to the parent.
     let next = NodeRwCell::new_child_in(cell.bucket, cell.is_leaf, parent);
     let mut next_cell = next.cell.borrow_mut();
-    next_cell.inodes = SubArray::new(next_sub_ptr, nex_sub_len).into();
+    next_cell.inodes = unsafe { SubArray::new(next_sub.as_ptr(), next_sub.len()) }.into();
     parent.cell.borrow_mut().children.push(next);
 
     // Update the statistics
@@ -460,15 +453,9 @@ impl<'tx> NodeRwCell<'tx> {
     // Spill child nodes first. Child nodes can materialize sibling nodes in
     // the case of split-merge so we cannot use a range loop. We have to check
     // the children size on every loop iteration.
-    let mut i = 0usize;
-    // have to do this workaround as temporaries live for the entire statement
-    // https://users.rust-lang.org/t/why-is-this-refcell-borrow-not-dropped-inside-its-block/66134
-    // https://github.com/rust-lang/rust/issues/37612#issuecomment-258676414
-    let mut child_get = self.cell.borrow().children.get(i).cloned();
-    while let Some(child) = child_get {
+    let children = SubArray::from(&self.cell.borrow().children);
+    for child in children.deref() {
       child.spill()?;
-      i += 1;
-      child_get = self.cell.borrow().children.get(i).cloned();
     }
 
     // We no longer need the child list because it's only used for spill tracking.
@@ -653,10 +640,10 @@ impl<'tx> NodeRwCell<'tx> {
 
     // If both this node and the target node are too small then merge them.
     if use_next_sibling {
-      let inodes = target_borrow.inodes.get_vec().clone();
+      let inodes = SubArray::from(target_borrow.inodes.get_vec());
       drop(target_borrow);
       // Reparent all child nodes being moved.
-      for inode in &inodes {
+      for inode in inodes.deref() {
         if let Some(child) = bucket.w.nodes.get(&inode.pgid()).cloned() {
           let child_parent = child.cell.borrow().parent.unwrap();
           child_parent.cell.borrow_mut().remove_child(child);
@@ -681,10 +668,10 @@ impl<'tx> NodeRwCell<'tx> {
       target.free();
     } else {
       // Drop as child_parent may be self.
-      let inodes = self_borrow.inodes.get_vec().clone();
+      let inodes = SubArray::from(target_borrow.inodes.get_vec());
       drop(self_borrow);
       // Reparent all child nodes being moved.
-      for inode in inodes {
+      for inode in inodes.deref() {
         if let Some(child) = bucket.w.nodes.get(&inode.pgid()).cloned() {
           let child_parent = child.cell.borrow().parent.unwrap();
           child_parent.cell.borrow_mut().remove_child(child);

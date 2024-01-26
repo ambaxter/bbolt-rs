@@ -50,7 +50,7 @@ Features:
 
 ### src/nodes.rs
 - [ ] We have at least 3 different functions to write inodes
-- [ ] Double check inodes aren't used after they're spilled
+- [x] Double check inodes aren't used after they're spilled
 - [ ] Rebalance could be a lot better
 
 ### src/db.rs

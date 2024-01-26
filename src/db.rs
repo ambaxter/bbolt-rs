@@ -25,10 +25,6 @@ use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Arc;
 use std::{fs, io, mem};
 
-thread_local! {
-  pub(crate) static OWNED: AtomicBool = AtomicBool::new(false);
-}
-
 pub trait DbApi: Clone + Send + Sync
 where
   Self: Sized,
@@ -652,9 +648,6 @@ impl DBBackend for FileBackend {
         mmap.unlock()?;
       }
       tx.cell.bound().own_in();
-      OWNED.with(|owned| {
-        owned.store(true, Ordering::Release);
-      });
     }
 
     let mmap = MmapOptions::new().len(size as usize).map_raw(&self.file)?;
@@ -1137,8 +1130,6 @@ impl DB {
   }
 
   pub(crate) fn begin_tx(&self) -> crate::Result<TxImpl> {
-    OWNED.with(|owned| owned.store(false, Ordering::Release));
-
     let state = self.db_state.lock();
     DB::require_open(&state)?;
     let lock = self.db.read();
@@ -1147,7 +1138,6 @@ impl DB {
   }
 
   pub(crate) fn begin_rw_tx(&mut self) -> crate::Result<TxRwImpl> {
-    OWNED.with(|owned| owned.store(false, Ordering::Release));
     let lock = self.db.upgradable_read();
     let state = self.db_state.lock();
     DB::require_open(&state)?;

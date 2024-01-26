@@ -258,20 +258,20 @@ impl TxStats {
 
   pub fn sub(&self, rhs: &TxStats) -> TxStats {
     let stats = self.clone();
-    self.inc_page_count(rhs.get_page_count() * -1);
-    self.inc_page_alloc(rhs.get_page_alloc() * -1);
-    self.inc_cursor_count(rhs.get_cursor_count() * -1);
-    self.inc_node_count(rhs.get_node_count() * -1);
-    self.inc_node_deref(rhs.get_node_deref() * -1);
-    self.inc_rebalance(rhs.get_rebalance() * -1);
+    self.inc_page_count(-rhs.get_page_count());
+    self.inc_page_alloc(-rhs.get_page_alloc());
+    self.inc_cursor_count(-rhs.get_cursor_count());
+    self.inc_node_count(-rhs.get_node_count());
+    self.inc_node_deref(-rhs.get_node_deref());
+    self.inc_rebalance(-rhs.get_rebalance());
     self
       .rebalance_time
       .lock()
       .sub_assign(rhs.get_rebalance_time());
-    self.inc_split(rhs.get_split() * -1);
-    self.inc_spill(rhs.get_spill() * -1);
+    self.inc_split(-rhs.get_split());
+    self.inc_spill(-rhs.get_spill());
     self.spill_time.lock().sub_assign(rhs.get_spill_time());
-    self.inc_write(rhs.get_write() * -1);
+    self.inc_write(-rhs.get_write());
     self.write_time.lock().sub_assign(rhs.get_write_time());
     stats
   }
@@ -1505,7 +1505,9 @@ pub(crate) mod check {
 mod test {
   use crate::test_support::TestDb;
   use crate::tx::check::TxCheck;
-  use crate::{BucketRwApi, DbApi, DbRwAPI, TxApi, TxRwApi, DB};
+  use crate::{
+    BucketApi, BucketRwApi, CursorApi, CursorRwApi, DbApi, DbRwAPI, Error, TxApi, TxRwApi, DB,
+  };
 
   #[test]
   fn test_tx_check_read_only() -> crate::Result<()> {
@@ -1547,9 +1549,17 @@ mod test {
   }
 
   #[test]
-  #[ignore]
-  fn test_tx_cursor() {
-    todo!()
+  fn test_tx_cursor() -> crate::Result<()> {
+    let mut db = TestDb::new_tmp()?;
+    db.update(|mut tx| {
+      tx.create_bucket("widgets")?;
+      tx.create_bucket("woojits")?;
+      let mut c = tx.cursor();
+      assert_eq!(Some(("widgets".as_bytes(), None)), c.first());
+      assert_eq!(Some(("woojits".as_bytes(), None)), c.next());
+      Ok(())
+    })?;
+    Ok(())
   }
 
   #[test]
@@ -1565,15 +1575,26 @@ mod test {
   }
 
   #[test]
-  #[ignore]
-  fn test_tx_bucket() {
-    todo!()
+  fn test_tx_bucket() -> crate::Result<()> {
+    let mut db = TestDb::new_tmp()?;
+    db.update(|mut tx| {
+      tx.create_bucket("widgets")?;
+      assert!(tx.bucket("widgets").is_some(), "expected bucket");
+      Ok(())
+    })?;
+    Ok(())
   }
 
   #[test]
-  #[ignore]
-  fn test_tx_get_not_found() {
-    todo!()
+  fn test_tx_get_not_found() -> crate::Result<()> {
+    let mut db = TestDb::new_tmp()?;
+    db.update(|mut tx| {
+      let mut b = tx.create_bucket("widgets")?;
+      b.put("foo", "bar")?;
+      assert_eq!(None, b.get("no_such_key"), "expected None");
+      Ok(())
+    })?;
+    Ok(())
   }
 
   #[test]
@@ -1591,33 +1612,76 @@ mod test {
   }
 
   #[test]
-  #[ignore]
-  fn test_tx_create_bucket_if_not_exists() {
-    todo!()
+  fn test_tx_create_bucket_if_not_exists() -> crate::Result<()> {
+    let mut db = TestDb::new()?;
+    db.update(|mut tx| {
+      tx.create_bucket_if_not_exists("widgets")?;
+      tx.create_bucket_if_not_exists("widgets")?;
+      Ok(())
+    })?;
+    db.view(|tx| {
+      assert!(tx.bucket("widgets").is_some());
+      Ok(())
+    })?;
+    Ok(())
   }
 
   #[test]
-  #[ignore]
-  fn test_tx_create_bucket_if_not_exists_err_bucket_name_required() {
-    todo!()
+  fn test_tx_create_bucket_if_not_exists_err_bucket_name_required() -> crate::Result<()> {
+    let mut db = TestDb::new()?;
+    db.update(|mut tx| {
+      assert_eq!(
+        Some(Error::BucketNameRequired),
+        tx.create_bucket_if_not_exists("").err()
+      );
+      Ok(())
+    })?;
+    Ok(())
   }
 
   #[test]
-  #[ignore]
-  fn test_tx_create_bucket_err_bucket_exists() {
-    todo!()
+  fn test_tx_create_bucket_err_bucket_exists() -> crate::Result<()> {
+    let mut db = TestDb::new()?;
+    db.update(|mut tx| {
+      tx.create_bucket("widgets")?;
+      Ok(())
+    })?;
+    db.update(|mut tx| {
+      assert_eq!(Some(Error::BucketExists), tx.create_bucket("widgets").err());
+      Ok(())
+    })?;
+    Ok(())
   }
 
   #[test]
-  #[ignore]
-  fn test_tx_create_bucket_err_bucket_name_required() {
-    todo!()
+  fn test_tx_create_bucket_err_bucket_name_required() -> crate::Result<()> {
+    let mut db = TestDb::new()?;
+    db.update(|mut tx| {
+      assert_eq!(Some(Error::BucketNameRequired), tx.create_bucket("").err());
+      Ok(())
+    })?;
+    Ok(())
   }
 
   #[test]
-  #[ignore]
-  fn test_tx_delete_bucket() {
-    todo!()
+  fn test_tx_delete_bucket() -> crate::Result<()> {
+    let mut db = TestDb::new()?;
+    db.update(|mut tx| {
+      let mut b = tx.create_bucket("widgets")?;
+      b.put("foo", "bar")?;
+      Ok(())
+    })?;
+    db.update(|mut tx| {
+      tx.delete_bucket("widgets")?;
+      assert!(tx.bucket("widgets").is_none());
+      Ok(())
+    })?;
+    db.update(|mut tx| {
+      let b = tx.create_bucket("widgets")?;
+      assert!(b.get("widgets").is_none());
+      Ok(())
+    })?;
+    Ok(())
   }
 
   #[test]
@@ -1633,9 +1697,16 @@ mod test {
   }
 
   #[test]
-  #[ignore]
-  fn test_tx_delete_bucket_not_found() {
-    todo!()
+  fn test_tx_delete_bucket_not_found() -> crate::Result<()> {
+    let mut db = TestDb::new()?;
+    db.update(|mut tx| {
+      assert_eq!(
+        Some(Error::BucketNotFound),
+        tx.delete_bucket("widgets").err()
+      );
+      Ok(())
+    })?;
+    Ok(())
   }
 
   #[test]
