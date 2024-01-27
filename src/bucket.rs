@@ -710,6 +710,8 @@ pub(crate) trait BucketIApi<'tx, T: TxIApi<'tx>>:
     s += sub_stats;
     s
   }
+
+  fn into_impl(self) -> BucketImpl<'tx>;
 }
 
 pub(crate) trait BucketRwIApi<'tx>: BucketIApi<'tx, TxRwCell<'tx>> {
@@ -846,6 +848,10 @@ impl<'tx> BucketIApi<'tx, TxCell<'tx>> for BucketCell<'tx> {
   fn is_writeable(&self) -> bool {
     false
   }
+
+  fn into_impl(self) -> BucketImpl<'tx> {
+    self.into()
+  }
 }
 
 impl<'tx> SplitRef<BucketR<'tx>, Weak<TxCell<'tx>>, InnerBucketW<'tx, TxCell<'tx>, BucketCell<'tx>>>
@@ -948,6 +954,10 @@ impl<'tx> BucketIApi<'tx, TxRwCell<'tx>> for BucketRwCell<'tx> {
   #[inline(always)]
   fn is_writeable(&self) -> bool {
     true
+  }
+
+  fn into_impl(self) -> BucketImpl<'tx> {
+    self.into()
   }
 }
 

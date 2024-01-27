@@ -77,9 +77,9 @@ Features:
 
 ### src/tx.rs
 - [x] TxStats getter/setters
-- [ ] TxIAPI Double check api_for_each -> api_for_each_bucket call 
+- [x] TxIAPI Double check api_for_each -> api_for_each_bucket call 
 - [ ] TxIAPI.\*rollback\*
-- [ ] TxApi.for_each
+- [x] TxApi.for_each
 - [x] TxCheck for TxImpl, TxRef
 - [ ] Copy file
 - [ ] test_tx_check_read_only
@@ -99,10 +99,10 @@ Features:
 - [ ] test_tx_delete_bucket_err_tx_closed
 - [ ] test_tx_delete_bucket_read_only
 - [x] test_tx_delete_bucket_not_found
-- [ ] test_tx_for_each_no_error
-- [ ] test_tx_for_each_with_error
-- [ ] test_tx_on_commit
-- [ ] test_tx_on_commit_rollback
+- [x] test_tx_for_each_no_error
+- [x] test_tx_for_each_with_error
+- [x] test_tx_on_commit
+- [x] test_tx_on_commit_rollback
 - [ ] test_tx_copy_file
 - [ ] test_tx_copy_file_error_meta
 - [ ] test_tx_copy_file_error_normal

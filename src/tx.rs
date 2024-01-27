@@ -56,7 +56,9 @@ pub trait TxApi<'tx>: TxCheck<'tx> {
   /// The bucket instance is only valid for the lifetime of the transaction.
   fn bucket<T: AsRef<[u8]>>(&self, name: T) -> Option<BucketImpl<'tx>>;
 
-  fn for_each<F: FnMut(&[u8], BucketImpl<'tx>)>(&self, f: F) -> crate::Result<()>;
+  fn for_each<F: FnMut(&[u8], BucketImpl<'tx>) -> crate::Result<()>>(
+    &self, f: F,
+  ) -> crate::Result<()>;
 
   /// Rollback closes the transaction and ignores all previous updates. Read-only
   /// transactions must be rolled back and not committed.
@@ -96,6 +98,9 @@ pub trait TxRwApi<'tx>: TxApi<'tx> {
   /// Returns an error if a disk write error occurs, or if Commit is
   /// called on a read-only transaction.
   fn commit(self) -> crate::Result<()>;
+
+  /// OnCommit adds a handler function to be executed after the transaction successfully commits.
+  fn on_commit<F: FnMut() + 'tx>(&mut self, f: F);
 }
 
 // TODO: Add functions to simplify access
@@ -381,12 +386,14 @@ pub(crate) trait TxIApi<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
   }
 
   /// See [TxApi::for_each]
-  fn api_for_each<F: FnMut(&[u8], Self::BucketType)>(&self, mut f: F) -> crate::Result<()> {
+  fn api_for_each<F: FnMut(&[u8], BucketImpl<'tx>) -> crate::Result<()>>(
+    &self, mut f: F,
+  ) -> crate::Result<()> {
     let root_bucket = self.root_bucket();
     // TODO: Are we calling the right function?
     root_bucket.api_for_each_bucket(|k| {
       let bucket = root_bucket.api_bucket(k).unwrap();
-      f(k, bucket);
+      f(k, bucket.into_impl())?;
       Ok(())
     })
   }
@@ -486,6 +493,8 @@ pub(crate) trait TxRwIApi<'tx>: TxIApi<'tx> + TxICheck<'tx> {
   fn write(self) -> crate::Result<()>;
 
   fn write_meta(self) -> crate::Result<()>;
+
+  fn api_on_commit(self, f: Box<dyn FnMut() + 'tx>);
 }
 
 pub struct TxR<'tx> {
@@ -500,7 +509,7 @@ pub struct TxR<'tx> {
 
 pub struct TxW<'tx> {
   pages: HashMap<'tx, PgId, SelfOwned<AlignedBytes<alignment::Page>, MutPage<'tx>>>,
-  commit_handlers: BVec<'tx, Box<dyn Fn()>>,
+  commit_handlers: BVec<'tx, Box<dyn FnMut() + 'tx>>,
   p: PhantomData<&'tx u8>,
 }
 
@@ -742,6 +751,10 @@ impl<'tx> TxRwIApi<'tx> for TxRwCell<'tx> {
 
     Ok(())
   }
+
+  fn api_on_commit(self, f: Box<dyn FnMut() + 'tx>) {
+    self.cell.borrow_mut().w.commit_handlers.push(f);
+  }
 }
 
 pub struct TxImpl<'tx> {
@@ -826,8 +839,10 @@ impl<'tx> TxApi<'tx> for TxImpl<'tx> {
     self.tx.api_bucket(name.as_ref()).map(BucketImpl::from)
   }
 
-  fn for_each<F: FnMut(&[u8], BucketImpl<'tx>)>(&self, f: F) -> crate::Result<()> {
-    todo!()
+  fn for_each<F: FnMut(&[u8], BucketImpl<'tx>) -> crate::Result<()>>(
+    &self, f: F,
+  ) -> crate::Result<()> {
+    self.tx.api_for_each(f)
   }
 
   fn rollback(self) -> crate::Result<()> {
@@ -870,7 +885,9 @@ impl<'tx> TxApi<'tx> for TxRef<'tx> {
     self.tx.api_bucket(name.as_ref()).map(BucketImpl::from)
   }
 
-  fn for_each<F: FnMut(&[u8], BucketImpl<'tx>)>(&self, f: F) -> crate::Result<()> {
+  fn for_each<F: FnMut(&[u8], BucketImpl<'tx>) -> crate::Result<()>>(
+    &self, f: F,
+  ) -> crate::Result<()> {
     todo!()
   }
 
@@ -1003,7 +1020,9 @@ impl<'tx> TxApi<'tx> for TxRwImpl<'tx> {
     self.tx.api_bucket(name.as_ref()).map(BucketImpl::from)
   }
 
-  fn for_each<F: FnMut(&[u8], BucketImpl<'tx>)>(&self, f: F) -> crate::Result<()> {
+  fn for_each<F: FnMut(&[u8], BucketImpl<'tx>) -> crate::Result<()>>(
+    &self, f: F,
+  ) -> crate::Result<()> {
     //self.tx.api_for_each(f)
     // TODO: mismatching bucket types
     todo!()
@@ -1137,12 +1156,16 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
     }
 
     let mut tx = self.tx.cell.borrow_mut();
-    for f in &tx.w.commit_handlers {
+    for f in &mut tx.w.commit_handlers {
       f();
     }
     tx.w.commit_handlers.clear();
     let bytes = tx.r.b.allocated_bytes();
     Ok(())
+  }
+
+  fn on_commit<F: FnMut() + 'tx>(&mut self, f: F) {
+    self.tx.api_on_commit(Box::new(f))
   }
 }
 
@@ -1175,8 +1198,10 @@ impl<'tx> TxApi<'tx> for TxRwRef<'tx> {
     self.tx.api_bucket(name.as_ref()).map(BucketImpl::from)
   }
 
-  fn for_each<F: FnMut(&[u8], BucketImpl<'tx>)>(&self, f: F) -> crate::Result<()> {
-    todo!()
+  fn for_each<F: FnMut(&[u8], BucketImpl<'tx>) -> crate::Result<()>>(
+    &self, f: F,
+  ) -> crate::Result<()> {
+    self.tx.api_for_each(f)
   }
 
   fn rollback(self) -> crate::Result<()> {
@@ -1219,6 +1244,10 @@ impl<'tx> TxRwApi<'tx> for TxRwRef<'tx> {
 
   fn commit(self) -> crate::Result<()> {
     todo!()
+  }
+
+  fn on_commit<F: FnMut() + 'tx>(&mut self, f: F) {
+    self.tx.api_on_commit(Box::new(f))
   }
 }
 
@@ -1508,6 +1537,11 @@ mod test {
   use crate::{
     BucketApi, BucketRwApi, CursorApi, CursorRwApi, DbApi, DbRwAPI, Error, TxApi, TxRwApi, DB,
   };
+  use anyhow::anyhow;
+  use std::cell::RefCell;
+  use std::rc::Rc;
+  use std::sync::atomic::{AtomicU64, Ordering};
+  use std::sync::Arc;
 
   #[test]
   fn test_tx_check_read_only() -> crate::Result<()> {
@@ -1710,27 +1744,66 @@ mod test {
   }
 
   #[test]
-  #[ignore]
-  fn test_tx_for_each_no_error() {
-    todo!()
+  fn test_tx_for_each_no_error() -> crate::Result<()> {
+    let mut db = TestDb::new()?;
+    db.update(|mut tx| {
+      let mut b = tx.create_bucket("widgets")?;
+      b.put("foo", "bar")?;
+      tx.for_each(|_, _| Ok(()))?;
+      Ok(())
+    })?;
+    Ok(())
   }
 
   #[test]
-  #[ignore]
-  fn test_tx_for_each_with_error() {
-    todo!()
+  fn test_tx_for_each_with_error() -> crate::Result<()> {
+    let mut db = TestDb::new()?;
+    let result = db.update(|mut tx| {
+      let mut b = tx.create_bucket("widgets")?;
+      b.put("foo", "bar")?;
+      tx.for_each(|_, _| Err(Error::Other(anyhow!("marker"))))?;
+      Ok(())
+    });
+    let e = result.map_err(|e| e.to_string()).err().unwrap();
+    assert_eq!("marker", e);
+    Ok(())
   }
 
   #[test]
-  #[ignore]
-  fn test_tx_on_commit() {
-    todo!()
+  fn test_tx_on_commit() -> crate::Result<()> {
+    let x = RefCell::new(0u64);
+    let mut db = TestDb::new()?;
+    db.update(|mut tx| {
+      tx.on_commit(|| {
+        *x.borrow_mut() += 1;
+      });
+      tx.on_commit(|| {
+        *x.borrow_mut() += 2;
+      });
+      let mut b = tx.create_bucket("widgets")?;
+      b.put("foo", "bar")?;
+      Ok(())
+    })?;
+    assert_eq!(3, *x.borrow());
+    Ok(())
   }
 
   #[test]
-  #[ignore]
-  fn test_tx_on_commit_rollback() {
-    todo!()
+  fn test_tx_on_commit_rollback() -> crate::Result<()> {
+    let x = RefCell::new(0u64);
+    let mut db = TestDb::new()?;
+    let _ = db.update(|mut tx| {
+      tx.on_commit(|| {
+        *x.borrow_mut() += 1;
+      });
+      tx.on_commit(|| {
+        *x.borrow_mut() += 2;
+      });
+      tx.create_bucket("widgets")?;
+      Err(Error::Other(anyhow!("rollback")))
+    });
+    assert_eq!(0, *x.borrow());
+    Ok(())
   }
 
   #[test]

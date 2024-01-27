@@ -91,7 +91,7 @@ pub trait DbRwAPI: DbApi {
   /// returned from the Update() method.
   ///
   /// Attempting to manually commit or rollback within the function will cause a panic.
-  fn update<'tx, F: Fn(TxRwRef<'tx>) -> crate::Result<()>>(
+  fn update<'tx, F: FnMut(TxRwRef<'tx>) -> crate::Result<()>>(
     &'tx mut self, f: F,
   ) -> crate::Result<()>;
 
@@ -1183,8 +1183,8 @@ impl DbRwAPI for DB {
     self.begin_rw_tx()
   }
 
-  fn update<'tx, F: Fn(TxRwRef<'tx>) -> crate::Result<()>>(
-    &'tx mut self, f: F,
+  fn update<'tx, F: FnMut(TxRwRef<'tx>) -> crate::Result<()>>(
+    &'tx mut self, mut f: F,
   ) -> crate::Result<()> {
     let txrw = self.begin_rw_tx()?;
     let tx_ref = txrw.get_ref();
