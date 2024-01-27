@@ -9,13 +9,9 @@ mod node;
 mod test_support;
 mod tx;
 
-pub use bucket::{BucketApi, BucketRwApi};
+pub use bucket::{BucketApi, BucketRwApi, BucketImpl, BucketRwImpl};
 pub use common::errors::{Error, Result};
-pub use cursor::{CursorApi, CursorRwApi};
+pub use cursor::{CursorApi, CursorRwApi, CursorImpl, CursorRwImpl};
 pub use db::{DbApi, DbRwAPI, DB};
 pub use tx::check::TxCheck;
-pub use tx::{TxApi, TxRwApi};
-
-pub use common::bump::*;
-pub use common::lock::*;
-pub use common::pool::*;
+pub use tx::{TxApi, TxRwApi, TxImpl, TxRwImpl, TxRef, TxRwRef};

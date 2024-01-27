@@ -48,6 +48,14 @@ impl TestDb {
   }
 
   pub(crate) fn new() -> crate::Result<TestDb> {
+    if cfg!(miri) {
+      Self::new_mem()
+    } else {
+      Self::new_tmp()
+    }
+  }
+
+  pub(crate) fn new_mem() -> crate::Result<TestDb> {
     let db = DB::new_mem()?;
     Ok(TestDb { tmp_file: None, db })
   }

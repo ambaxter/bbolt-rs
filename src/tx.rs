@@ -11,7 +11,7 @@ use crate::cursor::{CursorImpl, CursorRwIApi, CursorRwImpl, InnerCursor};
 use crate::db::{DbIApi, DbRwIApi, DbShared};
 use crate::tx::check::TxICheck;
 use crate::{
-  BucketApi, BucketRwApi, CursorApi, CursorRwApi, LockGuard, PinBump, PinLockGuard, TxCheck,
+  BucketApi, BucketRwApi, CursorApi, CursorRwApi, TxCheck,
 };
 use aliasable::boxed::AliasableBox;
 use aligners::{alignment, AlignedBytes};
@@ -31,6 +31,8 @@ use std::slice::from_raw_parts_mut;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use crate::common::bump::PinBump;
+use crate::common::lock::{LockGuard, PinLockGuard};
 
 pub trait TxApi<'tx>: TxCheck<'tx> {
   /// ID returns the transaction id.

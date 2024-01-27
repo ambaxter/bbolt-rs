@@ -11,7 +11,7 @@ use crate::common::tree::MappedLeafPage;
 use crate::common::{BVec, PgId, SplitRef, TxId};
 use crate::freelist::{Freelist, MappedFreeListPage};
 use crate::tx::{TxIApi, TxImpl, TxRef, TxRwCell, TxRwImpl, TxRwRef, TxStats};
-use crate::{Error, LockGuard, PinBump, SyncPool, TxApi, TxRwApi};
+use crate::{Error,TxApi, TxRwApi};
 use aligners::{alignment, AlignedBytes};
 use fs4::FileExt;
 use memmap2::{Advice, MmapOptions, MmapRaw};
@@ -24,6 +24,9 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Arc;
 use std::{fs, io, mem};
+use crate::common::bump::PinBump;
+use crate::common::lock::LockGuard;
+use crate::common::pool::SyncPool;
 
 pub trait DbApi: Clone + Send + Sync
 where
