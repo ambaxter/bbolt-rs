@@ -86,19 +86,19 @@ Features:
 - [ ] test_tx_commit_err_tx_closed
 - [ ] test_tx_rollback_err_tx_closed
 - [ ] test_tx_commit_err_tx_not_writable
-- [ ] test_tx_cursor
+- [x] test_tx_cursor
 - [ ] test_tx_create_bucket_err_tx_not_writable
 - [ ] test_tx_create_bucket_err_tx_closed
-- [ ] test_tx_bucket
-- [ ] test_tx_get_not_found
-- [ ] test_tx_create_bucket_if_not_exists
-- [ ] test_tx_create_bucket_if_not_exists_err_bucket_name_required
-- [ ] test_tx_create_bucket_err_bucket_exists
-- [ ] test_tx_create_bucket_err_bucket_name_required
-- [ ] test_tx_delete_bucket
+- [x] test_tx_bucket
+- [x] test_tx_get_not_found
+- [x] test_tx_create_bucket_if_not_exists
+- [x] test_tx_create_bucket_if_not_exists_err_bucket_name_required
+- [x] test_tx_create_bucket_err_bucket_exists
+- [x] test_tx_create_bucket_err_bucket_name_required
+- [x] test_tx_delete_bucket
 - [ ] test_tx_delete_bucket_err_tx_closed
 - [ ] test_tx_delete_bucket_read_only
-- [ ] test_tx_delete_bucket_not_found
+- [x] test_tx_delete_bucket_not_found
 - [ ] test_tx_for_each_no_error
 - [ ] test_tx_for_each_with_error
 - [ ] test_tx_on_commit

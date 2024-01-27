@@ -40,12 +40,12 @@ where
   /// Cursor creates a cursor associated with the bucket.
   /// The cursor is only valid as long as the transaction is open.
   /// Do not use a cursor after the transaction is closed.
-  fn cursor(&self) -> impl CursorApi<'tx>;
+  fn cursor(&self) -> CursorImpl<'tx>;
 
   /// Bucket retrieves a nested bucket by name.
   /// Returns nil if the bucket does not exist.
   /// The bucket instance is only valid for the lifetime of the transaction.
-  fn bucket<T: AsRef<[u8]>>(&self, name: T) -> Option<impl BucketApi<'tx>>;
+  fn bucket<T: AsRef<[u8]>>(&self, name: T) -> Option<BucketImpl<'tx>>;
 
   /// Get retrieves the value for a key in the bucket.
   /// Returns a nil value if the key does not exist or if the key is a nested bucket.
@@ -112,53 +112,87 @@ pub trait BucketRwApi<'tx>: BucketApi<'tx> {
   fn next_sequence(&mut self) -> crate::Result<u64>;
 }
 
-pub struct BucketImpl<'tx> {
-  b: BucketCell<'tx>,
+pub enum BucketImpl<'tx> {
+  R(BucketCell<'tx>),
+  RW(BucketRwCell<'tx>),
 }
 
 impl<'tx> From<BucketCell<'tx>> for BucketImpl<'tx> {
   fn from(value: BucketCell<'tx>) -> Self {
-    BucketImpl { b: value }
+    BucketImpl::R(value)
+  }
+}
+
+impl<'tx> From<BucketRwCell<'tx>> for BucketImpl<'tx> {
+  fn from(value: BucketRwCell<'tx>) -> Self {
+    BucketImpl::RW(value)
   }
 }
 
 impl<'tx> BucketApi<'tx> for BucketImpl<'tx> {
   fn root(&self) -> PgId {
-    self.b.root()
+    match self {
+      BucketImpl::R(r) => r.root(),
+      BucketImpl::RW(rw) => rw.root(),
+    }
   }
 
   fn is_writeable(&self) -> bool {
-    self.b.is_writeable()
+    match self {
+      BucketImpl::R(r) => r.is_writeable(),
+      BucketImpl::RW(rw) => rw.is_writeable(),
+    }
   }
 
-  fn cursor(&self) -> impl CursorApi<'tx> {
-    CursorImpl::new(InnerCursor::new(self.b, self.b.api_tx().bump()))
+  fn cursor(&self) -> CursorImpl<'tx> {
+    match self {
+      BucketImpl::R(r) => InnerCursor::new(*r, r.api_tx().bump()).into(),
+      BucketImpl::RW(rw) => InnerCursor::new(*rw, rw.api_tx().bump()).into(),
+    }
   }
 
-  fn bucket<T: AsRef<[u8]>>(&self, name: T) -> Option<impl BucketApi<'tx>> {
-    self.b.api_bucket(name.as_ref()).map(BucketImpl::from)
+  fn bucket<T: AsRef<[u8]>>(&self, name: T) -> Option<BucketImpl<'tx>> {
+    match self {
+      BucketImpl::R(r) => r.api_bucket(name.as_ref()).map(BucketImpl::from),
+      BucketImpl::RW(rw) => rw.api_bucket(name.as_ref()).map(BucketImpl::from),
+    }
   }
 
   fn get<T: AsRef<[u8]>>(&self, key: T) -> Option<&'tx [u8]> {
-    self.b.api_get(key.as_ref())
+    match self {
+      BucketImpl::R(r) => r.api_get(key.as_ref()),
+      BucketImpl::RW(rw) => rw.api_get(key.as_ref()),
+    }
   }
 
   fn sequence(&self) -> u64 {
-    self.b.api_sequence()
+    match self {
+      BucketImpl::R(r) => r.api_sequence(),
+      BucketImpl::RW(rw) => rw.api_sequence(),
+    }
   }
 
   fn for_each<F: Fn(&'tx [u8], Option<&'tx [u8]>) -> crate::Result<()>>(
     &self, f: F,
   ) -> crate::Result<()> {
-    self.b.api_for_each(f)
+    match self {
+      BucketImpl::R(r) => r.api_for_each(f),
+      BucketImpl::RW(rw) => rw.api_for_each(f),
+    }
   }
 
   fn for_each_bucket<F: Fn(&'tx [u8]) -> crate::Result<()>>(&self, f: F) -> crate::Result<()> {
-    self.b.api_for_each_bucket(f)
+    match self {
+      BucketImpl::R(r) => r.api_for_each_bucket(f),
+      BucketImpl::RW(rw) => rw.api_for_each_bucket(f),
+    }
   }
 
   fn stats(&self) -> BucketStats {
-    self.b.api_stats()
+    match self {
+      BucketImpl::R(r) => r.api_stats(),
+      BucketImpl::RW(rw) => rw.api_stats(),
+    }
   }
 }
 
@@ -181,12 +215,12 @@ impl<'tx> BucketApi<'tx> for BucketRwImpl<'tx> {
     self.b.is_writeable()
   }
 
-  fn cursor(&self) -> impl CursorApi<'tx> {
-    CursorImpl::new(InnerCursor::new(self.b, self.b.api_tx().bump()))
+  fn cursor(&self) -> CursorImpl<'tx> {
+    InnerCursor::new(self.b, self.b.api_tx().bump()).into()
   }
 
-  fn bucket<T: AsRef<[u8]>>(&self, name: T) -> Option<impl BucketApi<'tx>> {
-    self.b.api_bucket(name.as_ref()).map(BucketRwImpl::from)
+  fn bucket<T: AsRef<[u8]>>(&self, name: T) -> Option<BucketImpl<'tx>> {
+    self.b.api_bucket(name.as_ref()).map(BucketImpl::from)
   }
 
   fn get<T: AsRef<[u8]>>(&self, key: T) -> Option<&'tx [u8]> {
