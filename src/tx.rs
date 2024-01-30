@@ -496,7 +496,7 @@ pub(crate) trait TxRwIApi<'tx>: TxIApi<'tx> + TxICheck<'tx> {
 
   fn write_meta(self) -> crate::Result<()>;
 
-  fn api_on_commit(self, f: Box<dyn FnMut() + 'tx>);
+  fn api_on_commit(self, f: Box<dyn FnOnce() + 'tx>);
 }
 
 pub struct TxR<'tx> {
@@ -511,7 +511,7 @@ pub struct TxR<'tx> {
 
 pub struct TxW<'tx> {
   pages: HashMap<'tx, PgId, SelfOwned<AlignedBytes<alignment::Page>, MutPage<'tx>>>,
-  commit_handlers: BVec<'tx, Box<dyn FnMut() + 'tx>>,
+  commit_handlers: BVec<'tx, Box<dyn FnOnce() + 'tx>>,
   p: PhantomData<&'tx u8>,
 }
 
@@ -754,7 +754,7 @@ impl<'tx> TxRwIApi<'tx> for TxRwCell<'tx> {
     Ok(())
   }
 
-  fn api_on_commit(self, f: Box<dyn FnMut() + 'tx>) {
+  fn api_on_commit(self, f: Box<dyn FnOnce() + 'tx>) {
     self.cell.borrow_mut().w.commit_handlers.push(f);
   }
 }
@@ -1158,15 +1158,16 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
     }
 
     let mut tx = self.tx.cell.borrow_mut();
-    for f in &mut tx.w.commit_handlers {
+    let mut commit_handlers = BVec::with_capacity_in(0, tx.r.b);
+    mem::swap(&mut commit_handlers, &mut tx.w.commit_handlers);
+    for f in commit_handlers.into_iter() {
       f();
     }
-    tx.w.commit_handlers.clear();
     let bytes = tx.r.b.allocated_bytes();
     Ok(())
   }
 
-  fn on_commit<F: FnMut() + 'tx>(&mut self, f: F) {
+  fn on_commit<F: FnOnce() + 'tx>(&mut self, f: F) {
     self.tx.api_on_commit(Box::new(f))
   }
 }
@@ -1248,7 +1249,7 @@ impl<'tx> TxRwApi<'tx> for TxRwRef<'tx> {
     todo!()
   }
 
-  fn on_commit<F: FnMut() + 'tx>(&mut self, f: F) {
+  fn on_commit<F: FnOnce() + 'tx>(&mut self, f: F) {
     self.tx.api_on_commit(Box::new(f))
   }
 }
