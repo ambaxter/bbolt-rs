@@ -1585,7 +1585,7 @@ mod tests {
 
   #[test]
   fn test_bucket_nested() -> crate::Result<()> {
-    let mut db = TestDb::new_tmp()?;
+    let mut db = TestDb::new()?;
     db.update(|mut tx| {
       // Create a widgets bucket.
       let mut b = tx.create_bucket(b"widgets")?;

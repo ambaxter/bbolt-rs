@@ -6,7 +6,7 @@ macro_rules! id {
   ( $x:ident ) => {
     #[repr(C)]
     #[derive(Default, Debug, Copy, Clone, PartialOrd, PartialEq, Ord, Eq, Hash, Pod, Zeroable)]
-    pub struct $x(pub(crate) u64);
+    pub struct $x(pub u64);
 
     impl Display for $x {
       fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {

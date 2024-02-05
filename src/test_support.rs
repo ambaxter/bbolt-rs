@@ -1,7 +1,7 @@
 use crate::common::page::CoerciblePage;
 use crate::common::self_owned::SelfOwned;
 use crate::tx::check::{TxCheck, UnsealRwTx, UnsealTx};
-use crate::{DbApi, TxApi, TxRwApi, DB};
+use crate::{DBOptions, DbApi, TxApi, TxRwApi, DB};
 use aligners::{alignment, AlignedBytes};
 use std::ops::{Deref, DerefMut};
 use tempfile::{Builder, NamedTempFile};
@@ -35,28 +35,37 @@ impl DerefMut for TestDb {
 }
 
 impl TestDb {
-  pub(crate) fn new_tmp() -> crate::Result<TestDb> {
+  pub(crate) fn new() -> crate::Result<TestDb> {
+    if cfg!(miri) {
+      Self::new_mem(DBOptions::default())
+    } else {
+      Self::new_tmp(DBOptions::default())
+    }
+  }
+
+  pub(crate) fn with_options(options: DBOptions) -> crate::Result<TestDb> {
+    if cfg!(miri) {
+      Self::new_mem(options)
+    } else {
+      Self::new_tmp(options)
+    }
+  }
+
+  pub(crate) fn new_tmp(options: DBOptions) -> crate::Result<TestDb> {
     let tmp_file = Builder::new()
       .prefix("bbolt-rs-")
       .suffix(".db")
       .tempfile()?;
-    let db = DB::open(tmp_file.path())?;
+    let db = options.open(tmp_file.path())?;
+
     Ok(TestDb {
       tmp_file: Some(tmp_file),
       db,
     })
   }
 
-  pub(crate) fn new() -> crate::Result<TestDb> {
-    if cfg!(miri) {
-      Self::new_mem()
-    } else {
-      Self::new_tmp()
-    }
-  }
-
-  pub(crate) fn new_mem() -> crate::Result<TestDb> {
-    let db = DB::new_mem()?;
+  pub(crate) fn new_mem(options: DBOptions) -> crate::Result<TestDb> {
+    let db = options.new_mem()?;
     Ok(TestDb { tmp_file: None, db })
   }
 
@@ -70,6 +79,10 @@ impl TestDb {
         panic!()
       }
     }
+  }
+
+  pub(crate) fn clone_db(&self) -> DB {
+    self.db.clone()
   }
 
   pub(crate) fn begin_unseal(&self) -> crate::Result<impl TxApi + UnsealTx> {

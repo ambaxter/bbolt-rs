@@ -1,21 +1,24 @@
 use crate::arch::size::MAX_MAP_SIZE;
 use crate::bucket::BucketRwIApi;
 use crate::common::bucket::InBucket;
+use crate::common::bump::PinBump;
 use crate::common::defaults::{
   DEFAULT_ALLOC_SIZE, DEFAULT_PAGE_SIZE, MAGIC, MAX_MMAP_STEP, PGID_NO_FREE_LIST, VERSION,
 };
+use crate::common::lock::LockGuard;
 use crate::common::meta::{MappedMetaPage, Meta};
 use crate::common::page::{CoerciblePage, MutPage, Page, RefPage};
+use crate::common::pool::SyncPool;
 use crate::common::self_owned::SelfOwned;
 use crate::common::tree::MappedLeafPage;
 use crate::common::{BVec, PgId, SplitRef, TxId};
 use crate::freelist::{Freelist, MappedFreeListPage};
 use crate::tx::{TxIApi, TxImpl, TxRef, TxRwCell, TxRwImpl, TxRwRef, TxStats};
-use crate::{Error,TxApi, TxRwApi};
+use crate::{Error, TxApi, TxRwApi};
 use aligners::{alignment, AlignedBytes};
 use fs4::FileExt;
 use memmap2::{Advice, MmapOptions, MmapRaw};
-use parking_lot::{Mutex, RwLock};
+use parking_lot::{Mutex, MutexGuard, RwLock};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::ops::Sub;
@@ -23,10 +26,9 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use std::{fs, io, mem};
-use crate::common::bump::PinBump;
-use crate::common::lock::LockGuard;
-use crate::common::pool::SyncPool;
+use typed_builder::TypedBuilder;
 
 pub trait DbApi: Clone + Send + Sync
 where
@@ -617,21 +619,21 @@ impl DBBackend for FileBackend {
 
     // Truncate and fsync to ensure file size metadata is flushed.
     // https://github.com/boltdb/bolt/issues/284
-    if let Some(mmap) = self.mmap.take() {
+    if self.grow_async && !self.read_only {
+      let file_lock = self.file.lock();
+      if cfg!(not(target_os = "windows")) {
+        file_lock.set_len(size)?;
+      }
+      file_lock.sync_all()?;
       if self.use_mlock {
+        let mmap = self.mmap.as_mut().unwrap();
+        // TODO: Missing size parameters here
         mmap.unlock()?;
+        mmap.lock()?;
       }
     }
-    self.file.set_len(size)?;
-    self.file.sync_all()?;
-    //By the time we hit this the dereference has already occurred during tx.spill
-    let mmap = MmapRaw::map_raw(&self.file)?;
-    mmap.advise(Advice::Random)?;
-    if self.use_mlock {
-      mmap.lock()?;
-    }
+
     self.file_size = size;
-    self.mmap = Some(mmap);
     Ok(())
   }
 
@@ -676,21 +678,13 @@ impl DBBackend for FileBackend {
     self.file.sync_all().map_err(Error::IO)
   }
 
-  fn write_all_at(&mut self, buffer: &[u8], mut offset: u64) -> crate::Result<usize> {
-    let mut rem = buffer.len();
-    let mut written = 0;
-    loop {
-      self.file.seek(SeekFrom::Start(offset)).map_err(Error::IO)?;
-      let bytes_written = self.file.write(buffer).map_err(Error::IO)?;
-      rem -= bytes_written;
-      offset += bytes_written as u64;
-      written += bytes_written;
-
-      if rem == 0 {
-        break;
-      }
-    }
-    Ok(written)
+  fn write_all_at(&self, buffer: &[u8], offset: u64) -> crate::Result<usize> {
+    let mut file_lock = self.file.lock();
+    file_lock.seek(SeekFrom::Start(offset)).map_err(Error::IO)?;
+    file_lock
+      .write_all(buffer)
+      .map_err(Error::IO)
+      .map(|_| buffer.len())
   }
 
   fn freelist(&self) -> &Freelist {
@@ -794,6 +788,7 @@ pub struct DbShared {
   pub(crate) db_state: Arc<Mutex<DbState>>,
   page_pool: Vec<AlignedBytes<alignment::Page>>,
   pub(crate) backend: Box<dyn DBBackend>,
+  options: DBOptions,
 }
 
 // Safe because this is all protected by RwLock
@@ -949,6 +944,146 @@ impl<'tx> DbRwIApi<'tx> for DbShared {
   }
 }
 
+#[derive(Clone, Default, Debug, PartialEq, Eq, TypedBuilder)]
+#[builder(doc)]
+pub struct DBOptions {
+  #[builder(
+    default,
+    setter(
+      strip_option,
+      doc = "Timeout is the amount of time to wait to obtain a file lock. \
+    When set to zero it will wait indefinitely."
+    )
+  )]
+  timeout: Option<Duration>,
+  #[builder(setter(
+    strip_bool,
+    doc = "Sets the DB.NoGrowSync flag before memory mapping the file."
+  ))]
+  no_grow_sync: bool,
+  #[builder(setter(
+    strip_bool,
+    doc = "Do not sync freelist to disk.\
+    This improves the database write performance under normal operation,\
+    but requires a full database re-sync during recovery."
+  ))]
+  no_freelist_sync: bool,
+  #[builder(setter(
+    strip_bool,
+    doc = "Sets whether to load the free pages when opening the db file.\
+    Note when opening db in write mode, bbolt will always load the free pages."
+  ))]
+  preload_freelist: bool,
+  //mmap_flags,
+  #[builder(
+    default,
+    setter(
+      strip_option,
+      doc = "InitialMmapSize is the initial mmap size of the database in bytes. \
+    Read transactions won't block write transaction if the InitialMmapSize is \
+    large enough to hold database mmap size."
+    )
+  )]
+  /// InitialMmapSize is the initial mmap size of the database
+  /// in bytes. Read transactions won't block write transaction
+  /// if the InitialMmapSize is large enough to hold database mmap
+  /// size. (See DB.Begin for more information)
+  ///
+  /// If <=0, the initial map size is 0.
+  /// If initialMmapSize is smaller than the previous database size,
+  /// it takes no effect.
+  initial_mmap_size: Option<u64>,
+  #[builder(default, setter(strip_option))]
+  /// PageSize overrides the default OS page size.
+  page_size: Option<usize>,
+  /// NoSync sets the initial value of DB.NoSync. Normally this can just be
+  /// set directly on the DB itself when returned from Open(), but this option
+  /// is useful in APIs which expose Options but not the underlying DB.
+  #[builder(setter(strip_bool))]
+  no_sync: bool,
+  /// Mlock locks database file in memory when set to true.
+  /// It prevents potential page faults, however
+  /// used memory can't be reclaimed. (UNIX only)
+  #[builder(setter(strip_bool))]
+  mlock: bool,
+  #[builder(default = false, setter(skip))]
+  /// Open database in read-only mode. Uses flock(..., LOCK_SH |LOCK_NB) to
+  /// grab a shared lock (UNIX).
+  read_only: bool,
+}
+
+impl DBOptions {
+  #[inline]
+  fn timeout(&self) -> Option<Duration> {
+    if cfg!(use_timeout) {
+      self.timeout
+    } else {
+      None
+    }
+  }
+
+  #[inline]
+  fn no_grow_sync(&self) -> bool {
+    self.no_grow_sync
+  }
+
+  #[inline]
+  fn no_freelist_sync(&self) -> bool {
+    self.no_freelist_sync
+  }
+
+  #[inline]
+  fn preload_freelist(&self) -> bool {
+    if self.read_only {
+      self.preload_freelist
+    } else {
+      true
+    }
+  }
+
+  #[inline]
+  fn initial_map_size(&self) -> Option<u64> {
+    self.initial_mmap_size
+  }
+
+  #[inline]
+  fn page_size(&self) -> Option<usize> {
+    self.page_size
+  }
+
+  #[inline]
+  fn no_sync(&self) -> bool {
+    self.no_sync
+  }
+
+  #[inline]
+  fn mlock(&self) -> bool {
+    if cfg!(use_mlock) {
+      self.mlock
+    } else {
+      false
+    }
+  }
+
+  #[inline]
+  fn read_only(&self) -> bool {
+    self.read_only
+  }
+
+  pub fn open<T: Into<PathBuf>>(self, path: T) -> crate::Result<DB> {
+    DB::open_path(path, self)
+  }
+
+  pub fn open_ro<T: Into<PathBuf>>(mut self, path: T) -> crate::Result<impl DbApi> {
+    self.read_only = true;
+    DB::open_path(path, self)
+  }
+
+  pub fn new_mem(self) -> crate::Result<DB> {
+    DB::new_mem_with_options(self)
+  }
+}
+
 #[derive(Clone)]
 pub struct DB {
   // TODO: Save a single Bump for RW transactions with a size hint?
@@ -965,20 +1100,25 @@ impl DB {
   /// If the file does not exist then it will be created automatically.
   /// Passing in nil options will cause Bolt to open the database with the default options.
   pub fn open<T: Into<PathBuf>>(path: T) -> crate::Result<Self> {
-    DB::open_path(path, false)
+    DB::open_path(path, DBOptions::default())
   }
 
   pub fn open_ro<T: Into<PathBuf>>(path: T) -> crate::Result<impl DbApi> {
-    DB::open_path(path, true)
+    let mut options = DBOptions::default();
+    options.read_only = true;
+    DB::open_path(path, options)
   }
 
-  fn open_path<T: Into<PathBuf>>(path: T, read_only: bool) -> crate::Result<Self> {
+  fn open_path<T: Into<PathBuf>>(path: T, db_options: DBOptions) -> crate::Result<Self> {
     let path = path.into();
 
     if !path.exists() || path.metadata()?.len() == 0 {
-      let page_size = DEFAULT_PAGE_SIZE.bytes() as usize;
+      let page_size = db_options
+        .page_size()
+        .unwrap_or(DEFAULT_PAGE_SIZE.bytes() as usize);
       DB::init(&path, page_size)?;
     }
+    let read_only = db_options.read_only;
     let mut file = fs::OpenOptions::new()
       .write(!read_only)
       .create(!read_only)
@@ -988,7 +1128,12 @@ impl DB {
     assert!(page_size > 0, "invalid page size");
 
     let file_size = file.metadata()?.len();
-    let options = MmapOptions::new();
+    let data_size = if let Some(initial_mmap_size) = db_options.initial_map_size() {
+      file_size.max(initial_mmap_size)
+    } else {
+      file_size
+    };
+    let options = MmapOptions::new().offset(0).len(data_size as usize).to_owned();
     let open_options = options.clone();
     let mmap = if read_only {
       file.lock_shared()?;
@@ -1006,7 +1151,7 @@ impl DB {
       freelist: None,
       alloc_size: DEFAULT_ALLOC_SIZE.bytes() as u64,
       file_size,
-      data_size: 0,
+      data_size,
       use_mlock: false,
       grow_async: false,
       read_only,
@@ -1036,6 +1181,7 @@ impl DB {
         db_state: db_state.clone(),
         backend: Box::new(backend),
         page_pool: vec![],
+        options: db_options,
       })),
       stats: arc_stats,
       db_state,
@@ -1043,16 +1189,32 @@ impl DB {
   }
 
   pub fn new_mem() -> crate::Result<Self> {
-    let page_size = DEFAULT_PAGE_SIZE.bytes() as usize;
-    let mmap = DB::init_page(page_size);
-    let file_size = mmap.len() as u64;
+    DB::new_mem_with_options(DBOptions::default())
+  }
+
+  pub(crate) fn new_mem_with_options(db_options: DBOptions) -> crate::Result<Self> {
+    let page_size = db_options
+      .page_size()
+      .unwrap_or(DEFAULT_PAGE_SIZE.bytes() as usize);
+    let mut mmap = DB::init_page(page_size);
+    let mut file_size = mmap.len() as u64;
+    let data_size = if let Some(initial_mmap_size) = db_options.initial_map_size() {
+      file_size.max(initial_mmap_size)
+    } else {
+      file_size
+    };
+    if file_size < data_size {
+      let mut new_mmap = AlignedBytes::new_zeroed(data_size as usize);
+      new_mmap.split_at_mut(file_size as usize).0.copy_from_slice(&*mmap);
+      mmap = new_mmap;
+    }
     let mut backend = MemBackend {
       mmap: Mutex::new(mmap),
       freelist: None,
       page_size,
       alloc_size: DEFAULT_ALLOC_SIZE.bytes() as u64,
       file_size,
-      data_size: 0,
+      data_size,
     };
     let meta = backend.meta();
     let freelist_pgid = meta.free_list();
@@ -1078,6 +1240,7 @@ impl DB {
         db_state: db_state.clone(),
         backend: Box::new(backend),
         page_pool: vec![],
+        options: db_options,
       })),
       stats: arc_stats,
       db_state,

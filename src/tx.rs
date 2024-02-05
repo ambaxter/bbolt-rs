@@ -1,5 +1,7 @@
 use crate::arch::size::MAX_ALLOC_SIZE;
 use crate::bucket::{BucketCell, BucketIApi, BucketImpl, BucketRwCell, BucketRwIApi, BucketRwImpl};
+use crate::common::bump::PinBump;
+use crate::common::lock::{LockGuard, PinLockGuard};
 use crate::common::memory::BCell;
 use crate::common::meta::{MappedMetaPage, Meta, MetaPage};
 use crate::common::page::{CoerciblePage, MutPage, Page, PageInfo, RefPage};
@@ -8,11 +10,9 @@ use crate::common::self_owned::SelfOwned;
 use crate::common::tree::{MappedBranchPage, TreePage};
 use crate::common::{BVec, HashMap, PgId, SplitRef, TxId};
 use crate::cursor::{CursorImpl, CursorRwIApi, CursorRwImpl, InnerCursor};
-use crate::db::{DbIApi, DbRwIApi, DbShared};
+use crate::db::{AllocateResult, DbIApi, DbMutIApi, DbShared};
 use crate::tx::check::TxICheck;
-use crate::{
-  BucketApi, BucketRwApi, CursorApi, CursorRwApi, TxCheck,
-};
+use crate::{BucketApi, BucketRwApi, CursorApi, CursorRwApi, TxCheck};
 use aliasable::boxed::AliasableBox;
 use aligners::{alignment, AlignedBytes};
 use bumpalo::Bump;
@@ -31,8 +31,6 @@ use std::slice::from_raw_parts_mut;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use crate::common::bump::PinBump;
-use crate::common::lock::{LockGuard, PinLockGuard};
 
 pub trait TxApi<'tx>: TxCheck<'tx> {
   /// ID returns the transaction id.
@@ -1548,7 +1546,7 @@ mod test {
 
   #[test]
   fn test_tx_check_read_only() -> crate::Result<()> {
-    let mut db = TestDb::new_tmp()?;
+    let mut db = TestDb::new()?;
     db.update(|mut tx| {
       let mut b = tx.create_bucket("widgets")?;
       b.put("foo", "bar")?;
@@ -1587,7 +1585,7 @@ mod test {
 
   #[test]
   fn test_tx_cursor() -> crate::Result<()> {
-    let mut db = TestDb::new_tmp()?;
+    let mut db = TestDb::new()?;
     db.update(|mut tx| {
       tx.create_bucket("widgets")?;
       tx.create_bucket("woojits")?;
@@ -1613,7 +1611,7 @@ mod test {
 
   #[test]
   fn test_tx_bucket() -> crate::Result<()> {
-    let mut db = TestDb::new_tmp()?;
+    let mut db = TestDb::new()?;
     db.update(|mut tx| {
       tx.create_bucket("widgets")?;
       assert!(tx.bucket("widgets").is_some(), "expected bucket");
@@ -1624,7 +1622,7 @@ mod test {
 
   #[test]
   fn test_tx_get_not_found() -> crate::Result<()> {
-    let mut db = TestDb::new_tmp()?;
+    let mut db = TestDb::new()?;
     db.update(|mut tx| {
       let mut b = tx.create_bucket("widgets")?;
       b.put("foo", "bar")?;
@@ -1828,9 +1826,21 @@ mod test {
   }
 
   #[test]
-  #[ignore]
-  fn test_tx_rollback() {
-    todo!()
+  fn test_tx_rollback() -> crate::Result<()> {
+    let mut db = TestDb::new()?;
+    let mut tx = db.begin_rw_tx()?;
+    tx.create_bucket("mybucket")?;
+    tx.commit()?;
+    let mut tx = db.begin_rw_tx()?;
+    let mut b = tx.bucket_mut("mybucket").unwrap();
+    b.put("k", "v")?;
+    tx.rollback()?;
+    let tx = db.begin_tx()?;
+    let b = tx.bucket("mybucket").unwrap();
+    assert_eq!(None, b.get("k"));
+    tx.rollback()?;
+    todo!("noSyncFreelist");
+    Ok(())
   }
 
   #[test]
