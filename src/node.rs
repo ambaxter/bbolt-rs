@@ -710,8 +710,9 @@ impl<'tx> NodeRwCell<'tx> {
       inode.own_in(bump);
     }
 
+    let children = SubArray::from(&self_borrow.children);
     // Recursively own_in children.
-    for child in &self_borrow.children {
+    for child in children.iter() {
       child.own_in(bump);
     }
 

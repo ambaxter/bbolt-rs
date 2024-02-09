@@ -21,10 +21,10 @@ use memmap2::{Advice, MmapOptions, MmapRaw};
 use parking_lot::{Mutex, MutexGuard, RwLock};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::ops::Sub;
+use std::ops::{Deref, DerefMut, Sub};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use std::{fs, io, mem};
@@ -66,7 +66,7 @@ where
 
   /// Stats retrieves ongoing performance stats for the database.
   /// This is only updated when a transaction closes.
-  fn stats(&self) -> Arc<RwLock<DbStats>>;
+  fn stats(&self) -> Arc<DbStats>;
 }
 
 pub trait DbRwAPI: DbApi {
@@ -283,18 +283,16 @@ pub(crate) trait DBBackend: Send + Sync {
   fn page<'tx>(&self, pg_id: PgId) -> RefPage<'tx>;
 
   /// grow grows the size of the database to the given `size`.
-  fn grow(&mut self, size: u64) -> crate::Result<()>;
+  fn grow(&self, size: u64) -> crate::Result<()>;
 
   /// mmap opens the underlying memory-mapped file and initializes the meta references.
   /// min_size is the minimum size that the new mmap can be.
   fn mmap(&mut self, min_size: u64, tx: TxRwCell) -> crate::Result<()>;
 
-  fn fsync(&mut self) -> crate::Result<()>;
-  fn write_all_at(&mut self, buffer: &[u8], offset: u64) -> crate::Result<usize>;
+  fn fsync(&self) -> crate::Result<()>;
+  fn write_all_at(&self, buffer: &[u8], offset: u64) -> crate::Result<usize>;
 
-  fn freelist(&self) -> &Freelist;
-
-  fn freelist_mut(&mut self) -> &mut Freelist;
+  fn freelist(&self) -> MutexGuard<Freelist>;
 }
 
 struct ClosedBackend {}
@@ -320,7 +318,7 @@ impl DBBackend for ClosedBackend {
     unreachable!()
   }
 
-  fn grow(&mut self, _size: u64) -> crate::Result<()> {
+  fn grow(&self, _size: u64) -> crate::Result<()> {
     unreachable!()
   }
 
@@ -328,26 +326,22 @@ impl DBBackend for ClosedBackend {
     unreachable!()
   }
 
-  fn fsync(&mut self) -> crate::Result<()> {
+  fn fsync(&self) -> crate::Result<()> {
     unreachable!()
   }
 
-  fn write_all_at(&mut self, _buffer: &[u8], _offset: u64) -> crate::Result<usize> {
+  fn write_all_at(&self, _buffer: &[u8], _offset: u64) -> crate::Result<usize> {
     unreachable!()
   }
 
-  fn freelist(&self) -> &Freelist {
-    unreachable!()
-  }
-
-  fn freelist_mut(&mut self) -> &mut Freelist {
+  fn freelist(&self) -> MutexGuard<Freelist> {
     unreachable!()
   }
 }
 
 struct MemBackend {
   mmap: Mutex<AlignedBytes<alignment::Page>>,
-  freelist: Option<Freelist>,
+  freelist: Option<Mutex<Freelist>>,
   page_size: usize,
   alloc_size: u64,
   /// current on disk file size
@@ -389,14 +383,11 @@ impl DBBackend for MemBackend {
     }
   }
 
-  fn grow(&mut self, size: u64) -> crate::Result<()> {
-    let new_mmap = {
-      let mmap = self.mmap.lock();
-      let mut new_mmap = AlignedBytes::new_zeroed(size as usize);
-      new_mmap[0..mmap.len()].copy_from_slice(&mmap);
-      new_mmap
-    };
-    self.mmap = Mutex::new(new_mmap);
+  fn grow(&self, size: u64) -> crate::Result<()> {
+    let mut mmap = self.mmap.lock();
+    let mut new_mmap = AlignedBytes::new_zeroed(size as usize);
+    new_mmap[0..mmap.len()].copy_from_slice(&mmap);
+    mem::swap(mmap.deref_mut(), &mut new_mmap);
     Ok(())
   }
 
@@ -420,11 +411,11 @@ impl DBBackend for MemBackend {
     Ok(())
   }
 
-  fn fsync(&mut self) -> crate::Result<()> {
+  fn fsync(&self) -> crate::Result<()> {
     Ok(())
   }
 
-  fn write_all_at(&mut self, buffer: &[u8], offset: u64) -> crate::Result<usize> {
+  fn write_all_at(&self, buffer: &[u8], offset: u64) -> crate::Result<usize> {
     let mut mmap = self.mmap.lock();
     let write_to = &mut mmap[offset as usize..offset as usize + buffer.len()];
     write_to.copy_from_slice(buffer);
@@ -432,24 +423,20 @@ impl DBBackend for MemBackend {
     Ok(written)
   }
 
-  fn freelist(&self) -> &Freelist {
-    self.freelist.as_ref().unwrap()
-  }
-
-  fn freelist_mut(&mut self) -> &mut Freelist {
-    self.freelist.as_mut().unwrap()
+  fn freelist(&self) -> MutexGuard<Freelist> {
+    self.freelist.as_ref().unwrap().lock()
   }
 }
 
 pub struct FileBackend {
   path: PathBuf,
-  file: File,
+  file: Mutex<File>,
   page_size: usize,
   mmap: Option<MmapRaw>,
-  freelist: Option<Freelist>,
+  freelist: Option<Mutex<Freelist>>,
   alloc_size: u64,
   /// current on disk file size
-  file_size: u64,
+  file_size: AtomicU64,
   data_size: u64,
   use_mlock: bool,
   grow_async: bool,
@@ -604,9 +591,10 @@ impl DBBackend for FileBackend {
     RefPage::new(page_ptr)
   }
 
-  fn grow(&mut self, mut size: u64) -> crate::Result<()> {
+  fn grow(&self, mut size: u64) -> crate::Result<()> {
     // Ignore if the new size is less than available file size.
-    if size <= self.file_size {
+    let file_size = self.file_size.load(Ordering::Acquire);
+    if size <= file_size {
       return Ok(());
     }
     // If the data is smaller than the alloc size then only allocate what's needed.
@@ -625,22 +613,18 @@ impl DBBackend for FileBackend {
         file_lock.set_len(size)?;
       }
       file_lock.sync_all()?;
-      if self.use_mlock {
-        let mmap = self.mmap.as_mut().unwrap();
-        // TODO: Missing size parameters here
-        mmap.unlock()?;
-        mmap.lock()?;
-      }
     }
 
-    self.file_size = size;
+    // TODO: This is overkill. Move file_size behind the file mutex
+    self.file_size.store(size, Ordering::Release);
     Ok(())
   }
 
   /// mmap opens the underlying memory-mapped file and initializes the meta references.
   /// min_size is the minimum size that the new mmap can be.
   fn mmap(&mut self, min_size: u64, tx: TxRwCell) -> crate::Result<()> {
-    let info = self.file.metadata()?;
+    let file_lock = self.file.lock();
+    let info = file_lock.metadata()?;
     if info.len() < (self.page_size * 2) as u64 {
       return Err(Error::MMapFileSizeTooSmall);
     }
@@ -655,7 +639,7 @@ impl DBBackend for FileBackend {
       tx.cell.bound().own_in();
     }
 
-    let mmap = MmapOptions::new().len(size as usize).map_raw(&self.file)?;
+    let mmap = MmapOptions::new().len(size as usize).map_raw(&*file_lock)?;
     mmap.advise(Advice::Random)?;
     if self.use_mlock {
       mmap.lock()?;
@@ -674,10 +658,11 @@ impl DBBackend for FileBackend {
     Ok(())
   }
 
-  fn fsync(&mut self) -> crate::Result<()> {
-    self.file.sync_all().map_err(Error::IO)
+  fn fsync(&self) -> crate::Result<()> {
+    self.file.lock().sync_all().map_err(Error::IO)
   }
 
+  // TODO: take all of the pages and handle it here
   fn write_all_at(&self, buffer: &[u8], offset: u64) -> crate::Result<usize> {
     let mut file_lock = self.file.lock();
     file_lock.seek(SeekFrom::Start(offset)).map_err(Error::IO)?;
@@ -687,19 +672,15 @@ impl DBBackend for FileBackend {
       .map(|_| buffer.len())
   }
 
-  fn freelist(&self) -> &Freelist {
-    self.freelist.as_ref().unwrap()
-  }
-
-  fn freelist_mut(&mut self) -> &mut Freelist {
-    self.freelist.as_mut().unwrap()
+  fn freelist(&self) -> MutexGuard<Freelist> {
+    self.freelist.as_ref().unwrap().lock()
   }
 }
 
 impl Drop for FileBackend {
   fn drop(&mut self) {
     if !self.read_only {
-      match self.file.unlock() {
+      match self.file.lock().unlock() {
         Ok(_) => {}
         // TODO: log error
         Err(_) => {
@@ -710,39 +691,39 @@ impl Drop for FileBackend {
   }
 }
 
+pub(crate) enum AllocateResult<'tx> {
+  Page(SelfOwned<AlignedBytes<alignment::Page>, MutPage<'tx>>),
+  PageWithNewSize(SelfOwned<AlignedBytes<alignment::Page>, MutPage<'tx>>, u64),
+}
+
 pub(crate) trait DbIApi<'tx>: 'tx {
   fn page(&self, pg_id: PgId) -> RefPage<'tx>;
 
   fn is_page_free(&self, pg_id: PgId) -> bool;
 
   fn remove_tx(&self, rem_tx: TxId, tx_stats: Arc<TxStats>);
+  fn allocate(&self, tx: TxRwCell, page_count: u64) -> AllocateResult<'tx>;
+
+  fn free_page(&self, txid: TxId, p: &Page);
+  fn free_pages(&self);
 
   fn freelist_count(&self) -> u64;
 
   fn freelist_copyall(&self, all: &mut BVec<PgId>);
+
+  fn commit_freelist(&self, tx: TxRwCell<'tx>) -> crate::Result<AllocateResult<'tx>>;
+
+  fn write_all_at(&self, buf: &[u8], offset: u64) -> crate::Result<usize>;
+
+  fn fsync(&self) -> crate::Result<()>;
+  fn repool_allocated(&self, page: AlignedBytes<alignment::Page>);
+
+  fn remove_rw_tx(&self, tx_stats: Arc<TxStats>);
+
+  fn grow(&self, size: u64) -> crate::Result<()>;
 }
-
-pub(crate) trait DbRwIApi<'tx>: DbIApi<'tx> {
-  fn free_page(&mut self, txid: TxId, p: &Page);
-
-  fn free_pages(&mut self);
-
-  fn allocate(
-    &mut self, tx: TxRwCell<'tx>, count: u64,
-  ) -> crate::Result<SelfOwned<AlignedBytes<alignment::Page>, MutPage<'tx>>>;
-
-  fn grow(&mut self, size: u64) -> crate::Result<()>;
-
-  fn commit_freelist(
-    &mut self, tx: TxRwCell<'tx>,
-  ) -> crate::Result<SelfOwned<AlignedBytes<alignment::Page>, MutPage<'tx>>>;
-
-  fn remove_rw_tx(&mut self, tx_stats: Arc<TxStats>);
-
-  fn repool_allocated(&mut self, page: AlignedBytes<alignment::Page>);
-
-  fn fsync(&mut self) -> crate::Result<()>;
-  fn write_at(&mut self, buf: &[u8], offset: u64) -> crate::Result<usize>;
+pub(crate) trait DbMutIApi<'tx>: DbIApi<'tx> {
+  fn mmap_to_new_size(&mut self, min_size: u64, tx: TxRwCell) -> crate::Result<()>;
 }
 
 impl<'tx> DbIApi<'tx> for LockGuard<'tx, DbShared> {
@@ -767,6 +748,27 @@ impl<'tx> DbIApi<'tx> for LockGuard<'tx, DbShared> {
     }
   }
 
+  fn allocate(&self, tx: TxRwCell, page_count: u64) -> AllocateResult<'tx> {
+    match self {
+      LockGuard::R(guard) => guard.allocate(tx, page_count),
+      LockGuard::U(guard) => guard.borrow().allocate(tx, page_count),
+    }
+  }
+
+  fn free_page(&self, txid: TxId, p: &Page) {
+    match self {
+      LockGuard::R(guard) => guard.free_page(txid, p),
+      LockGuard::U(guard) => guard.borrow().free_page(txid, p),
+    }
+  }
+
+  fn free_pages(&self) {
+    match self {
+      LockGuard::R(guard) => guard.free_pages(),
+      LockGuard::U(guard) => guard.borrow().free_pages(),
+    }
+  }
+
   fn freelist_count(&self) -> u64 {
     match self {
       LockGuard::R(guard) => guard.freelist_count(),
@@ -780,13 +782,55 @@ impl<'tx> DbIApi<'tx> for LockGuard<'tx, DbShared> {
       LockGuard::U(guard) => guard.borrow().freelist_copyall(all),
     }
   }
+
+  fn commit_freelist(&self, tx: TxRwCell<'tx>) -> crate::Result<AllocateResult<'tx>> {
+    match self {
+      LockGuard::R(guard) => guard.commit_freelist(tx),
+      LockGuard::U(guard) => guard.borrow().commit_freelist(tx),
+    }
+  }
+
+  fn write_all_at(&self, buf: &[u8], offset: u64) -> crate::Result<usize> {
+    match self {
+      LockGuard::R(guard) => guard.write_all_at(buf, offset),
+      LockGuard::U(guard) => guard.borrow().write_all_at(buf, offset),
+    }
+  }
+
+  fn fsync(&self) -> crate::Result<()> {
+    match self {
+      LockGuard::R(guard) => guard.fsync(),
+      LockGuard::U(guard) => guard.borrow().fsync(),
+    }
+  }
+
+  fn repool_allocated(&self, page: AlignedBytes<alignment::Page>) {
+    match self {
+      LockGuard::R(guard) => guard.repool_allocated(page),
+      LockGuard::U(guard) => guard.borrow().repool_allocated(page),
+    }
+  }
+
+  fn remove_rw_tx(&self, tx_stats: Arc<TxStats>) {
+    match self {
+      LockGuard::R(guard) => guard.remove_rw_tx(tx_stats),
+      LockGuard::U(guard) => guard.borrow().remove_rw_tx(tx_stats),
+    }
+  }
+
+  fn grow(&self, size: u64) -> crate::Result<()> {
+    match self {
+      LockGuard::R(guard) => guard.grow(size),
+      LockGuard::U(guard) => guard.borrow().grow(size),
+    }
+  }
 }
 
 // In theory things are wired up ok. Here's hoping Miri is happy
 pub struct DbShared {
-  pub(crate) stats: Arc<RwLock<DbStats>>,
+  pub(crate) stats: Arc<DbStats>,
   pub(crate) db_state: Arc<Mutex<DbState>>,
-  page_pool: Vec<AlignedBytes<alignment::Page>>,
+  page_pool: Mutex<Vec<AlignedBytes<alignment::Page>>>,
   pub(crate) backend: Box<dyn DBBackend>,
   options: DBOptions,
 }
@@ -806,33 +850,52 @@ impl<'tx> DbIApi<'tx> for DbShared {
 
   fn remove_tx(&self, rem_tx: TxId, tx_stats: Arc<TxStats>) {
     let mut records = self.db_state.lock();
-    let mut stats = self.stats.write();
     if let Some(pos) = records.txs.iter().position(|tx| *tx == rem_tx) {
       records.txs.swap_remove(pos);
     }
 
     let n = records.txs.len();
-    stats.inc_open_tx_n(n as i64);
-    stats.tx_stats.add_assign(&tx_stats);
+    self.stats.inc_open_tx_n(n as i64);
+    self.stats.tx_stats.add_assign(&tx_stats);
   }
 
-  fn freelist_count(&self) -> u64 {
-    self.backend.freelist().count()
+  fn allocate(&self, tx: TxRwCell, page_count: u64) -> AllocateResult<'tx> {
+    let tx_id = tx.api_id();
+    let high_water = tx.meta().pgid();
+    let bytes = if page_count == 1 && !self.page_pool.lock().is_empty() {
+      let mut page = self.page_pool.lock().pop().unwrap();
+      page.fill(0);
+      page
+    } else {
+      AlignedBytes::new_zeroed(page_count as usize * self.backend.page_size())
+    };
+
+    let mut mut_page = SelfOwned::new_with_map(bytes, |b| MutPage::new(b.as_mut_ptr()));
+    mut_page.overflow = (page_count - 1) as u32;
+
+    if let Some(pid) = self.backend.freelist().allocate(tx_id, page_count) {
+      mut_page.id = pid;
+      return AllocateResult::Page(mut_page);
+    }
+
+    // Resize mmap() if we're at the end.
+    mut_page.id = high_water;
+    let min_size = (high_water.0 + page_count + 1) * self.backend.page_size() as u64;
+    tx.split_r_mut().meta.set_pgid(high_water + page_count);
+    if min_size > self.backend.data_size() {
+      AllocateResult::PageWithNewSize(mut_page, min_size)
+    } else {
+      AllocateResult::Page(mut_page)
+    }
   }
 
-  fn freelist_copyall(&self, all: &mut BVec<PgId>) {
-    self.backend.freelist().copy_all(all)
-  }
-}
-
-impl<'tx> DbRwIApi<'tx> for DbShared {
-  fn free_page(&mut self, txid: TxId, p: &Page) {
-    self.backend.freelist_mut().free(txid, p)
+  fn free_page(&self, txid: TxId, p: &Page) {
+    self.backend.freelist().free(txid, p)
   }
 
-  fn free_pages(&mut self) {
+  fn free_pages(&self) {
     let mut state = self.db_state.lock();
-    let freelist = self.backend.freelist_mut();
+    let mut freelist = self.backend.freelist();
     // Free all pending pages prior to earliest open transaction.
 
     state.txs.sort();
@@ -853,45 +916,15 @@ impl<'tx> DbRwIApi<'tx> for DbShared {
     // Any page both allocated and freed in an extent is safe to release.
   }
 
-  fn allocate(
-    &mut self, tx: TxRwCell, page_count: u64,
-  ) -> crate::Result<SelfOwned<AlignedBytes<alignment::Page>, MutPage<'tx>>> {
-    let tx_id = tx.api_id();
-    let high_water = tx.meta().pgid();
-    let bytes = if page_count == 1 && !self.page_pool.is_empty() {
-      let mut page = self.page_pool.pop().unwrap();
-      page.fill(0);
-      page
-    } else {
-      AlignedBytes::new_zeroed(page_count as usize * self.backend.page_size())
-    };
-
-    let mut mut_page = SelfOwned::new_with_map(bytes, |b| MutPage::new(b.as_mut_ptr()));
-    mut_page.overflow = (page_count - 1) as u32;
-
-    if let Some(pid) = self.backend.freelist_mut().allocate(tx_id, page_count) {
-      mut_page.id = pid;
-      return Ok(mut_page);
-    }
-
-    // Resize mmap() if we're at the end.
-    mut_page.id = high_water;
-    let min_size = (high_water.0 + page_count + 1) * self.backend.page_size() as u64;
-    if min_size > self.backend.data_size() {
-      self.backend.mmap(min_size, tx)?;
-    }
-
-    tx.split_r_mut().meta.set_pgid(high_water + page_count);
-    Ok(mut_page)
+  fn freelist_count(&self) -> u64 {
+    self.backend.freelist().count()
   }
 
-  fn grow(&mut self, size: u64) -> crate::Result<()> {
-    self.backend.grow(size)
+  fn freelist_copyall(&self, all: &mut BVec<PgId>) {
+    self.backend.freelist().copy_all(all)
   }
 
-  fn commit_freelist(
-    &mut self, tx: TxRwCell<'tx>,
-  ) -> crate::Result<SelfOwned<AlignedBytes<alignment::Page>, MutPage<'tx>>> {
+  fn commit_freelist(&self, tx: TxRwCell<'tx>) -> crate::Result<AllocateResult<'tx>> {
     // Allocate new pages for the new free list. This will overestimate
     // the size of the freelist but not underestimate the size (which would be bad).
     let count = {
@@ -900,19 +933,35 @@ impl<'tx> DbRwIApi<'tx> for DbShared {
       (freelist_size / page_size as u64) + 1
     };
 
-    let mut freelist_page = self.allocate(tx, count)?;
-
-    self
-      .backend
-      .freelist_mut()
-      .write(MappedFreeListPage::mut_into(&mut freelist_page));
+    let mut freelist_page = self.allocate(tx, count);
+    {
+      let page = match &mut freelist_page {
+        AllocateResult::Page(page) => page,
+        AllocateResult::PageWithNewSize(page, _) => page,
+      };
+      self
+        .backend
+        .freelist()
+        .write(MappedFreeListPage::mut_into(page))
+    }
 
     Ok(freelist_page)
   }
 
-  fn remove_rw_tx(&mut self, tx_stats: Arc<TxStats>) {
+  fn write_all_at(&self, buf: &[u8], offset: u64) -> crate::Result<usize> {
+    self.backend.write_all_at(buf, offset)
+  }
+
+  fn fsync(&self) -> crate::Result<()> {
+    self.backend.fsync()
+  }
+
+  fn repool_allocated(&self, page: AlignedBytes<alignment::Page>) {
+    self.page_pool.lock().push(page);
+  }
+
+  fn remove_rw_tx(&self, tx_stats: Arc<TxStats>) {
     let mut state = self.db_state.lock();
-    let mut stats = self.stats.write();
     let page_size = self.backend.page_size();
     let freelist = self.backend.freelist();
     let free_list_free_n = freelist.free_count();
@@ -924,23 +973,23 @@ impl<'tx> DbRwIApi<'tx> for DbShared {
 
     state.rwtx = None;
 
-    stats.inc_free_page_n(free_list_free_n as i64);
-    stats.inc_pending_page_n(free_list_pending_n as i64);
-    stats.inc_free_alloc(((free_list_free_n + free_list_pending_n) * page_size as u64) as i64);
-    stats.inc_free_list_in_use(free_list_alloc as i64);
-    stats.tx_stats.add_assign(&tx_stats);
+    self.stats.inc_free_page_n(free_list_free_n as i64);
+    self.stats.inc_pending_page_n(free_list_pending_n as i64);
+    self
+      .stats
+      .inc_free_alloc(((free_list_free_n + free_list_pending_n) * page_size as u64) as i64);
+    self.stats.inc_free_list_in_use(free_list_alloc as i64);
+    self.stats.tx_stats.add_assign(&tx_stats);
   }
 
-  fn repool_allocated(&mut self, page: AlignedBytes<alignment::Page>) {
-    self.page_pool.push(page);
+  fn grow(&self, size: u64) -> crate::Result<()> {
+    self.backend.grow(size)
   }
+}
 
-  fn fsync(&mut self) -> crate::Result<()> {
-    self.backend.fsync()
-  }
-
-  fn write_at(&mut self, buf: &[u8], offset: u64) -> crate::Result<usize> {
-    self.backend.write_all_at(buf, offset)
+impl<'tx> DbMutIApi<'tx> for DbShared {
+  fn mmap_to_new_size(&mut self, min_size: u64, tx: TxRwCell) -> crate::Result<()> {
+    self.backend.as_mut().mmap(min_size, tx)
   }
 }
 
@@ -1089,7 +1138,7 @@ pub struct DB {
   // TODO: Save a single Bump for RW transactions with a size hint?
   bump_pool: Arc<SyncPool<Pin<Box<PinBump>>>>,
   db: Arc<RwLock<DbShared>>,
-  stats: Arc<RwLock<DbStats>>,
+  stats: Arc<DbStats>,
   db_state: Arc<Mutex<DbState>>,
 }
 unsafe impl Send for DB {}
@@ -1104,9 +1153,13 @@ impl DB {
   }
 
   pub fn open_ro<T: Into<PathBuf>>(path: T) -> crate::Result<impl DbApi> {
-    let mut options = DBOptions::default();
-    options.read_only = true;
-    DB::open_path(path, options)
+    DB::open_path(
+      path,
+      DBOptions {
+        read_only: true,
+        ..Default::default()
+      },
+    )
   }
 
   fn open_path<T: Into<PathBuf>>(path: T, db_options: DBOptions) -> crate::Result<Self> {
@@ -1133,7 +1186,10 @@ impl DB {
     } else {
       file_size
     };
-    let options = MmapOptions::new().offset(0).len(data_size as usize).to_owned();
+    let options = MmapOptions::new()
+      .offset(0)
+      .len(data_size as usize)
+      .to_owned();
     let open_options = options.clone();
     let mmap = if read_only {
       file.lock_shared()?;
@@ -1145,12 +1201,12 @@ impl DB {
     mmap.advise(Advice::Random)?;
     let mut backend = FileBackend {
       path,
-      file,
+      file: Mutex::new(file),
       page_size,
       mmap: Some(mmap),
       freelist: None,
       alloc_size: DEFAULT_ALLOC_SIZE.bytes() as u64,
-      file_size,
+      file_size: file_size.into(),
       data_size,
       use_mlock: false,
       grow_async: false,
@@ -1162,13 +1218,13 @@ impl DB {
     let freelist_page = MappedFreeListPage::coerce_ref(&refpage).unwrap();
     let freelist = freelist_page.read();
     let free_count = freelist.free_count();
-    backend.freelist = Some(freelist);
+    backend.freelist = Some(Mutex::new(freelist));
     let db_state = Arc::new(Mutex::new(DbState::new(meta)));
     let stats = DbStats {
       free_page_n: (free_count as i64).into(),
       ..Default::default()
     };
-    let arc_stats = Arc::new(RwLock::new(stats));
+    let arc_stats = Arc::new(stats);
     let bump_pool = SyncPool::new(
       || Box::pin(PinBump::default()),
       |bump| Pin::as_mut(bump).reset(),
@@ -1180,7 +1236,7 @@ impl DB {
         stats: arc_stats.clone(),
         db_state: db_state.clone(),
         backend: Box::new(backend),
-        page_pool: vec![],
+        page_pool: Mutex::new(vec![]),
         options: db_options,
       })),
       stats: arc_stats,
@@ -1197,7 +1253,7 @@ impl DB {
       .page_size()
       .unwrap_or(DEFAULT_PAGE_SIZE.bytes() as usize);
     let mut mmap = DB::init_page(page_size);
-    let mut file_size = mmap.len() as u64;
+    let file_size = mmap.len() as u64;
     let data_size = if let Some(initial_mmap_size) = db_options.initial_map_size() {
       file_size.max(initial_mmap_size)
     } else {
@@ -1205,7 +1261,10 @@ impl DB {
     };
     if file_size < data_size {
       let mut new_mmap = AlignedBytes::new_zeroed(data_size as usize);
-      new_mmap.split_at_mut(file_size as usize).0.copy_from_slice(&*mmap);
+      new_mmap
+        .split_at_mut(file_size as usize)
+        .0
+        .copy_from_slice(&*mmap);
       mmap = new_mmap;
     }
     let mut backend = MemBackend {
@@ -1222,13 +1281,13 @@ impl DB {
     let freelist_page = MappedFreeListPage::coerce_ref(&refpage).unwrap();
     let freelist = freelist_page.read();
     let free_count = freelist.free_count();
-    backend.freelist = Some(freelist);
+    backend.freelist = Some(Mutex::new(freelist));
     let db_state = Arc::new(Mutex::new(DbState::new(meta)));
     let stats = DbStats {
       free_page_n: (free_count as i64).into(),
       ..Default::default()
     };
-    let arc_stats = Arc::new(RwLock::new(stats));
+    let arc_stats = Arc::new(stats);
     let bump_pool = SyncPool::new(
       || Box::pin(PinBump::default()),
       |bump| Pin::as_mut(bump).reset(),
@@ -1239,7 +1298,7 @@ impl DB {
         stats: arc_stats.clone(),
         db_state: db_state.clone(),
         backend: Box::new(backend),
-        page_pool: vec![],
+        page_pool: Mutex::new(vec![]),
         options: db_options,
       })),
       stats: arc_stats,
@@ -1320,7 +1379,7 @@ impl DbApi for DB {
       state.is_open = false;
       let mut closed_db: Box<dyn DBBackend> = Box::new(ClosedBackend {});
       mem::swap(&mut closed_db, &mut lock.backend);
-      lock.page_pool.clear();
+      lock.page_pool.lock().clear();
       self.bump_pool.clear();
     }
   }
@@ -1339,7 +1398,7 @@ impl DbApi for DB {
     r
   }
 
-  fn stats(&self) -> Arc<RwLock<DbStats>> {
+  fn stats(&self) -> Arc<DbStats> {
     self.stats.clone()
   }
 }

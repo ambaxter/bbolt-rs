@@ -106,8 +106,8 @@ Features:
 - [ ] test_tx_copy_file
 - [ ] test_tx_copy_file_error_meta
 - [ ] test_tx_copy_file_error_normal
-- [ ] test_tx_rollback
-- [ ] test_tx_release_range
+- [x] test_tx_rollback
+- [x] test_tx_release_range
 - [ ] example_tx_rollback
 - [ ] example_tx_copy_file
 - [ ] test_tx_stats_get_and_inc_atomically

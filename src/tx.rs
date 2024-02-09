@@ -618,14 +618,7 @@ impl<'tx> TxRwIApi<'tx> for TxRwCell<'tx> {
   type CursorRwType = InnerCursor<'tx, Self, Self::BucketType>;
 
   fn freelist_free_page(self, txid: TxId, p: &Page) {
-    self
-      .cell
-      .borrow()
-      .r
-      .db
-      .get_mut()
-      .unwrap()
-      .free_page(txid, p)
+    self.cell.borrow().r.db.free_page(txid, p)
   }
 
   fn root_bucket_mut(self) -> BucketRwCell<'tx> {
@@ -635,8 +628,14 @@ impl<'tx> TxRwIApi<'tx> for TxRwCell<'tx> {
   fn allocate(
     self, count: usize,
   ) -> crate::Result<SelfOwned<AlignedBytes<alignment::Page>, MutPage<'tx>>> {
-    let mut db = { self.cell.borrow().r.db.get_mut().unwrap() };
-    let page = db.allocate(self, count as u64)?;
+    let db = { self.cell.borrow().r.db };
+    let page = match db.allocate(self, count as u64) {
+      AllocateResult::Page(page) => page,
+      AllocateResult::PageWithNewSize(page, min_size) => {
+        db.get_mut().unwrap().mmap_to_new_size(min_size, self)?;
+        page
+      }
+    };
 
     let tx = self.cell.borrow();
     tx.r.stats.inc_page_count(1);
@@ -687,7 +686,7 @@ impl<'tx> TxRwIApi<'tx> for TxRwCell<'tx> {
 
       // Sort pages by id.
       pages.sort_by_key(|page| page.id);
-      (pages, tx.r.db.get_mut().unwrap(), tx.r.page_size)
+      (pages, tx.r.db, tx.r.page_size)
     };
 
     let r = self.split_r();
@@ -703,7 +702,7 @@ impl<'tx> TxRwIApi<'tx> for TxRwCell<'tx> {
         let size = rem.min(MAX_ALLOC_SIZE.bytes() as usize - 1);
         let buf = &page.ref_owner()[written..size];
 
-        let size = db.write_at(buf, offset)?;
+        let size = db.write_all_at(buf, offset)?;
 
         // Update statistics.
         r.stats.inc_write(1);
@@ -739,10 +738,10 @@ impl<'tx> TxRwIApi<'tx> for TxRwCell<'tx> {
     let mut meta_page = unsafe { MappedMetaPage::new(ptr.as_ptr()) };
     r.meta.write(&mut meta_page);
 
-    let mut db = r.db.get_mut().unwrap();
+    let db = r.db;
     let offset = meta_page.page.id.0 * page_size as u64;
     let buf = unsafe { from_raw_parts_mut(ptr.as_ptr(), page_size) };
-    db.write_at(buf, offset)?;
+    db.write_all_at(buf, offset)?;
 
     //TODO: Ignore sync
     db.fsync()?;
@@ -955,23 +954,23 @@ impl<'tx> TxRwImpl<'tx> {
   }
 
   fn commit_freelist(&mut self) -> crate::Result<()> {
-    let freelist_page = Pin::as_ref(&self.db)
-      .guard()
-      .get_mut()
-      .unwrap()
-      .commit_freelist(*self.tx)?;
-    let pg_id = freelist_page.id;
-    let mut tx = self.tx.cell.borrow_mut();
-    tx.r.meta.set_free_list(pg_id);
-    if let Some(old_page) = tx.w.pages.insert(pg_id, freelist_page) {
-      if old_page.overflow == 0 {
+    let allocated_page = Pin::as_ref(&self.db).guard().commit_freelist(*self.tx)?;
+
+    let freelist_page = match allocated_page {
+      AllocateResult::Page(page) => page,
+      AllocateResult::PageWithNewSize(page, min_size) => {
         Pin::as_ref(&self.db)
           .guard()
           .get_mut()
           .unwrap()
-          .repool_allocated(old_page.into_owner());
+          .mmap_to_new_size(min_size, *self.tx)?;
+        page
       }
-    }
+    };
+    let pg_id = freelist_page.id;
+    let mut tx = self.tx.cell.borrow_mut();
+    tx.r.meta.set_free_list(pg_id);
+    tx.w.pages.insert(pg_id, freelist_page);
     Ok(())
   }
 }
@@ -979,11 +978,7 @@ impl<'tx> TxRwImpl<'tx> {
 impl<'tx> Drop for TxRwImpl<'tx> {
   fn drop(&mut self) {
     let stats = self.stats();
-    Pin::as_ref(&self.db)
-      .guard()
-      .get_mut()
-      .unwrap()
-      .remove_rw_tx(stats);
+    Pin::as_ref(&self.db).guard().remove_rw_tx(stats);
     {
       let stats = self.stats();
       let ptr = Arc::into_raw(stats);
@@ -1067,14 +1062,6 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
   }
 
   fn commit(mut self) -> crate::Result<()> {
-    {
-      Pin::as_ref(&self.db)
-        .guard()
-        .get_mut()
-        .unwrap()
-        .free_pages();
-    }
-
     let start_time = Instant::now();
     self.tx.root_bucket().rebalance();
     {
@@ -1103,11 +1090,7 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
       //TODO: implement pgidNoFreeList
       let freelist_pg = tx.r.db.page(tx.r.meta.free_list());
       let tx_id = tx.r.meta.txid();
-      Pin::as_ref(&self.db)
-        .guard()
-        .get_mut()
-        .unwrap()
-        .free_page(tx_id, &freelist_pg);
+      Pin::as_ref(&self.db).guard().free_page(tx_id, &freelist_pg);
     }
     // TODO: implement noFreelistSync
 
@@ -1130,8 +1113,6 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
     if new_pgid > opgid {
       Pin::as_ref(&self.db)
         .guard()
-        .get_mut()
-        .unwrap()
         .grow((new_pgid.0 + 1) * page_size as u64)?;
     }
     let start_time = Instant::now();
@@ -1533,16 +1514,19 @@ pub(crate) mod check {
 
 #[cfg(test)]
 mod test {
+  use crate::common::defaults::DEFAULT_PAGE_SIZE;
   use crate::test_support::TestDb;
   use crate::tx::check::TxCheck;
   use crate::{
-    BucketApi, BucketRwApi, CursorApi, CursorRwApi, DbApi, DbRwAPI, Error, TxApi, TxRwApi, DB,
+    BucketApi, BucketRwApi, CursorApi, CursorRwApi, DBOptions, DbApi, DbRwAPI, Error, TxApi,
+    TxImpl, TxRwApi, DB,
   };
   use anyhow::anyhow;
   use std::cell::RefCell;
   use std::rc::Rc;
   use std::sync::atomic::{AtomicU64, Ordering};
   use std::sync::Arc;
+  use std::thread;
 
   #[test]
   fn test_tx_check_read_only() -> crate::Result<()> {
@@ -1845,8 +1829,79 @@ mod test {
 
   #[test]
   #[ignore]
-  fn test_tx_release_range() {
-    todo!()
+  fn test_tx_release_range() -> crate::Result<()> {
+    let initial_mmap_size = DEFAULT_PAGE_SIZE.bytes() as u64 * 100;
+    let db_options = DBOptions::builder()
+      .initial_mmap_size(initial_mmap_size)
+      .build();
+    let mut db = TestDb::with_options(db_options)?;
+    let bucket = "bucket";
+
+    let mut put_db = db.clone_db();
+    let mut put = move |key, value| {
+      put_db
+        .update(|mut tx| {
+          let mut b = tx.create_bucket_if_not_exists(bucket)?;
+          b.put(key, value)?;
+          Ok(())
+        })
+        .unwrap();
+    };
+
+    let mut del_db = db.clone_db();
+    let mut del = move |key| {
+      del_db
+        .update(|mut tx| {
+          let mut b = tx.create_bucket_if_not_exists(bucket)?;
+          b.delete(key)?;
+          Ok(())
+        })
+        .unwrap();
+    };
+
+    let open_read_tx = || db.begin_tx().unwrap();
+
+    let check_with_read_tx = |tx: &TxImpl, key, want_value| {
+      let value = tx.bucket(bucket).unwrap().get(key);
+      assert_eq!(want_value, value);
+    };
+
+    let rollback = |tx: TxImpl| {
+      tx.rollback().unwrap();
+    };
+
+    put("k1", "v1");
+    let rtx1 = open_read_tx();
+    put("k2", "v2");
+    let hold1 = open_read_tx();
+    put("k3", "v3");
+    let hold2 = open_read_tx();
+    del("k3");
+    let rtx2 = open_read_tx();
+    let hold3 = open_read_tx();
+    del("k1");
+    let hold4 = open_read_tx();
+    del("k2");
+    let hold5 = open_read_tx();
+
+    rollback(hold1);
+    rollback(hold2);
+    rollback(hold3);
+    rollback(hold4);
+    rollback(hold5);
+
+    put("k4", "v4");
+    check_with_read_tx(&rtx1, "k1", Some("v1".as_bytes()));
+    check_with_read_tx(&rtx2, "k2", Some("v2".as_bytes()));
+
+    rollback(rtx1);
+    rollback(rtx2);
+    let rtx7 = open_read_tx();
+    check_with_read_tx(&rtx7, "k1", None);
+    check_with_read_tx(&rtx7, "k2", None);
+    check_with_read_tx(&rtx7, "k3", None);
+    check_with_read_tx(&rtx7, "k4", Some("v4".as_bytes()));
+    Ok(())
   }
 
   #[test]
