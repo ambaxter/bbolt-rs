@@ -12,7 +12,7 @@ use crate::common::{BVec, HashMap, PgId, SplitRef, TxId};
 use crate::cursor::{CursorImpl, CursorRwIApi, CursorRwImpl, InnerCursor};
 use crate::db::{AllocateResult, DbIApi, DbMutIApi, DbShared};
 use crate::tx::check::TxICheck;
-use crate::{BucketApi, BucketRwApi, CursorApi, CursorRwApi, TxCheck};
+use crate::TxCheck;
 use aliasable::boxed::AliasableBox;
 use aligners::{alignment, AlignedBytes};
 use bumpalo::Bump;
@@ -677,7 +677,7 @@ impl<'tx> TxRwIApi<'tx> for TxRwCell<'tx> {
   }
 
   fn write(self) -> crate::Result<()> {
-    let (pages, mut db, page_size) = {
+    let (pages, db, page_size) = {
       let mut tx = self.cell.borrow_mut();
       let mut swap_pages = HashMap::with_capacity_in(0, tx.r.b);
       // Clear out page cache early.
@@ -887,7 +887,7 @@ impl<'tx> TxApi<'tx> for TxRef<'tx> {
   fn for_each<F: FnMut(&[u8], BucketImpl<'tx>) -> crate::Result<()>>(
     &self, f: F,
   ) -> crate::Result<()> {
-    todo!()
+    self.tx.api_for_each(f)
   }
 
   fn rollback(self) -> crate::Result<()> {
@@ -1018,9 +1018,7 @@ impl<'tx> TxApi<'tx> for TxRwImpl<'tx> {
   fn for_each<F: FnMut(&[u8], BucketImpl<'tx>) -> crate::Result<()>>(
     &self, f: F,
   ) -> crate::Result<()> {
-    //self.tx.api_for_each(f)
-    // TODO: mismatching bucket types
-    todo!()
+    self.tx.api_for_each(f)
   }
 
   fn rollback(self) -> crate::Result<()> {
@@ -1319,7 +1317,7 @@ pub(crate) mod check {
       // Check if any pages are double freed.
       let mut freed = HashSet::new_in(bump);
       let mut all = BVec::with_capacity_in(freelist_count as usize, bump);
-      for i in 0..freelist_count {
+      for _ in 0..freelist_count {
         all.push(ZERO_PGID);
       }
       db.freelist_copyall(&mut all);
@@ -1518,15 +1516,10 @@ mod test {
   use crate::test_support::TestDb;
   use crate::tx::check::TxCheck;
   use crate::{
-    BucketApi, BucketRwApi, CursorApi, CursorRwApi, DBOptions, DbApi, DbRwAPI, Error, TxApi,
-    TxImpl, TxRwApi, DB,
+    BucketApi, BucketRwApi, CursorApi, DBOptions, DbApi, DbRwAPI, Error, TxApi, TxImpl, TxRwApi, DB,
   };
   use anyhow::anyhow;
   use std::cell::RefCell;
-  use std::rc::Rc;
-  use std::sync::atomic::{AtomicU64, Ordering};
-  use std::sync::Arc;
-  use std::thread;
 
   #[test]
   fn test_tx_check_read_only() -> crate::Result<()> {
@@ -1620,7 +1613,7 @@ mod test {
   fn test_tx_create_bucket() -> crate::Result<()> {
     let mut db = TestDb::new()?;
     db.update(|mut tx| {
-      let bucket = tx.create_bucket(b"widgets")?;
+      tx.create_bucket(b"widgets")?;
       Ok(())
     })?;
     db.view(|tx| {
@@ -1834,7 +1827,7 @@ mod test {
     let db_options = DBOptions::builder()
       .initial_mmap_size(initial_mmap_size)
       .build();
-    let mut db = TestDb::with_options(db_options)?;
+    let db = TestDb::with_options(db_options)?;
     let bucket = "bucket";
 
     let mut put_db = db.clone_db();

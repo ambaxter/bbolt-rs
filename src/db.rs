@@ -21,10 +21,10 @@ use memmap2::{Advice, MmapOptions, MmapRaw};
 use parking_lot::{Mutex, MutexGuard, RwLock};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::ops::{Deref, DerefMut, Sub};
+use std::ops::DerefMut;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use std::{fs, io, mem};
@@ -185,12 +185,12 @@ impl DbStats {
 
   pub fn sub(&self, rhs: &DbStats) -> DbStats {
     let stats = self.clone();
-    self.inc_free_page_n(rhs.get_free_page_n() * -1);
-    self.inc_pending_page_n(rhs.get_pending_page_n() * -1);
-    self.inc_free_alloc(rhs.get_free_alloc() * -1);
-    self.inc_free_list_in_use(rhs.get_free_list_in_use() * -1);
-    self.inc_tx_n(rhs.get_tx_n() * -1);
-    self.inc_open_tx_n(rhs.get_open_tx_n() * -1);
+    stats.inc_free_page_n(-rhs.get_free_page_n());
+    stats.inc_pending_page_n(-rhs.get_pending_page_n());
+    stats.inc_free_alloc(-rhs.get_free_alloc());
+    stats.inc_free_list_in_use(-rhs.get_free_list_in_use());
+    stats.inc_tx_n(-rhs.get_tx_n());
+    stats.inc_open_tx_n(-rhs.get_open_tx_n());
     stats
   }
 }
@@ -1264,7 +1264,7 @@ impl DB {
       new_mmap
         .split_at_mut(file_size as usize)
         .0
-        .copy_from_slice(&*mmap);
+        .copy_from_slice(&mmap);
       mmap = new_mmap;
     }
     let mut backend = MemBackend {
@@ -1340,6 +1340,7 @@ impl DB {
     let mut db = fs::OpenOptions::new()
       .write(true)
       .create(true)
+      .truncate(true)
       .read(true)
       .open(path)?;
     db.write_all(&buffer)?;

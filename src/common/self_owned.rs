@@ -24,7 +24,7 @@ impl<O: Unpin, T> SelfOwned<O, T> {
     unsafe {
       addr_of_mut!((*ptr).owner).write(Box::pin(owner));
       addr_of_mut!((*ptr).marker).write(PhantomPinned);
-      let b = (*(addr_of_mut!((*ptr).owner))).deref_mut();
+      let b = (*ptr).owner.deref_mut();
       addr_of_mut!((*ptr).referenced).write(f(b));
       uninit.assume_init()
     }

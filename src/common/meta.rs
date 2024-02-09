@@ -130,7 +130,7 @@ mod test {
   #[test]
   fn test() {
     let mut meta_page = mapped_page::<MappedMetaPage>(4096);
-    let mut meta = Meta {
+    let meta = Meta {
       magic: MAGIC,
       version: VERSION,
       page_size: DEFAULT_PAGE_SIZE.bytes() as u32,

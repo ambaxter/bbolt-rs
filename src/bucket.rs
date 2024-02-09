@@ -7,7 +7,7 @@ use crate::common::tree::{
   MappedBranchPage, MappedLeafPage, TreePage, BRANCH_PAGE_ELEMENT_SIZE, LEAF_PAGE_ELEMENT_SIZE,
 };
 use crate::common::{BVec, HashMap, PgId, SplitRef, ZERO_PGID};
-use crate::cursor::{CursorApi, CursorIApi, CursorImpl, CursorRwIApi, CursorRwImpl, InnerCursor};
+use crate::cursor::{CursorIApi, CursorImpl, CursorRwIApi, CursorRwImpl, InnerCursor};
 use crate::node::NodeRwCell;
 use crate::tx::{TxCell, TxIApi, TxRwCell, TxRwIApi};
 use crate::Error::{
@@ -644,7 +644,7 @@ pub(crate) trait BucketIApi<'tx, T: TxIApi<'tx>>:
     if self.root() == ZERO_PGID {
       s.inline_bucket_n += 1;
     }
-    self.for_each_page(&mut |p, depth, stack| {
+    self.for_each_page(&mut |p, _, _| {
       if let Some(leaf_page) = MappedLeafPage::coerce_ref(p) {
         s.key_n += p.count as i64;
 
@@ -963,14 +963,13 @@ impl<'tx> BucketIApi<'tx, TxRwCell<'tx>> for BucketRwCell<'tx> {
 
 impl<'tx> BucketRwIApi<'tx> for BucketRwCell<'tx> {
   fn materialize_root(self) -> NodeRwCell<'tx> {
-    let mut root_id = ZERO_PGID;
-    {
+    let root_id = {
       let bucket = self.cell.borrow();
       match bucket.w.root_node {
-        None => root_id = bucket.r.bucket_header.root(),
+        None => bucket.r.bucket_header.root(),
         Some(root_node) => return root_node,
       }
-    }
+    };
     self.node(root_id, None)
   }
 
@@ -1113,7 +1112,7 @@ impl<'tx> BucketRwIApi<'tx> for BucketRwCell<'tx> {
     let tx = self.api_tx();
     let txid = tx.meta().txid();
 
-    self.for_each_page_node(|pn, depth| match pn {
+    self.for_each_page_node(|pn, _| match pn {
       Either::Left(page) => tx.freelist_free_page(txid, page),
       Either::Right(node) => node.free(),
     });
@@ -1269,11 +1268,10 @@ impl<'tx> BucketRwIApi<'tx> for BucketRwCell<'tx> {
       Some(page) => page,
     };
 
-    let p: &Page = &page;
     // Read the page into the node and cache it.
     let n = NodeRwCell::read_in(self, parent, &page);
     let mut bucket = self.cell.borrow_mut();
-    let mut wb = &mut bucket.w;
+    let wb = &mut bucket.w;
     match parent {
       None => wb.root_node = Some(n),
       Some(parent_node) => parent_node.cell.borrow_mut().children.push(n),
@@ -1370,7 +1368,7 @@ mod tests {
       b.put(b"key", b"val")?;
       Ok(())
     })?;
-    db.update(|mut tx| {
+    db.update(|tx| {
       let b = tx.bucket(b"widgets").unwrap();
       let mut c = b.cursor();
       if let Some((k, Some(v))) = c.first() {
@@ -1453,7 +1451,7 @@ mod tests {
       db.update(|mut tx| {
         let mut b = tx.create_bucket_if_not_exists(b"widgets")?;
         for j in 0..batch_n {
-          b.put((i + j).to_be_bytes().as_slice(), &v)?;
+          b.put((i + j).to_be_bytes().as_slice(), v)?;
         }
         Ok(())
       })?;
@@ -1507,7 +1505,7 @@ mod tests {
     db.update(|mut tx| {
       let mut b = tx.create_bucket(b"widgets")?;
       for i in 0..100 {
-        b.put(format!("{}", i).as_bytes(), &var)?;
+        b.put(format!("{}", i).as_bytes(), var)?;
       }
       Ok(())
     })?;
@@ -1543,7 +1541,7 @@ mod tests {
           let (k0, k1) = k.split_at_mut(8);
           k0.copy_from_slice(i.to_be_bytes().as_slice());
           k1.copy_from_slice(j.to_be_bytes().as_slice());
-          b.put(&k, &[])?;
+          b.put(k, [])?;
         }
         Ok(())
       })?;
@@ -1815,7 +1813,7 @@ mod tests {
   fn test_bucket_next_sequence_persist() -> crate::Result<()> {
     let mut db = TestDb::new()?;
     db.update(|mut tx| {
-      let mut widgets = tx.create_bucket(b"widgets")?;
+      tx.create_bucket(b"widgets")?;
       Ok(())
     })?;
     db.update(|mut tx| {
@@ -1971,7 +1969,7 @@ mod tests {
         b.put(b"foo", b"0000")?;
       }
       let index = AtomicU32::new(0);
-      tx.bucket(b"widgets").unwrap().for_each(|k, v| {
+      tx.bucket(b"widgets").unwrap().for_each(|k, _| {
         index.fetch_add(1, Ordering::Relaxed);
         if k == b"baz" {
           return Err(Error::Other(anyhow!("marker")));
@@ -1997,7 +1995,7 @@ mod tests {
     let mut db = TestDb::new()?;
     db.update(|mut tx| {
       let mut widgets = tx.create_bucket(b"widgets")?;
-      assert_eq!(Some(Error::KeyRequired), widgets.put(&[], &[]).err());
+      assert_eq!(Some(Error::KeyRequired), widgets.put([], []).err());
       Ok(())
     })?;
     Ok(())

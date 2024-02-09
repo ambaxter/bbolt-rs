@@ -70,7 +70,7 @@ pub enum Error {
   /// ValueTooLarge is returned when inserting a value that is larger than MaxValueSize.
   #[error("value too large")]
   ValueTooLarge,
-  /// IncompatibleValue is returned when trying create or delete a bucket
+  /// IncompatibleValue is returned when trying to create or delete a bucket
   /// on an existing non-bucket key or when trying to create or delete a
   /// non-bucket key on an existing bucket key.
   #[error("incompatible value")]

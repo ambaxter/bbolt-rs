@@ -744,7 +744,7 @@ impl<'tx> NodeRwCell<'tx> {
 mod test {
   use crate::bucket::BucketRwIApi;
   use crate::common::page::LEAF_PAGE_FLAG;
-  use crate::common::{SplitRef, ZERO_PGID};
+  use crate::common::ZERO_PGID;
   use crate::test_support::TestDb;
   use crate::tx::check::UnsealRwTx;
   use crate::tx::TxRwIApi;

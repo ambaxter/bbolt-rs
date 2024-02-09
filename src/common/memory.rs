@@ -7,9 +7,8 @@ use std::cmp::Ordering;
 use std::fmt::Formatter;
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
-use std::ptr::slice_from_raw_parts;
 use std::slice::{from_raw_parts, from_raw_parts_mut};
-use std::{fmt, mem, slice};
+use std::{fmt, mem};
 
 /// A borrowed cell backed by `RefCell`
 pub struct LCell<'a, T: ?Sized>(&'a RefCell<T>);

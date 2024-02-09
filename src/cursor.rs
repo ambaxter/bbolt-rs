@@ -637,7 +637,7 @@ mod tests {
   fn test_cursor_bucket() -> crate::Result<()> {
     let mut db = TestDb::new()?;
     db.update(|mut tx| {
-      let b = tx.create_bucket(b"widgets")?;
+      tx.create_bucket(b"widgets")?;
       Ok(())
     })?;
     todo!("Do we really want the api to return the bucket?")
@@ -729,7 +729,7 @@ mod tests {
       for i in (0..count).step_by(100) {
         for j in (i..i + 100).step_by(2) {
           let k = j.to_be_bytes();
-          b.put(&k, &value)?;
+          b.put(k, value)?;
         }
       }
       Ok(())
@@ -739,7 +739,7 @@ mod tests {
       let mut c = b.cursor();
       for i in 0..count {
         let seek = i.to_be_bytes();
-        let sought = c.seek(&seek);
+        let sought = c.seek(seek);
 
         if i == count - 1 {
           assert!(sought.is_none(), "expected None");
@@ -843,8 +843,8 @@ mod tests {
     let mut db = TestDb::new()?;
     db.update(|mut tx| {
       let mut b = tx.create_bucket(b"widgets")?;
-      b.put(b"foo", &[])?;
-      b.put(b"bar", &[])?;
+      b.put("foo", [])?;
+      b.put("bar", [])?;
       Ok(())
     })?;
     let tx = db.begin()?;
@@ -865,7 +865,7 @@ mod tests {
     db.update(|mut tx| {
       let mut b = tx.create_bucket(b"widgets")?;
       for i in 1..1000u64 {
-        b.put(bytemuck::bytes_of(&i), &[])?;
+        b.put(bytemuck::bytes_of(&i), [])?;
       }
       Ok(())
     })?;
@@ -877,7 +877,7 @@ mod tests {
       let mut c = b.cursor();
       let mut kv = c.first();
       let mut n = 0;
-      while let Some((k, _)) = kv {
+      while kv.is_some() {
         n += 1;
         kv = c.next();
       }
@@ -892,7 +892,7 @@ mod tests {
     db.update(|mut tx| {
       let mut b = tx.create_bucket(b"widgets")?;
       for i in 0..1000u64 {
-        b.put(bytemuck::bytes_of(&i), &[])?;
+        b.put(bytemuck::bytes_of(&i), [])?;
       }
       Ok(())
     })?;
@@ -904,7 +904,7 @@ mod tests {
       let mut c = b.cursor();
       let mut kv = c.last();
       let mut n = 0;
-      while let Some((k, _)) = kv {
+      while kv.is_some() {
         n += 1;
         kv = c.prev();
       }

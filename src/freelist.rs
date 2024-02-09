@@ -132,7 +132,6 @@ impl MappedFreeListPage {
 
 #[derive(Debug)]
 pub struct Freelist {
-  ids: Vec<PgId>,
   allocs: HashMap<PgId, TxId>,
   pub pending: HashMap<TxId, TxPending>,
   cache: HashSet<PgId>,
@@ -167,7 +166,6 @@ pub(crate) fn merge_pids(dst: &mut [PgId], a: &[PgId], b: &[PgId]) {
 impl Freelist {
   pub(crate) fn new() -> Self {
     Freelist {
-      ids: Vec::new(),
       allocs: HashMap::new(),
       pending: HashMap::new(),
       cache: HashSet::new(),
@@ -444,7 +442,6 @@ impl Freelist {
   /// read initializes the freelist from a freelist page.
   pub(crate) fn read(&mut self, page: &MappedFreeListPage) {
     // Copy the list of page ids from the freelist.
-    self.ids.clear();
     let data = page.page_ids();
     self.read_ids(data);
   }
@@ -515,7 +512,6 @@ mod tests {
   use crate::common::{PgId, TxId};
   use crate::freelist::{Freelist, MappedFreeListPage, TxPending};
   use crate::test_support::mapped_page;
-  use bumpalo::Bump;
   use itertools::Itertools;
   use std::collections::HashSet;
   use std::default::Default;
@@ -710,7 +706,6 @@ mod tests {
         want_free: vec![pg(4), pg(9), pg(10)],
       },
     ];
-    let bump = Bump::new();
 
     for c in release_range_tests.iter() {
       let mut f = Freelist::new();
@@ -718,7 +713,7 @@ mod tests {
         .pages_in
         .iter()
         .flat_map(|p| u64::from(p.id)..(u64::from(p.id) + p.n))
-        .map(|id| pg(id))
+        .map(pg)
         .collect();
       f.read_ids(&ids);
 
@@ -786,12 +781,12 @@ mod tests {
     f.read_ids(&[pg(12), pg(39)]);
     f.pending
       .entry(tx(100))
-      .or_insert_with(|| TxPending::new())
+      .or_insert_with(TxPending::new)
       .ids
       .extend_from_slice(&[pg(28), pg(11)]);
     f.pending
       .entry(tx(101))
-      .or_insert_with(|| TxPending::new())
+      .or_insert_with(TxPending::new)
       .ids
       .extend_from_slice(&[pg(3)]);
 
