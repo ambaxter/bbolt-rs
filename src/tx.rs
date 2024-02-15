@@ -916,7 +916,6 @@ impl<'tx> TxRwImpl<'tx> {
     bump: SyncReusable<Pin<Box<PinBump>>>, lock: RwLockUpgradableReadGuard<'tx, DbShared>,
     mut meta: Meta,
   ) -> TxRwImpl<'tx> {
-    meta.set_txid(meta.txid() + 1);
     let page_size = meta.page_size() as usize;
     let inline_bucket = meta.root();
     let mut uninit: MaybeUninit<TxRwImpl<'tx>> = MaybeUninit::uninit();
@@ -1823,6 +1822,9 @@ mod test {
   #[test]
   #[ignore]
   fn test_tx_release_range() -> crate::Result<()> {
+    // Set initial mmap size well beyond the limit we will hit in this
+    // test, since we are testing with long running read transactions
+    // and will deadlock if db.grow is triggered.
     let initial_mmap_size = DEFAULT_PAGE_SIZE.bytes() as u64 * 100;
     let db_options = DBOptions::builder()
       .initial_mmap_size(initial_mmap_size)
@@ -1871,24 +1873,32 @@ mod test {
     let hold2 = open_read_tx();
     del("k3");
     let rtx2 = open_read_tx();
-    let hold3 = open_read_tx();
     del("k1");
-    let hold4 = open_read_tx();
+    let hold3 = open_read_tx();
     del("k2");
+    let hold4 = open_read_tx();
+    put("k4", "v4");
     let hold5 = open_read_tx();
 
+    // Close the read transactions we established to hold a portion of the pages in pending state.
     rollback(hold1);
     rollback(hold2);
     rollback(hold3);
     rollback(hold4);
     rollback(hold5);
 
+    // Execute a write transaction to trigger a releaseRange operation in the db
+    // that will free multiple ranges between the remaining open read transactions, now that the
+    // holds have been rolled back.
     put("k4", "v4");
+
+    // Check that all long running reads still read correct values.
     check_with_read_tx(&rtx1, "k1", Some("v1".as_bytes()));
     check_with_read_tx(&rtx2, "k2", Some("v2".as_bytes()));
-
     rollback(rtx1);
     rollback(rtx2);
+
+    // Check that the final state is correct.
     let rtx7 = open_read_tx();
     check_with_read_tx(&rtx7, "k1", None);
     check_with_read_tx(&rtx7, "k2", None);

@@ -5,11 +5,12 @@ use crate::common::{PgId, TxId};
 use bytemuck::Contiguous;
 use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
+use std::fmt::Formatter;
 use std::iter::{repeat, zip};
 use std::marker::PhantomData;
-use std::mem;
 use std::ops::{Deref, DerefMut};
 use std::slice::{from_raw_parts, from_raw_parts_mut};
+use std::{fmt, mem};
 
 pub struct MappedFreeListPage {
   bytes: *mut u8,
@@ -132,12 +133,23 @@ impl MappedFreeListPage {
 
 #[derive(Debug)]
 pub struct Freelist {
-  allocs: HashMap<PgId, TxId>,
-  pub pending: HashMap<TxId, TxPending>,
-  cache: HashSet<PgId>,
+  pub(crate) allocs: HashMap<PgId, TxId>,
+  pub(crate) pending: HashMap<TxId, TxPending>,
+  pub(crate) cache: HashSet<PgId>,
   free_maps: HashMap<u64, HashSet<PgId>>,
   forward_map: HashMap<PgId, u64>,
   backward_map: HashMap<PgId, u64>,
+}
+
+impl fmt::Display for Freelist {
+  fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    writeln!(f, "allocs: {:?}", self.allocs)?;
+    writeln!(f, "pending: {:?}", self.pending)?;
+    writeln!(f, "cache: {:?}", self.cache)?;
+    writeln!(f, "free_maps: {:?}", self.free_maps)?;
+    writeln!(f, "forward_map: {:?}", self.forward_map)?;
+    writeln!(f, "backward_map: {:?}", self.backward_map)
+  }
 }
 
 #[derive(Clone, Debug)]

@@ -962,6 +962,7 @@ impl<'tx> DbIApi<'tx> for DbShared {
 
   fn remove_rw_tx(&self, tx_stats: Arc<TxStats>) {
     let mut state = self.db_state.lock();
+
     let page_size = self.backend.page_size();
     let freelist = self.backend.freelist();
     let free_list_free_n = freelist.free_count();
@@ -1356,19 +1357,27 @@ impl DB {
   }
 
   pub(crate) fn begin_tx(&self) -> crate::Result<TxImpl> {
-    let state = self.db_state.lock();
+    let mut state = self.db_state.lock();
     DB::require_open(&state)?;
     let lock = self.db.read();
     let bump = self.bump_pool.pull();
-    Ok(TxImpl::new(bump, lock, state.current_meta))
+    let meta = state.current_meta;
+    let txid = meta.txid();
+    state.txs.push(txid);
+    Ok(TxImpl::new(bump, lock, meta))
   }
 
   pub(crate) fn begin_rw_tx(&mut self) -> crate::Result<TxRwImpl> {
     let lock = self.db.upgradable_read();
-    let state = self.db_state.lock();
+    lock.free_pages();
+    let mut state = self.db_state.lock();
     DB::require_open(&state)?;
     let bump = self.bump_pool.pull();
-    Ok(TxRwImpl::new(bump, lock, state.current_meta))
+    let mut meta = state.current_meta;
+    let txid = meta.txid() + 1;
+    meta.set_txid(txid);
+    state.rwtx = Some(txid);
+    Ok(TxRwImpl::new(bump, lock, meta))
   }
 }
 
