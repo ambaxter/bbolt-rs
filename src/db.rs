@@ -19,9 +19,10 @@ use aligners::{alignment, AlignedBytes};
 use fs4::FileExt;
 use memmap2::{Advice, MmapOptions, MmapRaw};
 use parking_lot::{Mutex, MutexGuard, RwLock};
+use std::cell::RefCell;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::ops::DerefMut;
+use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
@@ -428,15 +429,33 @@ impl DBBackend for MemBackend {
   }
 }
 
+struct FileState {
+  file: File,
+  /// current on disk file size
+  file_size: u64,
+}
+
+impl Deref for FileState {
+  type Target = File;
+
+  fn deref(&self) -> &Self::Target {
+    &self.file
+  }
+}
+
+impl DerefMut for FileState {
+  fn deref_mut(&mut self) -> &mut Self::Target {
+    &mut self.file
+  }
+}
+
 pub struct FileBackend {
   path: PathBuf,
-  file: Mutex<File>,
+  file: Mutex<FileState>,
   page_size: usize,
   mmap: Option<MmapRaw>,
   freelist: Option<Mutex<Freelist>>,
   alloc_size: u64,
-  /// current on disk file size
-  file_size: AtomicU64,
   data_size: u64,
   use_mlock: bool,
   grow_async: bool,
@@ -593,7 +612,7 @@ impl DBBackend for FileBackend {
 
   fn grow(&self, mut size: u64) -> crate::Result<()> {
     // Ignore if the new size is less than available file size.
-    let file_size = self.file_size.load(Ordering::Acquire);
+    let file_size = self.file.lock().file_size;
     if size <= file_size {
       return Ok(());
     }
@@ -624,7 +643,7 @@ impl DBBackend for FileBackend {
     }
 
     // TODO: This is overkill. Move file_size behind the file mutex
-    self.file_size.store(size, Ordering::Release);
+    self.file.lock().file_size = size;
     Ok(())
   }
 
@@ -648,7 +667,9 @@ impl DBBackend for FileBackend {
       tx.cell.bound().own_in();
     }
 
-    let mmap = MmapOptions::new().len(size as usize).map_raw(&*file_lock)?;
+    let mmap = MmapOptions::new()
+      .len(size as usize)
+      .map_raw(&**file_lock)?;
     #[cfg(unix)]
     {
       mmap.advise(Advice::Random)?;
@@ -656,7 +677,6 @@ impl DBBackend for FileBackend {
         mmap.lock()?;
       }
     }
-
 
     self.mmap = Some(mmap);
 
@@ -1220,12 +1240,11 @@ impl DB {
     }
     let mut backend = FileBackend {
       path,
-      file: Mutex::new(file),
+      file: Mutex::new(FileState { file, file_size }),
       page_size,
       mmap: Some(mmap),
       freelist: None,
       alloc_size: DEFAULT_ALLOC_SIZE.bytes() as u64,
-      file_size: file_size.into(),
       data_size,
       use_mlock: db_options.mlock(),
       grow_async: !db_options.no_grow_sync(),

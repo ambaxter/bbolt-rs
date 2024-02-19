@@ -1,6 +1,7 @@
 use crate::arch::size::MAX_ALLOC_SIZE;
 use crate::bucket::{BucketCell, BucketIApi, BucketImpl, BucketRwCell, BucketRwIApi, BucketRwImpl};
 use crate::common::bump::PinBump;
+use crate::common::defaults::IGNORE_NO_SYNC;
 use crate::common::lock::{LockGuard, PinLockGuard};
 use crate::common::memory::BCell;
 use crate::common::meta::{MappedMetaPage, Meta, MetaPage};
@@ -31,7 +32,6 @@ use std::slice::from_raw_parts_mut;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use crate::common::defaults::IGNORE_NO_SYNC;
 
 pub trait TxApi<'tx>: TxCheck<'tx> {
   /// ID returns the transaction id.
@@ -461,7 +461,6 @@ pub(crate) trait TxIApi<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
     };
     Ok(Some(info))
   }
-
 }
 
 pub(crate) trait TxRwIApi<'tx>: TxIApi<'tx> + TxICheck<'tx> {
@@ -703,7 +702,6 @@ impl<'tx> TxRwIApi<'tx> for TxRwCell<'tx> {
     if !no_sync || IGNORE_NO_SYNC {
       db.fsync()?;
     }
-
 
     for page in pages.into_iter() {
       if page.overflow == 0 {
