@@ -28,8 +28,8 @@ Features:
 - [ ] Logging capabilities
 - [x] Follow Clippy guidance
 - [x] Remove commented out trace
-- [ ] Optional fsync
-- [ ] Optional mlock
+- [x] Optional fsync
+- [x] Optional mlock
 - [ ] Strict mode
 - [x] impl trait for public apis?
 - [ ] blag post

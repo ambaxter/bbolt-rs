@@ -609,10 +609,18 @@ impl DBBackend for FileBackend {
     // https://github.com/boltdb/bolt/issues/284
     if self.grow_async && !self.read_only {
       let file_lock = self.file.lock();
+      #[cfg(unix)]
+      if self.use_mlock {
+        self.mmap.as_ref().unwrap().unlock()?;
+      }
       if cfg!(not(target_os = "windows")) {
         file_lock.set_len(size)?;
       }
       file_lock.sync_all()?;
+      #[cfg(unix)]
+      if self.use_mlock {
+        self.mmap.as_ref().unwrap().lock()?;
+      }
     }
 
     // TODO: This is overkill. Move file_size behind the file mutex
@@ -633,6 +641,7 @@ impl DBBackend for FileBackend {
 
     size = mmap_size(self.page_size, size)?;
     if let Some(mmap) = self.mmap.take() {
+      #[cfg(unix)]
       if self.use_mlock {
         mmap.unlock()?;
       }
@@ -640,10 +649,14 @@ impl DBBackend for FileBackend {
     }
 
     let mmap = MmapOptions::new().len(size as usize).map_raw(&*file_lock)?;
-    mmap.advise(Advice::Random)?;
-    if self.use_mlock {
-      mmap.lock()?;
+    #[cfg(unix)]
+    {
+      mmap.advise(Advice::Random)?;
+      if self.use_mlock {
+        mmap.lock()?;
+      }
     }
+
 
     self.mmap = Some(mmap);
 
@@ -832,7 +845,7 @@ pub struct DbShared {
   pub(crate) db_state: Arc<Mutex<DbState>>,
   page_pool: Mutex<Vec<AlignedBytes<alignment::Page>>>,
   pub(crate) backend: Box<dyn DBBackend>,
-  options: DBOptions,
+  pub(crate) options: DBOptions,
 }
 
 // Safe because this is all protected by RwLock
@@ -1064,7 +1077,7 @@ pub struct DBOptions {
 
 impl DBOptions {
   #[inline]
-  fn timeout(&self) -> Option<Duration> {
+  pub(crate) fn timeout(&self) -> Option<Duration> {
     if cfg!(use_timeout) {
       self.timeout
     } else {
@@ -1073,17 +1086,17 @@ impl DBOptions {
   }
 
   #[inline]
-  fn no_grow_sync(&self) -> bool {
+  pub(crate) fn no_grow_sync(&self) -> bool {
     self.no_grow_sync
   }
 
   #[inline]
-  fn no_freelist_sync(&self) -> bool {
+  pub(crate) fn no_freelist_sync(&self) -> bool {
     self.no_freelist_sync
   }
 
   #[inline]
-  fn preload_freelist(&self) -> bool {
+  pub(crate) fn preload_freelist(&self) -> bool {
     if self.read_only {
       self.preload_freelist
     } else {
@@ -1092,22 +1105,22 @@ impl DBOptions {
   }
 
   #[inline]
-  fn initial_map_size(&self) -> Option<u64> {
+  pub(crate) fn initial_map_size(&self) -> Option<u64> {
     self.initial_mmap_size
   }
 
   #[inline]
-  fn page_size(&self) -> Option<usize> {
+  pub(crate) fn page_size(&self) -> Option<usize> {
     self.page_size
   }
 
   #[inline]
-  fn no_sync(&self) -> bool {
+  pub(crate) fn no_sync(&self) -> bool {
     self.no_sync
   }
 
   #[inline]
-  fn mlock(&self) -> bool {
+  pub(crate) fn mlock(&self) -> bool {
     if cfg!(use_mlock) {
       self.mlock
     } else {
@@ -1116,7 +1129,7 @@ impl DBOptions {
   }
 
   #[inline]
-  fn read_only(&self) -> bool {
+  pub(crate) fn read_only(&self) -> bool {
     self.read_only
   }
 
@@ -1191,15 +1204,20 @@ impl DB {
       .offset(0)
       .len(data_size as usize)
       .to_owned();
-    let open_options = options.clone();
     let mmap = if read_only {
       file.lock_shared()?;
-      open_options.map_raw_read_only(&file)?
+      options.map_raw_read_only(&file)?
     } else {
       file.lock_exclusive()?;
-      open_options.map_raw(&file)?
+      options.map_raw(&file)?
     };
-    mmap.advise(Advice::Random)?;
+    #[cfg(unix)]
+    {
+      mmap.advise(Advice::Random)?;
+      if db_options.mlock() {
+        mmap.lock()?;
+      }
+    }
     let mut backend = FileBackend {
       path,
       file: Mutex::new(file),
@@ -1209,8 +1227,8 @@ impl DB {
       alloc_size: DEFAULT_ALLOC_SIZE.bytes() as u64,
       file_size: file_size.into(),
       data_size,
-      use_mlock: false,
-      grow_async: false,
+      use_mlock: db_options.mlock(),
+      grow_async: !db_options.no_grow_sync(),
       read_only,
     };
     let meta = backend.meta();

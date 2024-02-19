@@ -31,6 +31,7 @@ use std::slice::from_raw_parts_mut;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use crate::common::defaults::IGNORE_NO_SYNC;
 
 pub trait TxApi<'tx>: TxCheck<'tx> {
   /// ID returns the transaction id.
@@ -425,10 +426,8 @@ pub(crate) trait TxIApi<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
 
   /// See [TxApi::rollback]
   fn api_rollback(self) -> crate::Result<()> {
-    todo!()
+    self.rollback()
   }
-
-  fn non_physical_rollback(self) -> crate::Result<()>;
 
   fn rollback(self) -> crate::Result<()> {
     self.split_r_mut().is_rollback = true;
@@ -463,7 +462,6 @@ pub(crate) trait TxIApi<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
     Ok(Some(info))
   }
 
-  fn close(self) -> crate::Result<()>;
 }
 
 pub(crate) trait TxRwIApi<'tx>: TxIApi<'tx> + TxICheck<'tx> {
@@ -510,6 +508,7 @@ pub struct TxR<'tx> {
 pub struct TxW<'tx> {
   pages: HashMap<'tx, PgId, SelfOwned<AlignedBytes<alignment::Page>, MutPage<'tx>>>,
   commit_handlers: BVec<'tx, Box<dyn FnOnce() + 'tx>>,
+  no_sync: bool,
   p: PhantomData<&'tx u8>,
 }
 
@@ -555,14 +554,6 @@ impl<'tx> SplitRef<TxR<'tx>, BucketCell<'tx>, TxW<'tx>> for TxCell<'tx> {
 
 impl<'tx> TxIApi<'tx> for TxCell<'tx> {
   type BucketType = BucketCell<'tx>;
-
-  fn non_physical_rollback(self) -> crate::Result<()> {
-    todo!()
-  }
-
-  fn close(self) -> crate::Result<()> {
-    todo!()
-  }
 }
 
 #[derive(Copy, Clone)]
@@ -604,14 +595,6 @@ impl<'tx> SplitRef<TxR<'tx>, BucketRwCell<'tx>, TxW<'tx>> for TxRwCell<'tx> {
 
 impl<'tx> TxIApi<'tx> for TxRwCell<'tx> {
   type BucketType = BucketRwCell<'tx>;
-
-  fn non_physical_rollback(self) -> crate::Result<()> {
-    todo!()
-  }
-
-  fn close(self) -> crate::Result<()> {
-    todo!()
-  }
 }
 
 impl<'tx> TxRwIApi<'tx> for TxRwCell<'tx> {
@@ -677,7 +660,7 @@ impl<'tx> TxRwIApi<'tx> for TxRwCell<'tx> {
   }
 
   fn write(self) -> crate::Result<()> {
-    let (pages, db, page_size) = {
+    let (pages, db, page_size, no_sync) = {
       let mut tx = self.cell.borrow_mut();
       let mut swap_pages = HashMap::with_capacity_in(0, tx.r.b);
       // Clear out page cache early.
@@ -686,7 +669,7 @@ impl<'tx> TxRwIApi<'tx> for TxRwCell<'tx> {
 
       // Sort pages by id.
       pages.sort_by_key(|page| page.id);
-      (pages, tx.r.db, tx.r.page_size)
+      (pages, tx.r.db, tx.r.page_size, tx.w.no_sync)
     };
 
     let r = self.split_r();
@@ -717,8 +700,10 @@ impl<'tx> TxRwIApi<'tx> for TxRwCell<'tx> {
       }
     }
 
-    // TODO: skip fsync?
-    db.fsync()?;
+    if !no_sync || IGNORE_NO_SYNC {
+      db.fsync()?;
+    }
+
 
     for page in pages.into_iter() {
       if page.overflow == 0 {
@@ -729,24 +714,25 @@ impl<'tx> TxRwIApi<'tx> for TxRwCell<'tx> {
   }
 
   fn write_meta(self) -> crate::Result<()> {
-    let r = self.split_r();
-    let page_size = r.page_size;
+    let tx = self.cell.borrow();
+    let page_size = tx.r.page_size;
 
     let layout = Layout::from_size_align(page_size, mem::align_of::<MetaPage>()).unwrap();
-    let ptr = r.b.alloc_layout(layout);
+    let ptr = tx.r.b.alloc_layout(layout);
 
     let mut meta_page = unsafe { MappedMetaPage::new(ptr.as_ptr()) };
-    r.meta.write(&mut meta_page);
+    tx.r.meta.write(&mut meta_page);
 
-    let db = r.db;
+    let db = tx.r.db;
     let offset = meta_page.page.id.0 * page_size as u64;
     let buf = unsafe { from_raw_parts_mut(ptr.as_ptr(), page_size) };
     db.write_all_at(buf, offset)?;
 
-    //TODO: Ignore sync
-    db.fsync()?;
+    if !tx.w.no_sync || IGNORE_NO_SYNC {
+      db.fsync()?;
+    }
 
-    r.stats.inc_write(1);
+    tx.r.stats.inc_write(1);
 
     Ok(())
   }
@@ -845,9 +831,7 @@ impl<'tx> TxApi<'tx> for TxImpl<'tx> {
   }
 
   fn rollback(self) -> crate::Result<()> {
-    let _ = self.tx.rollback();
-
-    Ok(())
+    self.tx.rollback()
   }
 
   fn page(&self, id: PgId) -> crate::Result<Option<PageInfo>> {
@@ -916,6 +900,7 @@ impl<'tx> TxRwImpl<'tx> {
     bump: SyncReusable<Pin<Box<PinBump>>>, lock: RwLockUpgradableReadGuard<'tx, DbShared>,
     mut meta: Meta,
   ) -> TxRwImpl<'tx> {
+    let no_sync = lock.options.no_sync();
     let page_size = meta.page_size() as usize;
     let inline_bucket = meta.root();
     let mut uninit: MaybeUninit<TxRwImpl<'tx>> = MaybeUninit::uninit();
@@ -926,6 +911,7 @@ impl<'tx> TxRwImpl<'tx> {
       addr_of_mut!((*ptr).db).write(AliasableBox::from_unique_pin(Box::pin(PinLockGuard::new(
         lock,
       ))));
+
       let db = Pin::as_ref(&*addr_of!((*ptr).db)).guard().get_ref();
       let tx = Rc::new_cyclic(|weak| {
         let r = TxR {
@@ -940,6 +926,7 @@ impl<'tx> TxRwImpl<'tx> {
         let w = TxW {
           pages: HashMap::with_capacity_in(0, bump),
           commit_handlers: BVec::with_capacity_in(0, bump),
+          no_sync,
           p: Default::default(),
         };
         let bucket = BucketRwCell::new_in(bump, inline_bucket, weak.clone(), None);
