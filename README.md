@@ -23,7 +23,7 @@ Features:
 ### General
 - [x] Read-only DB access
 - [x] Rework Meta storage in DbShared
-- [ ] Optional freelist loading
+- [x] Optional freelist loading
 - [ ] Quick Check analog
 - [ ] Logging capabilities
 - [x] Follow Clippy guidance
@@ -32,6 +32,7 @@ Features:
 - [x] Optional mlock
 - [ ] Strict mode
 - [x] impl trait for public apis?
+- [ ] Add try_begin(rw), try_begin(rw)_for, and try_begin(rw)_until to prevent deadlocks
 - [ ] blag post
 
 ### Open Questions

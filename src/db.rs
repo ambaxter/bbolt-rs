@@ -26,7 +26,7 @@ use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use std::{fs, io, mem};
 use typed_builder::TypedBuilder;
@@ -342,7 +342,7 @@ impl DBBackend for ClosedBackend {
 
 struct MemBackend {
   mmap: Mutex<AlignedBytes<alignment::Page>>,
-  freelist: Option<Mutex<Freelist>>,
+  freelist: OnceLock<Mutex<Freelist>>,
   page_size: usize,
   alloc_size: u64,
   /// current on disk file size
@@ -425,7 +425,17 @@ impl DBBackend for MemBackend {
   }
 
   fn freelist(&self) -> MutexGuard<Freelist> {
-    self.freelist.as_ref().unwrap().lock()
+    self
+      .freelist
+      .get_or_init(|| {
+        let meta = self.meta();
+        let freelist_pgid = meta.free_list();
+        let refpage = self.page(freelist_pgid);
+        let freelist_page = MappedFreeListPage::coerce_ref(&refpage).unwrap();
+        let freelist = freelist_page.read();
+        Mutex::new(freelist)
+      })
+      .lock()
   }
 }
 
@@ -454,7 +464,7 @@ pub struct FileBackend {
   file: Mutex<FileState>,
   page_size: usize,
   mmap: Option<MmapRaw>,
-  freelist: Option<Mutex<Freelist>>,
+  freelist: OnceLock<Mutex<Freelist>>,
   alloc_size: u64,
   data_size: u64,
   use_mlock: bool,
@@ -706,7 +716,17 @@ impl DBBackend for FileBackend {
   }
 
   fn freelist(&self) -> MutexGuard<Freelist> {
-    self.freelist.as_ref().unwrap().lock()
+    self
+      .freelist
+      .get_or_init(|| {
+        let meta = self.meta();
+        let freelist_pgid = meta.free_list();
+        let refpage = self.page(freelist_pgid);
+        let freelist_page = MappedFreeListPage::coerce_ref(&refpage).unwrap();
+        let freelist = freelist_page.read();
+        Mutex::new(freelist)
+      })
+      .lock()
   }
 }
 
@@ -1205,7 +1225,7 @@ impl DB {
         .unwrap_or(DEFAULT_PAGE_SIZE.bytes() as usize);
       DB::init(&path, page_size)?;
     }
-    let read_only = db_options.read_only;
+    let read_only = db_options.read_only();
     let mut file = fs::OpenOptions::new()
       .write(!read_only)
       .create(!read_only)
@@ -1243,20 +1263,18 @@ impl DB {
       file: Mutex::new(FileState { file, file_size }),
       page_size,
       mmap: Some(mmap),
-      freelist: None,
+      freelist: OnceLock::new(),
       alloc_size: DEFAULT_ALLOC_SIZE.bytes() as u64,
       data_size,
       use_mlock: db_options.mlock(),
       grow_async: !db_options.no_grow_sync(),
       read_only,
     };
+    let mut free_count = 0u64;
+    if db_options.preload_freelist() {
+      free_count = backend.freelist().free_count();
+    }
     let meta = backend.meta();
-    let freelist_pgid = meta.free_list();
-    let refpage = backend.page(freelist_pgid);
-    let freelist_page = MappedFreeListPage::coerce_ref(&refpage).unwrap();
-    let freelist = freelist_page.read();
-    let free_count = freelist.free_count();
-    backend.freelist = Some(Mutex::new(freelist));
     let db_state = Arc::new(Mutex::new(DbState::new(meta)));
     let stats = DbStats {
       free_page_n: (free_count as i64).into(),
@@ -1305,21 +1323,16 @@ impl DB {
         .copy_from_slice(&mmap);
       mmap = new_mmap;
     }
-    let mut backend = MemBackend {
+    let backend = MemBackend {
       mmap: Mutex::new(mmap),
-      freelist: None,
+      freelist: OnceLock::new(),
       page_size,
       alloc_size: DEFAULT_ALLOC_SIZE.bytes() as u64,
       file_size,
       data_size,
     };
+    let free_count = backend.freelist().free_count();
     let meta = backend.meta();
-    let freelist_pgid = meta.free_list();
-    let refpage = backend.page(freelist_pgid);
-    let freelist_page = MappedFreeListPage::coerce_ref(&refpage).unwrap();
-    let freelist = freelist_page.read();
-    let free_count = freelist.free_count();
-    backend.freelist = Some(Mutex::new(freelist));
     let db_state = Arc::new(Mutex::new(DbState::new(meta)));
     let stats = DbStats {
       free_page_n: (free_count as i64).into(),
