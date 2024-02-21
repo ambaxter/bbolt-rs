@@ -18,7 +18,7 @@ use crate::{Error, TxApi, TxRwApi};
 use aligners::{alignment, AlignedBytes};
 use fs4::FileExt;
 use memmap2::{Advice, MmapOptions, MmapRaw};
-use parking_lot::{Mutex, MutexGuard, RwLock};
+use parking_lot::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockUpgradableReadGuard};
 use std::cell::RefCell;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::{fs, io, mem};
 use typed_builder::TypedBuilder;
 
@@ -59,6 +59,12 @@ where
   /// else the database will not reclaim old pages.
   fn begin(&self) -> crate::Result<impl TxApi>;
 
+  fn try_begin(&self) -> crate::Result<Option<impl TxApi>>;
+
+  fn try_begin_for(&self, duration: Duration) -> crate::Result<Option<impl TxApi>>;
+
+  fn try_begin_until(&self, instant: Instant) -> crate::Result<Option<impl TxApi>>;
+
   /// View executes a function within the context of a managed read-only transaction.
   /// Any error that is returned from the function is returned from the View() method.
   ///
@@ -89,6 +95,12 @@ pub trait DbRwAPI: DbApi {
   /// IMPORTANT: You must close read-only transactions after you are finished or
   /// else the database will not reclaim old pages.
   fn begin_rw(&mut self) -> crate::Result<impl TxRwApi>;
+
+  fn try_begin_rw(&self) -> crate::Result<Option<impl TxRwApi>>;
+
+  fn try_begin_rw_for(&self, duration: Duration) -> crate::Result<Option<impl TxRwApi>>;
+
+  fn try_begin_rw_until(&self, instant: Instant) -> crate::Result<Option<impl TxRwApi>>;
 
   /// Update executes a function within the context of a read-write managed transaction.
   /// If no error is returned from the function then the transaction is committed.
@@ -1417,6 +1429,23 @@ impl DB {
     Ok(TxImpl::new(bump, lock, meta))
   }
 
+  pub(crate) fn try_begin_tx<'a, F>(&'a self, f: F) -> crate::Result<Option<TxImpl>>
+  where
+    F: Fn() -> Option<RwLockReadGuard<'a, DbShared>>,
+  {
+    let mut state = self.db_state.lock();
+    DB::require_open(&state)?;
+    if let Some(lock) = f() {
+      let bump = self.bump_pool.pull();
+      let meta = state.current_meta;
+      let txid = meta.txid();
+      state.txs.push(txid);
+      Ok(Some(TxImpl::new(bump, lock, meta)))
+    } else {
+      Ok(None)
+    }
+  }
+
   pub(crate) fn begin_rw_tx(&mut self) -> crate::Result<TxRwImpl> {
     let lock = self.db.upgradable_read();
     lock.free_pages();
@@ -1428,6 +1457,25 @@ impl DB {
     meta.set_txid(txid);
     state.rwtx = Some(txid);
     Ok(TxRwImpl::new(bump, lock, meta))
+  }
+
+  pub(crate) fn try_begin_rw_tx<'a, F>(&'a self, f: F) -> crate::Result<Option<TxRwImpl>>
+  where
+    F: Fn() -> Option<RwLockUpgradableReadGuard<'a, DbShared>>,
+  {
+    if let Some(lock) = f() {
+      lock.free_pages();
+      let mut state = self.db_state.lock();
+      DB::require_open(&state)?;
+      let bump = self.bump_pool.pull();
+      let mut meta = state.current_meta;
+      let txid = meta.txid() + 1;
+      meta.set_txid(txid);
+      state.rwtx = Some(txid);
+      Ok(Some(TxRwImpl::new(bump, lock, meta)))
+    } else {
+      Ok(None)
+    }
   }
 }
 
@@ -1448,6 +1496,18 @@ impl DbApi for DB {
     self.begin_tx()
   }
 
+  fn try_begin(&self) -> crate::Result<Option<impl TxApi>> {
+    self.try_begin_tx(|| self.db.try_read())
+  }
+
+  fn try_begin_for(&self, duration: Duration) -> crate::Result<Option<impl TxApi>> {
+    self.try_begin_tx(|| self.db.try_read_for(duration))
+  }
+
+  fn try_begin_until(&self, instant: Instant) -> crate::Result<Option<impl TxApi>> {
+    self.try_begin_tx(|| self.db.try_read_until(instant))
+  }
+
   fn view<'tx, F: FnMut(TxRef<'tx>) -> crate::Result<()>>(
     &'tx self, mut f: F,
   ) -> crate::Result<()> {
@@ -1466,6 +1526,18 @@ impl DbApi for DB {
 impl DbRwAPI for DB {
   fn begin_rw(&mut self) -> crate::Result<impl TxRwApi> {
     self.begin_rw_tx()
+  }
+
+  fn try_begin_rw(&self) -> crate::Result<Option<impl TxRwApi>> {
+    self.try_begin_rw_tx(|| self.db.try_upgradable_read())
+  }
+
+  fn try_begin_rw_for(&self, duration: Duration) -> crate::Result<Option<impl TxRwApi>> {
+    self.try_begin_rw_tx(|| self.db.try_upgradable_read_for(duration))
+  }
+
+  fn try_begin_rw_until(&self, instant: Instant) -> crate::Result<Option<impl TxRwApi>> {
+    self.try_begin_rw_tx(|| self.db.try_upgradable_read_until(instant))
   }
 
   fn update<'tx, F: FnMut(TxRwRef<'tx>) -> crate::Result<()>>(
