@@ -5,14 +5,10 @@ fn main() -> bbolt_rs::Result<()> {
   println!("Hello, world!");
 
   let mut db = DB::open("test.db")?;
-  for _ in 0..5 {
+  for _ in 0..1 {
     widgets(&mut db)?;
-    db.clone().close();
   }
   db.begin().unwrap().check();
-  let db2 = db.clone();
-  db.close();
-  //let _ = db2.begin()?;
   println!("Goodbye, world!");
   Ok(())
 }

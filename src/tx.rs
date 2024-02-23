@@ -1,9 +1,11 @@
 use crate::arch::size::MAX_ALLOC_SIZE;
 use crate::bucket::{BucketCell, BucketIApi, BucketImpl, BucketRwCell, BucketRwIApi, BucketRwImpl};
 use crate::common::bump::PinBump;
+use crate::common::cell::{Ref, RefCell, RefMut};
 use crate::common::defaults::IGNORE_NO_SYNC;
+use crate::common::inode::INode;
 use crate::common::lock::{LockGuard, PinLockGuard};
-use crate::common::memory::BCell;
+use crate::common::memory::{BCell, CodSlice, VecOrSplit};
 use crate::common::meta::{MappedMetaPage, Meta, MetaPage};
 use crate::common::page::{CoerciblePage, MutPage, Page, PageInfo, RefPage};
 use crate::common::pool::SyncReusable;
@@ -12,15 +14,16 @@ use crate::common::tree::{MappedBranchPage, TreePage};
 use crate::common::{BVec, HashMap, PgId, SplitRef, TxId};
 use crate::cursor::{CursorImpl, CursorRwIApi, CursorRwImpl, InnerCursor};
 use crate::db::{AllocateResult, DbIApi, DbMutIApi, DbShared};
+use crate::node::{NodeRwCell, NodeW};
 use crate::tx::check::TxICheck;
 use crate::TxCheck;
 use aliasable::boxed::AliasableBox;
 use aligners::{alignment, AlignedBytes};
 use bumpalo::Bump;
 use parking_lot::{Mutex, RwLockReadGuard, RwLockUpgradableReadGuard};
+use size::Size;
 use std::alloc::Layout;
 use std::borrow::Cow;
-use std::cell::{Ref, RefMut};
 use std::marker::PhantomData;
 use std::mem;
 use std::mem::MaybeUninit;
@@ -29,7 +32,7 @@ use std::pin::Pin;
 use std::ptr::{addr_of, addr_of_mut};
 use std::rc::Rc;
 use std::slice::from_raw_parts_mut;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -1044,6 +1047,7 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
   }
 
   fn commit(mut self) -> crate::Result<()> {
+    let precommitted_bytes = self.tx.split_r().b.allocated_bytes();
     let start_time = Instant::now();
     self.tx.root_bucket().rebalance();
     {
@@ -1124,7 +1128,7 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
     for f in commit_handlers.into_iter() {
       f();
     }
-    let bytes = tx.r.b.allocated_bytes();
+    let committed_bytes = tx.r.b.allocated_bytes();
     Ok(())
   }
 
@@ -1496,6 +1500,7 @@ pub(crate) mod check {
 
 #[cfg(test)]
 mod test {
+  use crate::common::cell::RefCell;
   use crate::common::defaults::DEFAULT_PAGE_SIZE;
   use crate::test_support::TestDb;
   use crate::tx::check::TxCheck;
@@ -1503,7 +1508,6 @@ mod test {
     BucketApi, BucketRwApi, CursorApi, DBOptions, DbApi, DbRwAPI, Error, TxApi, TxImpl, TxRwApi, DB,
   };
   use anyhow::anyhow;
-  use std::cell::RefCell;
 
   #[test]
   fn test_tx_check_read_only() -> crate::Result<()> {

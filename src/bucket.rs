@@ -1,4 +1,5 @@
 use crate::common::bucket::{InBucket, IN_BUCKET_SIZE};
+use crate::common::cell::{Ref, RefMut};
 use crate::common::memory::{BCell, IsAligned};
 use crate::common::page::{
   CoerciblePage, MutPage, Page, RefPage, BUCKET_LEAF_FLAG, LEAF_PAGE_FLAG, PAGE_HEADER_SIZE,
@@ -19,7 +20,6 @@ use bumpalo::Bump;
 use bytemuck::{Pod, Zeroable};
 use either::Either;
 use std::alloc::Layout;
-use std::cell::{Ref, RefMut};
 use std::marker::PhantomData;
 use std::ops::{AddAssign, Deref};
 use std::ptr::slice_from_raw_parts_mut;
@@ -1312,12 +1312,12 @@ impl<'tx> BucketRwIApi<'tx> for BucketRwCell<'tx> {
 #[cfg(test)]
 mod tests {
   use crate::bucket::MAX_VALUE_SIZE;
+  use crate::common::cell::RefCell;
   use crate::test_support::TestDb;
   use crate::{
     BucketApi, BucketRwApi, CursorApi, CursorRwApi, DbApi, DbRwAPI, Error, TxApi, TxRwApi,
   };
   use anyhow::anyhow;
-  use std::cell::RefCell;
   use std::sync::atomic::{AtomicU32, Ordering};
 
   #[test]
@@ -1415,6 +1415,7 @@ mod tests {
   }
 
   #[test]
+  #[cfg(not(miri))]
   fn test_bucket_put_large() -> crate::Result<()> {
     let mut db = TestDb::new()?;
     let count = 100;
@@ -1441,6 +1442,7 @@ mod tests {
   }
 
   #[test]
+  #[cfg(not(miri))]
   fn test_db_put_very_large() -> crate::Result<()> {
     let mut db = TestDb::new()?;
     let n = 400000u64;
@@ -1499,6 +1501,7 @@ mod tests {
   }
 
   #[test]
+  #[cfg(not(miri))]
   fn test_bucket_delete_large() -> crate::Result<()> {
     let mut db = TestDb::new()?;
     let var = [b'*'; 1024];
@@ -1582,6 +1585,7 @@ mod tests {
   }
 
   #[test]
+  #[cfg(not(miri))]
   fn test_bucket_nested() -> crate::Result<()> {
     let mut db = TestDb::new()?;
     db.update(|mut tx| {
@@ -1706,6 +1710,7 @@ mod tests {
   }
 
   #[test]
+  #[cfg(not(miri))]
   // Ensure that deleting a child bucket with multiple pages causes all pages to get collected.
   // NOTE: Consistency check in bolt_test.DB.Close() will panic if pages not freed properly.
   fn test_bucket_delete_bucket_large() -> crate::Result<()> {
@@ -1844,7 +1849,7 @@ mod tests {
   fn for_each_collect_kv<'tx, B: BucketApi<'tx>>(
     b: B,
   ) -> crate::Result<Vec<(&'tx [u8], Option<&'tx [u8]>)>> {
-    let items = RefCell::new(Vec::new());
+    let items = std::cell::RefCell::new(Vec::new());
     b.for_each(|k, v| {
       items.borrow_mut().push((k, v));
       Ok(())
@@ -1853,7 +1858,7 @@ mod tests {
   }
 
   fn for_each_bucket_collect_k<'tx, B: BucketApi<'tx>>(b: B) -> crate::Result<Vec<&'tx [u8]>> {
-    let items = RefCell::new(Vec::new());
+    let items = std::cell::RefCell::new(Vec::new());
     b.for_each_bucket(|k| {
       items.borrow_mut().push(k);
       Ok(())

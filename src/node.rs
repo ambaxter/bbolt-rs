@@ -1,6 +1,6 @@
 use crate::bucket::{BucketIApi, BucketRwCell, BucketRwIApi, MAX_FILL_PERCENT, MIN_FILL_PERCENT};
 use crate::common::inode::INode;
-use crate::common::memory::{CodSlice, LCell, SubArray, VecOrSub};
+use crate::common::memory::{CodSlice, LCell, SplitArray, VecOrSplit};
 use crate::common::page::{CoerciblePage, MutPage, RefPage, MIN_KEYS_PER_PAGE, PAGE_HEADER_SIZE};
 use crate::common::tree::{
   MappedBranchPage, MappedLeafPage, TreePage, BRANCH_PAGE_ELEMENT_SIZE, LEAF_PAGE_ELEMENT_SIZE,
@@ -16,7 +16,7 @@ pub struct NodeW<'tx> {
   pub(crate) is_leaf: bool,
   pub(crate) key: CodSlice<'tx, u8>,
   pub(crate) pgid: PgId,
-  pub(crate) inodes: VecOrSub<'tx, INode<'tx>>,
+  pub(crate) inodes: VecOrSplit<'tx, INode<'tx>>,
   bucket: BucketRwCell<'tx>,
   parent: Option<NodeRwCell<'tx>>,
   is_unbalanced: bool,
@@ -155,10 +155,9 @@ impl<'tx> NodeW<'tx> {
 /// This should only be called from the spill() function.
 struct NodeSplit<'tx> {
   page_size: usize,
-  offset: usize,
   threshold: usize,
   page_element_size: usize,
-  inodes: BVec<'tx, INode<'tx>>,
+  split_array: SplitArray<'tx, INode<'tx>>,
   next: Option<NodeRwCell<'tx>>,
 }
 
@@ -169,23 +168,21 @@ impl<'tx> NodeSplit<'tx> {
   where
     'tx: 'a,
   {
-    let rem = &self.inodes[self.offset..];
     let mut cell = node.cell.borrow_mut();
     // Ignore the split if the page doesn't have at least enough nodes for
     // two pages or if the nodes can fit in a single page.
-    if rem.len() <= MIN_KEYS_PER_PAGE * 2 || self.size_less_than(rem) {
-      cell.inodes = unsafe { SubArray::new(rem.as_ptr(), rem.len()) }.into();
+    if self.split_array.len() <= MIN_KEYS_PER_PAGE * 2 || self.size_less_than(&self.split_array) {
+      cell.inodes = self
+        .split_array
+        .split_left_off(self.split_array.len())
+        .into();
       return (node, None);
     }
 
     // Determine split position and sizes of the two pages.
-    let (split_index, _) = self.split_index(rem);
+    let (split_index, _) = self.split_index(&self.split_array);
 
-    let cell_sub = &rem[..split_index];
-    cell.inodes = unsafe { SubArray::new(cell_sub.as_ptr(), cell_sub.len()) }.into();
-
-    let next_sub = &rem[split_index..];
-    self.offset += split_index;
+    cell.inodes = self.split_array.split_left_off(split_index).into();
 
     // Split node into two separate nodes.
     // If there's no parent then we'll need to create one.
@@ -203,7 +200,8 @@ impl<'tx> NodeSplit<'tx> {
     // Create a new node and add it to the parent.
     let next = NodeRwCell::new_child_in(cell.bucket, cell.is_leaf, parent);
     let mut next_cell = next.cell.borrow_mut();
-    next_cell.inodes = unsafe { SubArray::new(next_sub.as_ptr(), next_sub.len()) }.into();
+    //TODO: Rework to split right instead so we don't have to clone
+    next_cell.inodes = self.split_array.clone().into();
     parent.cell.borrow_mut().children.push(next);
 
     // Update the statistics
@@ -453,9 +451,12 @@ impl<'tx> NodeRwCell<'tx> {
     // Spill child nodes first. Child nodes can materialize sibling nodes in
     // the case of split-merge so we cannot use a range loop. We have to check
     // the children size on every loop iteration.
-    let children = SubArray::from(&self.cell.borrow().children);
-    for child in children.deref() {
+    let mut i = 0;
+    let mut o_child = self.cell.borrow().children.get(i).copied();
+    while let Some(child) = o_child {
       child.spill()?;
+      i += 1;
+      o_child = self.cell.borrow().children.get(i).copied()
     }
 
     // We no longer need the child list because it's only used for spill tracking.
@@ -535,12 +536,11 @@ impl<'tx> NodeRwCell<'tx> {
     let mut self_borrow = self.cell.borrow_mut();
 
     let mut inodes = BVec::with_capacity_in(0, self_borrow.inodes.get_vec().bump());
-    mem::swap(&mut inodes, &mut self_borrow.inodes.get_mut_vec());
+    mem::swap(&mut inodes, self_borrow.inodes.get_mut_vec());
     NodeSplit {
       page_size,
-      offset: 0,
       threshold,
-      inodes,
+      split_array: SplitArray::new(inodes),
       page_element_size: self_borrow.page_element_size(),
       next: Some(self),
     }
@@ -640,15 +640,19 @@ impl<'tx> NodeRwCell<'tx> {
 
     // If both this node and the target node are too small then merge them.
     if use_next_sibling {
-      let inodes = SubArray::from(target_borrow.inodes.get_vec());
-      drop(target_borrow);
-      // Reparent all child nodes being moved.
-      for inode in inodes.deref() {
-        if let Some(child) = bucket.w.nodes.get(&inode.pgid()).cloned() {
-          let child_parent = child.cell.borrow().parent.unwrap();
-          child_parent.cell.borrow_mut().remove_child(child);
-          child.cell.borrow_mut().parent = Some(self);
-          self_borrow.children.push(child);
+      {
+        // We guarantee that inodes will not be changed
+        let inodes: &'tx [INode] = unsafe { mem::transmute(target_borrow.inodes.deref()) };
+        // Drop as child_parent may be self.
+        drop(target_borrow);
+        // Reparent all child nodes being moved.
+        for inode in inodes {
+          if let Some(child) = bucket.w.nodes.get(&inode.pgid()).cloned() {
+            let child_parent = child.cell.borrow().parent.unwrap();
+            child_parent.cell.borrow_mut().remove_child(child);
+            child.cell.borrow_mut().parent = Some(self);
+            self_borrow.children.push(child);
+          }
         }
       }
 
@@ -667,16 +671,19 @@ impl<'tx> NodeRwCell<'tx> {
       bucket.w.nodes.remove(&target_pgid);
       target.free();
     } else {
-      // Drop as child_parent may be self.
-      let inodes = SubArray::from(target_borrow.inodes.get_vec());
-      drop(self_borrow);
-      // Reparent all child nodes being moved.
-      for inode in inodes.deref() {
-        if let Some(child) = bucket.w.nodes.get(&inode.pgid()).cloned() {
-          let child_parent = child.cell.borrow().parent.unwrap();
-          child_parent.cell.borrow_mut().remove_child(child);
-          child.cell.borrow_mut().parent = Some(target);
-          target_borrow.children.push(child);
+      {
+        // We guarantee that inodes will not be changed
+        let inodes: &'tx [INode] = unsafe { mem::transmute(self_borrow.inodes.deref()) };
+        // Drop as child_parent may be self.
+        drop(self_borrow);
+        // Reparent all child nodes being moved.
+        for inode in inodes {
+          if let Some(child) = bucket.w.nodes.get(&inode.pgid()).cloned() {
+            let child_parent = child.cell.borrow().parent.unwrap();
+            child_parent.cell.borrow_mut().remove_child(child);
+            child.cell.borrow_mut().parent = Some(target);
+            target_borrow.children.push(child);
+          }
         }
       }
       // Copy over inodes to target and remove node.
@@ -710,9 +717,8 @@ impl<'tx> NodeRwCell<'tx> {
       inode.own_in(bump);
     }
 
-    let children = SubArray::from(&self_borrow.children);
     // Recursively own_in children.
-    for child in children.iter() {
+    for child in self_borrow.children.iter() {
       child.own_in(bump);
     }
 
@@ -749,6 +755,7 @@ mod test {
   use crate::tx::check::UnsealRwTx;
   use crate::tx::TxRwIApi;
   use itertools::Itertools;
+  use std::ops::Deref;
 
   #[test]
   fn test_node_put() -> crate::Result<()> {
@@ -814,7 +821,11 @@ mod test {
     let parent_children = &binding.cell.borrow().children;
     assert_eq!(2, parent_children.len());
     assert_eq!(2, split_nodes[0].cell.borrow().inodes.len());
+    let node0 = split_nodes[0].cell.borrow();
+    let inodes0 = node0.inodes.deref();
     assert_eq!(3, split_nodes[1].cell.borrow().inodes.len());
+    let node1 = split_nodes[1].cell.borrow();
+    let inodes1 = node1.inodes.deref();
     Ok(())
   }
 

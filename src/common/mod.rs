@@ -1,7 +1,6 @@
 pub use bumpalo::collections::Vec as BVec;
 use bumpalo::Bump;
 use hashbrown::hash_map::DefaultHashBuilder;
-use std::cell;
 
 pub mod bucket;
 pub mod defaults;
@@ -15,6 +14,8 @@ pub mod tree;
 pub mod utility;
 
 pub mod bump;
+
+pub mod cell;
 pub mod ids;
 pub mod lock;
 pub mod pool;

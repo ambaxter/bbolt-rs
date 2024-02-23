@@ -19,13 +19,13 @@ use aligners::{alignment, AlignedBytes};
 use fs4::FileExt;
 use memmap2::{Advice, MmapOptions, MmapRaw};
 use parking_lot::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockUpgradableReadGuard};
-use std::cell::RefCell;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::Ordering::Release;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 use std::{fs, io, mem};
@@ -1062,6 +1062,7 @@ impl<'tx> DbMutIApi<'tx> for DbShared {
 #[derive(Clone, Default, Debug, PartialEq, Eq, TypedBuilder)]
 #[builder(doc)]
 pub struct DBOptions {
+  // TODO: How do we handle this?
   #[builder(
     default,
     setter(
@@ -1076,6 +1077,7 @@ pub struct DBOptions {
     doc = "Sets the DB.NoGrowSync flag before memory mapping the file."
   ))]
   no_grow_sync: bool,
+  // TODO: How do we handle this?
   #[builder(setter(
     strip_bool,
     doc = "Do not sync freelist to disk.\

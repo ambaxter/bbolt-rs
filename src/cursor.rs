@@ -682,6 +682,7 @@ mod tests {
   }
 
   #[test]
+  #[cfg(not(miri))]
   fn test_cursor_delete() -> crate::Result<()> {
     let mut db = TestDb::new()?;
     let count = 1000u64;
@@ -720,6 +721,7 @@ mod tests {
   }
 
   #[test]
+  #[cfg(not(miri))]
   fn test_cursor_seek_large() -> crate::Result<()> {
     let mut db = TestDb::new()?;
     let count = 1000u64;

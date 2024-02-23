@@ -1,12 +1,13 @@
+use crate::common::cell::RefCell;
 use crate::common::BVec;
 use bumpalo::Bump;
 use bytemuck::Pod;
 use std::borrow::Borrow;
-use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::fmt::Formatter;
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
+use std::ptr::NonNull;
 use std::slice::{from_raw_parts, from_raw_parts_mut};
 use std::{fmt, mem};
 
@@ -254,118 +255,140 @@ impl IsAligned for *mut u8 {
 // As described in https://github.com/rust-lang/rust/issues/68318#issuecomment-1066221968
 pub type PhantomUnsend = PhantomData<*mut ()>;
 
-pub(crate) struct SubArray<'a, T> {
-  phantom: PhantomData<&'a [T]>,
-  ptr: *const T,
+#[derive(Clone)]
+pub(crate) struct SplitArray<'a, T> {
+  ptr: NonNull<T>,
   len: usize,
+  marker: PhantomData<&'a mut [T]>,
 }
 
-impl<'a, T> SubArray<'a, T> {
-  pub(crate) unsafe fn new(ptr: *const T, len: usize) -> Self {
-    SubArray {
-      phantom: Default::default(),
-      ptr,
-      len,
+impl<'a, T> SplitArray<'a, T> {
+  pub(crate) fn new(mut vec: BVec<'a, T>) -> SplitArray<'a, T> {
+    let s = SplitArray {
+      ptr: NonNull::new(vec.as_mut_ptr()).unwrap(),
+      len: vec.len(),
+      marker: PhantomData,
+    };
+    mem::forget(vec);
+    s
+  }
+
+  pub(crate) fn split_left_off(&mut self, at: usize) -> SplitArray<'a, T> {
+    assert!(
+      self.len >= at,
+      "splitting off at {} larget than len {}",
+      at,
+      self.len
+    );
+    let left = SplitArray {
+      ptr: self.ptr,
+      len: at,
+      marker: PhantomData,
+    };
+    unsafe {
+      self.ptr = NonNull::new_unchecked(self.ptr.as_ptr().add(at));
     }
+    self.len -= at;
+    left
   }
 }
 
-unsafe impl<'a, T: Send> Send for SubArray<'a, T> {}
-unsafe impl<'a, T: Sync> Sync for SubArray<'a, T> {}
+unsafe impl<'a, T: Send> Send for SplitArray<'a, T> {}
+unsafe impl<'a, T: Sync> Sync for SplitArray<'a, T> {}
 
-impl<'a, T> From<&BVec<'a, T>> for SubArray<'a, T> {
-  fn from(value: &BVec<'a, T>) -> Self {
-    unsafe { SubArray::new(value.as_ptr(), value.len()) }
+impl<'a, T> From<BVec<'a, T>> for SplitArray<'a, T> {
+  fn from(value: BVec<'a, T>) -> Self {
+    SplitArray::new(value)
   }
 }
 
-impl<'a, T> Deref for SubArray<'a, T> {
+impl<'a, T> Deref for SplitArray<'a, T> {
   type Target = [T];
 
   fn deref(&self) -> &Self::Target {
-    unsafe { from_raw_parts(self.ptr, self.len) }
+    unsafe { from_raw_parts(self.ptr.as_ptr(), self.len) }
   }
 }
 
-impl<'a, T> DerefMut for SubArray<'a, T> {
+impl<'a, T> DerefMut for SplitArray<'a, T> {
   fn deref_mut(&mut self) -> &mut Self::Target {
-    unsafe { from_raw_parts_mut(self.ptr.cast_mut(), self.len) }
+    unsafe { from_raw_parts_mut(self.ptr.as_ptr(), self.len) }
   }
 }
 
-impl<'a, T> AsRef<[T]> for SubArray<'a, T> {
+impl<'a, T> AsRef<[T]> for SplitArray<'a, T> {
   fn as_ref(&self) -> &[T] {
     self.deref()
   }
 }
 
-impl<'a, T> AsMut<[T]> for SubArray<'a, T> {
+impl<'a, T> AsMut<[T]> for SplitArray<'a, T> {
   fn as_mut(&mut self) -> &mut [T] {
     self.deref_mut()
   }
 }
 
-pub(crate) enum VecOrSub<'a, T> {
+pub(crate) enum VecOrSplit<'a, T> {
   Vec(BVec<'a, T>),
-  Sub(SubArray<'a, T>),
+  Split(SplitArray<'a, T>),
 }
 
-impl<'a, T> VecOrSub<'a, T> {
+impl<'a, T> VecOrSplit<'a, T> {
   pub(crate) fn get_vec(&self) -> &BVec<'a, T> {
     match self {
-      VecOrSub::Vec(v) => v,
-      VecOrSub::Sub(_) => panic!("sub access"),
+      VecOrSplit::Vec(v) => v,
+      VecOrSplit::Split(_) => panic!("split access"),
     }
   }
 
   pub(crate) fn get_mut_vec(&mut self) -> &mut BVec<'a, T> {
     match self {
-      VecOrSub::Vec(v) => v,
-      VecOrSub::Sub(_) => panic!("sub access"),
+      VecOrSplit::Vec(v) => v,
+      VecOrSplit::Split(_) => panic!("split access"),
     }
   }
 }
 
-impl<'a, T> Deref for VecOrSub<'a, T> {
+impl<'a, T> Deref for VecOrSplit<'a, T> {
   type Target = [T];
 
   fn deref(&self) -> &Self::Target {
     match self {
-      VecOrSub::Vec(v) => v,
-      VecOrSub::Sub(s) => s,
+      VecOrSplit::Vec(v) => v,
+      VecOrSplit::Split(s) => s,
     }
   }
 }
 
-impl<'a, T> DerefMut for VecOrSub<'a, T> {
+impl<'a, T> DerefMut for VecOrSplit<'a, T> {
   fn deref_mut(&mut self) -> &mut Self::Target {
     match self {
-      VecOrSub::Vec(v) => v,
-      VecOrSub::Sub(s) => s,
+      VecOrSplit::Vec(v) => v,
+      VecOrSplit::Split(s) => s,
     }
   }
 }
 
-impl<'a, T> AsRef<[T]> for VecOrSub<'a, T> {
+impl<'a, T> AsRef<[T]> for VecOrSplit<'a, T> {
   fn as_ref(&self) -> &[T] {
     self.deref()
   }
 }
 
-impl<'a, T> AsMut<[T]> for VecOrSub<'a, T> {
+impl<'a, T> AsMut<[T]> for VecOrSplit<'a, T> {
   fn as_mut(&mut self) -> &mut [T] {
     self.deref_mut()
   }
 }
 
-impl<'a, T> From<BVec<'a, T>> for VecOrSub<'a, T> {
+impl<'a, T> From<BVec<'a, T>> for VecOrSplit<'a, T> {
   fn from(value: BVec<'a, T>) -> Self {
-    VecOrSub::Vec(value)
+    VecOrSplit::Vec(value)
   }
 }
 
-impl<'a, T> From<SubArray<'a, T>> for VecOrSub<'a, T> {
-  fn from(value: SubArray<'a, T>) -> Self {
-    VecOrSub::Sub(value)
+impl<'a, T> From<SplitArray<'a, T>> for VecOrSplit<'a, T> {
+  fn from(value: SplitArray<'a, T>) -> Self {
+    VecOrSplit::Split(value)
   }
 }

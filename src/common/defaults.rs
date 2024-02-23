@@ -1,6 +1,5 @@
 use crate::common::PgId;
 use once_cell::sync::Lazy;
-use size;
 use size::consts::{GiB, MiB};
 use size::Size;
 use std::time::Duration;
