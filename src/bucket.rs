@@ -146,8 +146,8 @@ impl<'tx> BucketApi<'tx> for BucketImpl<'tx> {
 
   fn cursor(&self) -> CursorImpl<'tx> {
     match self {
-      BucketImpl::R(r) => InnerCursor::new(*r, r.api_tx().bump()).into(),
-      BucketImpl::RW(rw) => InnerCursor::new(*rw, rw.api_tx().bump()).into(),
+      BucketImpl::R(r) => InnerCursor::new(*r, r.tx().bump()).into(),
+      BucketImpl::RW(rw) => InnerCursor::new(*rw, rw.tx().bump()).into(),
     }
   }
 
@@ -216,7 +216,7 @@ impl<'tx> BucketApi<'tx> for BucketRwImpl<'tx> {
   }
 
   fn cursor(&self) -> CursorImpl<'tx> {
-    InnerCursor::new(self.b, self.b.api_tx().bump()).into()
+    InnerCursor::new(self.b, self.b.tx().bump()).into()
   }
 
   fn bucket<T: AsRef<[u8]>>(&self, name: T) -> Option<BucketImpl<'tx>> {
@@ -268,7 +268,7 @@ impl<'tx> BucketRwApi<'tx> for BucketRwImpl<'tx> {
   }
 
   fn cursor_mut(&self) -> impl CursorRwApi<'tx> {
-    CursorRwImpl::new(InnerCursor::new(self.b, self.b.api_tx().bump()))
+    CursorRwImpl::new(InnerCursor::new(self.b, self.b.tx().bump()))
   }
 
   fn delete_bucket<T: AsRef<[u8]>>(&mut self, key: T) -> crate::Result<()> {
@@ -392,22 +392,17 @@ impl Default for InlineBucket {
 
 /// The internal Bucket API
 pub(crate) trait BucketIApi<'tx, T: TxIApi<'tx>>:
-  SplitRef<BucketR<'tx>, Weak<T>, InnerBucketW<'tx, T, Self>>
+  SplitRef<BucketR<'tx>, T, InnerBucketW<'tx, T, Self>>
 {
   fn new_in(
-    bump: &'tx Bump, bucket_header: InBucket, tx: Weak<T>, inline_page: Option<RefPage<'tx>>,
+    bump: &'tx Bump, bucket_header: InBucket, tx: T, inline_page: Option<RefPage<'tx>>,
   ) -> Self;
 
   /// Returns whether the bucket is writable.
   fn is_writeable(&self) -> bool;
 
   /// Returns the rc ptr Tx of the bucket
-  fn api_tx(self) -> Rc<T> {
-    self.split_bound().upgrade().unwrap()
-  }
-
-  /// Returns the weak ptr to the Tx of the bucket
-  fn weak_tx(self) -> Weak<T> {
+  fn tx(self) -> T {
     self.split_bound()
   }
 
@@ -418,8 +413,8 @@ pub(crate) trait BucketIApi<'tx, T: TxIApi<'tx>>:
 
   /// Create a new cursor for this Bucket
   fn i_cursor(self) -> InnerCursor<'tx, T, Self> {
-    let tx = self.api_tx();
-    tx.split_r().stats.inc_cursor_count(1);
+    let tx = self.tx();
+    tx.split_r().stats.as_ref().unwrap().inc_cursor_count(1);
     InnerCursor::new(self, tx.bump())
   }
 
@@ -442,7 +437,7 @@ pub(crate) trait BucketIApi<'tx, T: TxIApi<'tx>>:
     let child = self.open_bucket(v);
     if let Some(mut w) = self.split_ow_mut() {
       let tx = self.split_bound();
-      let bump = tx.upgrade().unwrap().bump();
+      let bump = tx.bump();
       let name = bump.alloc_slice_copy(name);
       w.buckets.insert(name, child);
     }
@@ -453,7 +448,7 @@ pub(crate) trait BucketIApi<'tx, T: TxIApi<'tx>>:
   /// Helper method that re-interprets a sub-bucket value
   /// from a parent into a Bucket
   fn open_bucket(self, mut value: &[u8]) -> Self {
-    let tx = self.api_tx();
+    let tx = self.tx();
     let bump = tx.bump();
     // Unaligned access requires a copy to be made.
     //TODO: use std is_aligned_to when it comes out
@@ -484,7 +479,7 @@ pub(crate) trait BucketIApi<'tx, T: TxIApi<'tx>>:
     } else {
       None
     };
-    Self::new_in(bump, bucket_header, Rc::downgrade(&tx), ref_page)
+    Self::new_in(bump, bucket_header, tx, ref_page)
   }
 
   /// See [BucketApi::get]
@@ -534,7 +529,7 @@ pub(crate) trait BucketIApi<'tx, T: TxIApi<'tx>>:
 
   /// forEachPage iterates over every page in a bucket, including inline pages.
   fn for_each_page<F: FnMut(&RefPage<'tx>, usize, &mut BVec<PgId>)>(self, f: &mut F) {
-    let tx = self.api_tx();
+    let tx = self.tx();
     let root = {
       let r = self.split_r();
       let root = r.bucket_header.root();
@@ -584,7 +579,7 @@ pub(crate) trait BucketIApi<'tx, T: TxIApi<'tx>>:
         }
       }
       Either::Right(node) => {
-        let bump = self.api_tx().bump();
+        let bump = self.tx().bump();
         // To keep with our rules we much copy the inode pgids to temporary storage first
         // This should be unnecessary, but working first *then* optimize
         let v = {
@@ -622,7 +617,7 @@ pub(crate) trait BucketIApi<'tx, T: TxIApi<'tx>>:
       }
     }
 
-    Either::Left(self.api_tx().mem_page(id))
+    Either::Left(self.tx().mem_page(id))
   }
 
   /// See [BucketApi::sequence]
@@ -632,14 +627,14 @@ pub(crate) trait BucketIApi<'tx, T: TxIApi<'tx>>:
 
   /// Returns the maximum total size of a bucket to make it a candidate for inlining.
   fn max_inline_bucket_size(self) -> usize {
-    self.api_tx().page_size() / 4
+    self.tx().page_size() / 4
   }
 
   /// See [BucketApi::stats]
   fn api_stats(self) -> BucketStats {
     let mut s = BucketStats::default();
     let mut sub_stats = BucketStats::default();
-    let page_size = self.api_tx().page_size();
+    let page_size = self.tx().page_size();
     s.bucket_n += 1;
     if self.root() == ZERO_PGID {
       s.inline_bucket_n += 1;
@@ -810,7 +805,7 @@ impl<'tx, T: TxIApi<'tx>, B: BucketIApi<'tx, T>> InnerBucketW<'tx, T, B> {
 pub type BucketW<'tx> = InnerBucketW<'tx, TxRwCell<'tx>, BucketRwCell<'tx>>;
 
 pub struct BucketRW<'tx> {
-  r: BucketR<'tx>,
+  pub(crate) r: BucketR<'tx>,
   pub(crate) w: BucketW<'tx>,
 }
 
@@ -825,12 +820,12 @@ impl<'tx> BucketRW<'tx> {
 
 #[derive(Copy, Clone)]
 pub struct BucketCell<'tx> {
-  cell: BCell<'tx, BucketR<'tx>, Weak<TxCell<'tx>>>,
+  cell: BCell<'tx, BucketR<'tx>, TxCell<'tx>>,
 }
 
 impl<'tx> BucketIApi<'tx, TxCell<'tx>> for BucketCell<'tx> {
   fn new_in(
-    bump: &'tx Bump, bucket_header: InBucket, tx: Weak<TxCell<'tx>>,
+    bump: &'tx Bump, bucket_header: InBucket, tx: TxCell<'tx>,
     inline_page: Option<RefPage<'tx>>,
   ) -> Self {
     let r = BucketR {
@@ -854,7 +849,7 @@ impl<'tx> BucketIApi<'tx, TxCell<'tx>> for BucketCell<'tx> {
   }
 }
 
-impl<'tx> SplitRef<BucketR<'tx>, Weak<TxCell<'tx>>, InnerBucketW<'tx, TxCell<'tx>, BucketCell<'tx>>>
+impl<'tx> SplitRef<BucketR<'tx>, TxCell<'tx>, InnerBucketW<'tx, TxCell<'tx>, BucketCell<'tx>>>
   for BucketCell<'tx>
 {
   fn split_r(&self) -> Ref<BucketR<'tx>> {
@@ -874,7 +869,7 @@ impl<'tx> SplitRef<BucketR<'tx>, Weak<TxCell<'tx>>, InnerBucketW<'tx, TxCell<'tx
     None
   }
 
-  fn split_bound(&self) -> Weak<TxCell<'tx>> {
+  fn split_bound(&self) -> TxCell<'tx> {
     self.cell.bound()
   }
 
@@ -898,10 +893,10 @@ impl<'tx> SplitRef<BucketR<'tx>, Weak<TxCell<'tx>>, InnerBucketW<'tx, TxCell<'tx
 
 #[derive(Copy, Clone)]
 pub struct BucketRwCell<'tx> {
-  pub(crate) cell: BCell<'tx, BucketRW<'tx>, Weak<TxRwCell<'tx>>>,
+  pub(crate) cell: BCell<'tx, BucketRW<'tx>, TxRwCell<'tx>>,
 }
 
-impl<'tx> SplitRef<BucketR<'tx>, Weak<TxRwCell<'tx>>, BucketW<'tx>> for BucketRwCell<'tx> {
+impl<'tx> SplitRef<BucketR<'tx>, TxRwCell<'tx>, BucketW<'tx>> for BucketRwCell<'tx> {
   fn split_r(&self) -> Ref<BucketR<'tx>> {
     Ref::map(self.cell.borrow(), |b| &b.r)
   }
@@ -915,7 +910,7 @@ impl<'tx> SplitRef<BucketR<'tx>, Weak<TxRwCell<'tx>>, BucketW<'tx>> for BucketRw
     Some(Ref::map(self.cell.borrow(), |b| &b.w))
   }
 
-  fn split_bound(&self) -> Weak<TxRwCell<'tx>> {
+  fn split_bound(&self) -> TxRwCell<'tx> {
     self.cell.bound()
   }
 
@@ -935,7 +930,7 @@ impl<'tx> SplitRef<BucketR<'tx>, Weak<TxRwCell<'tx>>, BucketW<'tx>> for BucketRw
 
 impl<'tx> BucketIApi<'tx, TxRwCell<'tx>> for BucketRwCell<'tx> {
   fn new_in(
-    bump: &'tx Bump, bucket_header: InBucket, tx: Weak<TxRwCell<'tx>>,
+    bump: &'tx Bump, bucket_header: InBucket, tx: TxRwCell<'tx>,
     inline_page: Option<RefPage<'tx>>,
   ) -> Self {
     let r = BucketR {
@@ -990,7 +985,7 @@ impl<'tx> BucketRwIApi<'tx> for BucketRwCell<'tx> {
 
     let inline_page = InlineBucket::default();
     let layout = Layout::from_size_align(INLINE_BUCKET_SIZE, INLINE_BUCKET_ALIGNMENT).unwrap();
-    let bump = self.api_tx().bump();
+    let bump = self.tx().bump();
     let data = bump.alloc_layout(layout).as_ptr();
 
     let value = unsafe {
@@ -1067,7 +1062,7 @@ impl<'tx> BucketRwIApi<'tx> for BucketRwCell<'tx> {
       }
     }
 
-    let bump = self.api_tx().bump();
+    let bump = self.tx().bump();
     let key = &*bump.alloc_slice_clone(key);
     let value = &*bump.alloc_slice_clone(value);
     c.node().put(key, key, value, ZERO_PGID, 0);
@@ -1109,7 +1104,7 @@ impl<'tx> BucketRwIApi<'tx> for BucketRwCell<'tx> {
       return;
     }
 
-    let tx = self.api_tx();
+    let tx = self.tx();
     let txid = tx.meta().txid();
 
     self.for_each_page_node(|pn, _| match pn {
@@ -1176,7 +1171,7 @@ impl<'tx> BucketRwIApi<'tx> for BucketRwCell<'tx> {
       self_borrow.w.root_node = Some(new_root);
       let borrow_root = new_root.cell.borrow_mut();
       let new_pgid = borrow_root.pgid;
-      let tx_pgid = self.cell.bound().upgrade().unwrap().meta().pgid();
+      let tx_pgid = self.cell.bound().meta().pgid();
       if new_pgid >= tx_pgid {
         panic!("pgid ({}) above high water mark ({})", new_pgid, tx_pgid);
       }
@@ -1234,7 +1229,7 @@ impl<'tx> BucketRwIApi<'tx> for BucketRwCell<'tx> {
     let (bump, root, children) = {
       let tx = self.split_bound();
       let bucket = self.cell.borrow();
-      let bump = tx.upgrade().unwrap().bump();
+      let bump = tx.bump();
       let mut children: BVec<BucketRwCell<'tx>> =
         BVec::with_capacity_in(bucket.w.buckets.len(), bump);
       children.extend(bucket.w.buckets.values());
@@ -1264,7 +1259,7 @@ impl<'tx> BucketRwIApi<'tx> for BucketRwCell<'tx> {
     // Otherwise create a node and cache it.
     // Use the inline page if this is an inline bucket.
     let page = match inline_page {
-      None => self.api_tx().mem_page(pgid),
+      None => self.tx().mem_page(pgid),
       Some(page) => page,
     };
 
@@ -1282,17 +1277,15 @@ impl<'tx> BucketRwIApi<'tx> for BucketRwCell<'tx> {
     // Update statistics.
     self
       .split_bound()
-      .upgrade()
-      .unwrap()
       .split_r()
-      .stats
+      .stats.as_ref().unwrap()
       .inc_node_count(1);
 
     n
   }
 
   fn rebalance(self) {
-    let bump = self.api_tx().bump();
+    let bump = self.tx().bump();
     let (nodes, buckets) = {
       let borrow = self.cell.borrow();
       let nodes = BVec::from_iter_in(borrow.w.nodes.values().cloned(), bump);

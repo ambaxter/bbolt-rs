@@ -1,5 +1,5 @@
 use crate::arch::size::MAX_ALLOC_SIZE;
-use crate::bucket::{BucketCell, BucketIApi, BucketImpl, BucketRwCell, BucketRwIApi, BucketRwImpl};
+use crate::bucket::{BucketCell, BucketIApi, BucketImpl, BucketR, BucketRW, BucketRwCell, BucketRwIApi, BucketRwImpl, BucketW};
 use crate::common::bump::PinBump;
 use crate::common::cell::{Ref, RefCell, RefMut};
 use crate::common::defaults::IGNORE_NO_SYNC;
@@ -376,7 +376,7 @@ pub(crate) trait TxIApi<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
 
   /// See [TxApi::stats]
   fn api_stats(self) -> Arc<TxStats> {
-    self.split_r().stats.clone()
+    self.split_r().stats.as_ref().unwrap().clone()
   }
 
   fn root_bucket(self) -> Self::BucketType {
@@ -501,17 +501,17 @@ pub struct TxR<'tx> {
   b: &'tx Bump,
   page_size: usize,
   db: &'tx LockGuard<'tx, DbShared>,
-  pub(crate) stats: Arc<TxStats>,
+  pub(crate) stats: Option<Arc<TxStats>>,
   pub(crate) meta: Meta,
   is_rollback: bool,
-  p: PhantomData<&'tx u8>,
+  marker: PhantomData<&'tx u8>,
 }
 
 pub struct TxW<'tx> {
   pages: HashMap<'tx, PgId, SelfOwned<AlignedBytes<alignment::Page>, MutPage<'tx>>>,
   commit_handlers: BVec<'tx, Box<dyn FnOnce() + 'tx>>,
   no_sync: bool,
-  p: PhantomData<&'tx u8>,
+  marker: PhantomData<&'tx u8>,
 }
 
 pub struct TxRW<'tx> {
@@ -623,8 +623,8 @@ impl<'tx> TxRwIApi<'tx> for TxRwCell<'tx> {
     };
 
     let tx = self.cell.borrow();
-    tx.r.stats.inc_page_count(1);
-    tx.r.stats.inc_page_alloc((count * tx.r.page_size) as i64);
+    tx.r.stats.as_ref().unwrap().inc_page_count(1);
+    tx.r.stats.as_ref().unwrap().inc_page_alloc((count * tx.r.page_size) as i64);
     Ok(page)
   }
 
@@ -690,7 +690,7 @@ impl<'tx> TxRwIApi<'tx> for TxRwCell<'tx> {
         let size = db.write_all_at(buf, offset)?;
 
         // Update statistics.
-        r.stats.inc_write(1);
+        r.stats.as_ref().unwrap().inc_write(1);
 
         rem -= size;
         if rem == 0 {
@@ -733,7 +733,7 @@ impl<'tx> TxRwIApi<'tx> for TxRwCell<'tx> {
       db.fsync()?;
     }
 
-    tx.r.stats.inc_write(1);
+    tx.r.stats.as_ref().unwrap().inc_write(1);
 
     Ok(())
   }
@@ -746,7 +746,7 @@ impl<'tx> TxRwIApi<'tx> for TxRwCell<'tx> {
 pub struct TxImpl<'tx> {
   bump: SyncReusable<Pin<Box<PinBump>>>,
   db: Pin<AliasableBox<PinLockGuard<'tx, DbShared>>>,
-  pub(crate) tx: Rc<TxCell<'tx>>,
+  pub(crate) tx: TxCell<'tx>,
 }
 
 impl<'tx> TxImpl<'tx> {
@@ -765,21 +765,26 @@ impl<'tx> TxImpl<'tx> {
         lock,
       ))));
       let db = Pin::as_ref(&*addr_of!((*ptr).db)).guard().get_ref();
-      let tx = Rc::new_cyclic(|weak| {
+      let tx = {
         let r = TxR {
           b: bump,
           page_size,
           db,
           meta,
-          stats: Default::default(),
+          stats: Some(Default::default()),
           is_rollback: false,
-          p: Default::default(),
+          marker: Default::default(),
         };
-        let bucket = BucketCell::new_in(bump, inline_bucket, weak.clone(), None);
-        TxCell {
-          cell: BCell::new_in(r, bucket, bump),
-        }
-      });
+
+        let uninit_tx: MaybeUninit<(RefCell<TxR>, BucketCell<'tx>)> = MaybeUninit::uninit();
+        let cell_tx = bump.alloc(uninit_tx);
+        let cell_tx_ptr = cell_tx.as_ptr().cast_mut();
+        let const_cell_ptr = cell_tx_ptr.cast_const();
+
+        addr_of_mut!((*cell_tx_ptr).0).write(RefCell::new(r));
+        addr_of_mut!((*cell_tx_ptr).1).write(BucketCell::new_in(bump, inline_bucket, TxCell{ cell: BCell(const_cell_ptr, PhantomData)}, None));
+        TxCell{cell: BCell(cell_tx.assume_init_ref(), PhantomData)}
+      };
       addr_of_mut!((*ptr).tx).write(tx);
       uninit.assume_init()
     }
@@ -795,7 +800,7 @@ impl<'tx> TxImpl<'tx> {
 impl<'tx> Drop for TxImpl<'tx> {
   fn drop(&mut self) {
     let tx_id = self.id();
-    let stats = self.stats();
+    let stats = self.tx.cell.borrow_mut().stats.take().unwrap();
     Pin::as_ref(&self.db).guard().remove_tx(tx_id, stats);
   }
 }
@@ -887,7 +892,7 @@ impl<'tx> TxApi<'tx> for TxRef<'tx> {
 pub struct TxRwImpl<'tx> {
   bump: SyncReusable<Pin<Box<PinBump>>>,
   db: Pin<AliasableBox<PinLockGuard<'tx, DbShared>>>,
-  pub(crate) tx: Rc<TxRwCell<'tx>>,
+  pub(crate) tx: TxRwCell<'tx>,
 }
 
 impl<'tx> TxRwImpl<'tx> {
@@ -914,34 +919,48 @@ impl<'tx> TxRwImpl<'tx> {
       ))));
 
       let db = Pin::as_ref(&*addr_of!((*ptr).db)).guard().get_ref();
-      let tx = Rc::new_cyclic(|weak| {
-        let r = TxR {
+      let tx = {
+        let tx_r = TxR {
           b: bump,
           page_size,
           db,
           meta,
-          stats: Default::default(),
+          stats: Some(Default::default()),
           is_rollback: false,
-          p: Default::default(),
+          marker: Default::default(),
         };
-        let w = TxW {
+        let tx_w = TxW {
           pages: HashMap::with_capacity_in(0, bump),
           commit_handlers: BVec::with_capacity_in(0, bump),
           no_sync,
-          p: Default::default(),
+          marker: Default::default(),
         };
-        let bucket = BucketRwCell::new_in(bump, inline_bucket, weak.clone(), None);
-        TxRwCell {
-          cell: BCell::new_in(TxRW { r, w }, bucket, bump),
-        }
-      });
+
+        let bucket_r = BucketR::new(inline_bucket);
+        let bucket_w = BucketW::new_in(bump);
+
+
+        let uninit_tx: MaybeUninit<(RefCell<TxRW>, BucketRwCell<'tx>)> = MaybeUninit::uninit();
+        let uninit_bucket: MaybeUninit<(RefCell<BucketRW<'tx>>, TxRwCell<'tx>)> = MaybeUninit::uninit();
+        let cell_tx = bump.alloc(uninit_tx);
+        let cell_tx_ptr = cell_tx.as_mut_ptr();
+        let const_cell_tx_ptr = cell_tx_ptr.cast_const();
+        let cell_bucket = bump.alloc(uninit_bucket);
+        let cell_bucket_ptr = cell_bucket.as_mut_ptr();
+
+        addr_of_mut!((*cell_tx_ptr).0).write(RefCell::new(TxRW { r: tx_r, w: tx_w }));
+        addr_of_mut!((*cell_bucket_ptr).0).write(RefCell::new(BucketRW { r: bucket_r, w: bucket_w }));
+        addr_of_mut!((*cell_bucket_ptr).1).write(TxRwCell{cell: BCell(const_cell_tx_ptr, PhantomData)});
+        addr_of_mut!((*cell_tx_ptr).1).write(BucketRwCell{cell: BCell(cell_bucket.assume_init_ref(), PhantomData)});
+        TxRwCell{cell: BCell(cell_tx.assume_init_ref(), PhantomData)}
+      };
       addr_of_mut!((*ptr).tx).write(tx);
       uninit.assume_init()
     }
   }
 
   fn commit_freelist(&mut self) -> crate::Result<()> {
-    let allocated_page = Pin::as_ref(&self.db).guard().commit_freelist(*self.tx)?;
+    let allocated_page = Pin::as_ref(&self.db).guard().commit_freelist(self.tx)?;
 
     let freelist_page = match allocated_page {
       AllocateResult::Page(page) => page,
@@ -950,7 +969,7 @@ impl<'tx> TxRwImpl<'tx> {
           .guard()
           .get_mut()
           .unwrap()
-          .mmap_to_new_size(min_size, *self.tx)?;
+          .mmap_to_new_size(min_size, self.tx)?;
         page
       }
     };
@@ -964,16 +983,8 @@ impl<'tx> TxRwImpl<'tx> {
 
 impl<'tx> Drop for TxRwImpl<'tx> {
   fn drop(&mut self) {
-    let stats = self.stats();
+    let stats = self.tx.cell.borrow_mut().r.stats.take().unwrap();
     Pin::as_ref(&self.db).guard().remove_rw_tx(stats);
-    {
-      let stats = self.stats();
-      let ptr = Arc::into_raw(stats);
-      unsafe {
-        Arc::decrement_strong_count(ptr);
-        Arc::decrement_strong_count(ptr);
-      }
-    }
   }
 }
 
@@ -1052,8 +1063,8 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
     self.tx.root_bucket().rebalance();
     {
       let r = self.tx.split_r();
-      if r.stats.get_rebalance() > 0 {
-        r.stats.inc_rebalance_time(start_time.elapsed());
+      if r.stats.as_ref().unwrap().get_rebalance() > 0 {
+        r.stats.as_ref().unwrap().inc_rebalance_time(start_time.elapsed());
       }
     }
     let opgid = self.tx.meta().pgid();
@@ -1061,7 +1072,7 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
     let start_time = Instant::now();
     match self.tx.root_bucket().spill(bump) {
       Ok(_) => {
-        self.tx.split_r().stats.inc_spill_time(start_time.elapsed());
+        self.tx.split_r().stats.as_ref().unwrap().inc_spill_time(start_time.elapsed());
       }
       Err(e) => {
         let _ = self.rollback();
@@ -1114,7 +1125,7 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
 
     match self.tx.write_meta() {
       Ok(_) => {
-        self.tx.split_r().stats.inc_write_time(start_time.elapsed());
+        self.tx.split_r().stats.as_ref().unwrap().inc_write_time(start_time.elapsed());
       }
       Err(e) => {
         let _ = self.rollback();

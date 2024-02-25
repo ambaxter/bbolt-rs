@@ -49,7 +49,7 @@ where
 impl<'a, T> Eq for LCell<'a, T> where T: Eq {}
 
 /// A borrowed cell backed by `RefCell` with a bound value
-pub struct BCell<'a, T: Sized, B: Sized>(&'a (RefCell<T>, B));
+pub struct BCell<'a, T: Sized, B: Sized>(pub(crate) *const (RefCell<T>, B), pub(crate) PhantomData<&'a T>);
 
 impl<'a, T, B> Clone for BCell<'a, T, B> {
   fn clone(&self) -> Self {
@@ -59,14 +59,14 @@ impl<'a, T, B> Clone for BCell<'a, T, B> {
 
 impl<'a, T, B> Copy for BCell<'a, T, B> {}
 
-impl<'a, T, B: Clone> BCell<'a, T, B> {
+impl<'a, T, B: Copy> BCell<'a, T, B> {
   /// Allocates a BCell in a Bumpalo arena
   pub fn new_in(t: T, b: B, a: &'a Bump) -> BCell<'a, T, B> {
-    BCell(a.alloc((RefCell::new(t), b)))
+    BCell(a.alloc((RefCell::new(t), b)), PhantomData)
   }
 
   pub fn bound(&self) -> B {
-    self.0 .1.clone()
+    unsafe {&*self.0}.1
   }
 }
 
@@ -74,7 +74,7 @@ impl<'a, T, B> Deref for BCell<'a, T, B> {
   type Target = RefCell<T>;
 
   fn deref(&self) -> &Self::Target {
-    &self.0 .0
+    & unsafe{&*self.0}.0
   }
 }
 
@@ -83,7 +83,7 @@ where
   T: PartialEq,
 {
   fn eq(&self, other: &Self) -> bool {
-    self.0 .0 == other.0 .0
+    &self == &other
   }
 }
 

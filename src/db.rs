@@ -24,7 +24,6 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::atomic::Ordering::Release;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};

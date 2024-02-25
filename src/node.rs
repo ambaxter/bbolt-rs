@@ -34,7 +34,7 @@ impl<'tx> Eq for NodeW<'tx> {}
 
 impl<'tx> NodeW<'tx> {
   fn new_parent_in(bucket: BucketRwCell<'tx>) -> NodeW<'tx> {
-    let bump = bucket.api_tx().bump();
+    let bump = bucket.tx().bump();
     NodeW {
       is_leaf: false,
       key: CodSlice::Owned(&[]),
@@ -50,7 +50,7 @@ impl<'tx> NodeW<'tx> {
   }
 
   fn new_child_in(bucket: BucketRwCell<'tx>, is_leaf: bool, parent: NodeRwCell<'tx>) -> NodeW<'tx> {
-    let bump = bucket.api_tx().bump();
+    let bump = bucket.tx().bump();
     NodeW {
       is_leaf,
       key: CodSlice::Owned(&[]),
@@ -69,7 +69,7 @@ impl<'tx> NodeW<'tx> {
     bucket: BucketRwCell<'tx>, parent: Option<NodeRwCell<'tx>>, page: &RefPage<'tx>,
   ) -> NodeW<'tx> {
     assert!(page.is_leaf() || page.is_branch(), "Non-tree page read");
-    let bump = bucket.api_tx().bump();
+    let bump = bucket.tx().bump();
     let mut inodes = BVec::with_capacity_in(page.count as usize, bump);
     INode::read_inodes_in(&mut inodes, page);
     let _inodes = inodes.as_slice();
@@ -205,7 +205,7 @@ impl<'tx> NodeSplit<'tx> {
     parent.cell.borrow_mut().children.push(next);
 
     // Update the statistics
-    cell.bucket.api_tx().split_r().stats.inc_split(1);
+    cell.bucket.tx().split_r().stats.as_ref().unwrap().inc_split(1);
 
     (node, Some(next))
   }
@@ -279,7 +279,7 @@ pub struct NodeRwCell<'tx> {
 impl<'tx> NodeRwCell<'tx> {
   fn new_parent_in(bucket: BucketRwCell<'tx>) -> NodeRwCell<'tx> {
     NodeRwCell {
-      cell: LCell::new_in(NodeW::new_parent_in(bucket), bucket.api_tx().bump()),
+      cell: LCell::new_in(NodeW::new_parent_in(bucket), bucket.tx().bump()),
     }
   }
 
@@ -289,7 +289,7 @@ impl<'tx> NodeRwCell<'tx> {
     NodeRwCell {
       cell: LCell::new_in(
         NodeW::new_child_in(bucket, is_leaf, parent),
-        bucket.api_tx().bump(),
+        bucket.tx().bump(),
       ),
     }
   }
@@ -298,7 +298,7 @@ impl<'tx> NodeRwCell<'tx> {
     bucket: BucketRwCell<'tx>, parent: Option<NodeRwCell<'tx>>, page: &RefPage<'tx>,
   ) -> NodeRwCell<'tx> {
     NodeRwCell {
-      cell: LCell::new_in(NodeW::read_in(bucket, parent, page), bucket.api_tx().bump()),
+      cell: LCell::new_in(NodeW::read_in(bucket, parent, page), bucket.tx().bump()),
     }
   }
 
@@ -377,11 +377,11 @@ impl<'tx> NodeRwCell<'tx> {
     flags: u32,
   ) {
     let mut self_borrow = self.cell.borrow_mut();
-    if pgid >= self_borrow.bucket.api_tx().meta().pgid() {
+    if pgid >= self_borrow.bucket.tx().meta().pgid() {
       panic!(
         "pgid {} above high water mark {}",
         pgid,
-        self_borrow.bucket.api_tx().meta().pgid()
+        self_borrow.bucket.tx().meta().pgid()
       );
     } else if old_key.is_empty() {
       panic!("put: zero-length old key");
@@ -398,7 +398,7 @@ impl<'tx> NodeRwCell<'tx> {
       pgid,
       new_key,
       value,
-      self_borrow.bucket.api_tx().bump(),
+      self_borrow.bucket.tx().bump(),
     );
     if new_node.key().is_empty() {
       panic!("put: zero-length new key");
@@ -445,7 +445,7 @@ impl<'tx> NodeRwCell<'tx> {
         return Ok(());
       }
       cell.children.sort_by_key(|child| child.cell.borrow().key());
-      cell.bucket.api_tx()
+      cell.bucket.tx()
     };
 
     // Spill child nodes first. Child nodes can materialize sibling nodes in
@@ -510,7 +510,7 @@ impl<'tx> NodeRwCell<'tx> {
         node_cell.key = node_cell.inodes.deref()[0].cod_key();
       }
 
-      tx.split_r().stats.inc_spill(1);
+      tx.split_r().stats.as_ref().unwrap().inc_spill(1);
     }
 
     // If the root node split and created a new root then we need to spill that
@@ -556,7 +556,7 @@ impl<'tx> NodeRwCell<'tx> {
       return;
     }
     self_borrow.is_unbalanced = false;
-    let tx = self_borrow.bucket.api_tx();
+    let tx = self_borrow.bucket.tx();
 
     // Ignore if node is above threshold (25%) and has enough keys.
     let threshold = tx.page_size() / 4;
@@ -725,9 +725,9 @@ impl<'tx> NodeRwCell<'tx> {
     // Update statistics.
     self_borrow
       .bucket
-      .api_tx()
+      .tx()
       .split_r()
-      .stats
+      .stats.as_ref().unwrap()
       .inc_node_deref(1);
   }
 
@@ -738,7 +738,7 @@ impl<'tx> NodeRwCell<'tx> {
       if self_borrow.pgid == ZERO_PGID {
         return;
       }
-      (self_borrow.pgid, self_borrow.bucket.api_tx())
+      (self_borrow.pgid, self_borrow.bucket.tx())
     };
     let page = api_tx.mem_page(pgid);
     let txid = api_tx.meta().txid();
