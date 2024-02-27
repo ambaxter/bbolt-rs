@@ -73,6 +73,7 @@ impl<'tx> INode<'tx> {
     self.key.get_ref()
   }
 
+  #[inline]
   pub(crate) fn cod_key(&self) -> CodSlice<'tx, u8> {
     self.key
   }

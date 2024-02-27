@@ -23,7 +23,6 @@ use std::alloc::Layout;
 use std::marker::PhantomData;
 use std::ops::{AddAssign, Deref};
 use std::ptr::slice_from_raw_parts_mut;
-use std::rc::{Rc, Weak};
 use std::slice::{from_raw_parts, from_raw_parts_mut};
 use std::{mem, ptr};
 
@@ -110,6 +109,8 @@ pub trait BucketRwApi<'tx>: BucketApi<'tx> {
 
   /// NextSequence returns an autoincrementing integer for the bucket.
   fn next_sequence(&mut self) -> crate::Result<u64>;
+
+  fn set_fill_percent(&mut self, fill_percent: f64);
 }
 
 pub enum BucketImpl<'tx> {
@@ -290,10 +291,15 @@ impl<'tx> BucketRwApi<'tx> for BucketRwImpl<'tx> {
   fn next_sequence(&mut self) -> crate::Result<u64> {
     self.b.api_next_sequence()
   }
+
+  fn set_fill_percent(&mut self, fill_percent: f64) {
+    // TODO: Move to cell api call
+    self.b.cell.borrow_mut().w.fill_percent = fill_percent;
+  }
 }
 
 /// BucketStats records statistics about resources used by a bucket.
-#[derive(Copy, Clone, Default)]
+#[derive(Copy, Clone, Eq, PartialEq, Default, Debug)]
 pub struct BucketStats {
   // Page count statistics.
   /// number of logical branch pages
@@ -639,7 +645,7 @@ pub(crate) trait BucketIApi<'tx, T: TxIApi<'tx>>:
     if self.root() == ZERO_PGID {
       s.inline_bucket_n += 1;
     }
-    self.for_each_page(&mut |p, _, _| {
+    self.for_each_page(&mut |p, depth, _| {
       if let Some(leaf_page) = MappedLeafPage::coerce_ref(p) {
         s.key_n += p.count as i64;
 
@@ -693,6 +699,10 @@ pub(crate) trait BucketIApi<'tx, T: TxIApi<'tx>>:
           s.branch_in_use += used as i64;
           s.branch_overflow_n += branch_page.overflow as i64;
         }
+      }
+
+      if (depth + 1) as i64 > s.depth {
+        s.depth = (depth + 1) as i64;
       }
     });
     // Alloc stats can be computed from page counts and pageSize.
@@ -825,8 +835,7 @@ pub struct BucketCell<'tx> {
 
 impl<'tx> BucketIApi<'tx, TxCell<'tx>> for BucketCell<'tx> {
   fn new_in(
-    bump: &'tx Bump, bucket_header: InBucket, tx: TxCell<'tx>,
-    inline_page: Option<RefPage<'tx>>,
+    bump: &'tx Bump, bucket_header: InBucket, tx: TxCell<'tx>, inline_page: Option<RefPage<'tx>>,
   ) -> Self {
     let r = BucketR {
       bucket_header,
@@ -930,8 +939,7 @@ impl<'tx> SplitRef<BucketR<'tx>, TxRwCell<'tx>, BucketW<'tx>> for BucketRwCell<'
 
 impl<'tx> BucketIApi<'tx, TxRwCell<'tx>> for BucketRwCell<'tx> {
   fn new_in(
-    bump: &'tx Bump, bucket_header: InBucket, tx: TxRwCell<'tx>,
-    inline_page: Option<RefPage<'tx>>,
+    bump: &'tx Bump, bucket_header: InBucket, tx: TxRwCell<'tx>, inline_page: Option<RefPage<'tx>>,
   ) -> Self {
     let r = BucketR {
       bucket_header,
@@ -1278,7 +1286,9 @@ impl<'tx> BucketRwIApi<'tx> for BucketRwCell<'tx> {
     self
       .split_bound()
       .split_r()
-      .stats.as_ref().unwrap()
+      .stats
+      .as_ref()
+      .unwrap()
       .inc_node_count(1);
 
     n
@@ -1304,13 +1314,16 @@ impl<'tx> BucketRwIApi<'tx> for BucketRwCell<'tx> {
 
 #[cfg(test)]
 mod tests {
-  use crate::bucket::MAX_VALUE_SIZE;
-  use crate::common::cell::RefCell;
+  use crate::bucket::{BucketStats, MAX_VALUE_SIZE};
   use crate::test_support::TestDb;
   use crate::{
-    BucketApi, BucketRwApi, CursorApi, CursorRwApi, DbApi, DbRwAPI, Error, TxApi, TxRwApi,
+    BucketApi, BucketRwApi, CursorApi, CursorRwApi, DbApi, DbRwAPI, Error, TxApi, TxRwRefApi,
   };
   use anyhow::anyhow;
+  use itertools::Itertools;
+  use rand::rngs::StdRng;
+  use rand::seq::SliceRandom;
+  use rand::{Rng, SeedableRng};
   use std::sync::atomic::{AtomicU32, Ordering};
 
   #[test]
@@ -2030,39 +2043,275 @@ mod tests {
   }
 
   #[test]
-  #[ignore]
   fn test_bucket_stats() -> crate::Result<()> {
-    todo!()
+    let mut db = TestDb::new()?;
+    let big_key = "really-big-value";
+    for i in 0..500 {
+      db.update(|mut tx| {
+        let mut b = tx.create_bucket_if_not_exists("woojits")?;
+        b.put(format!("{:03}", i), format!("{}", i))?;
+        Ok(())
+      })?;
+    }
+    // TODO: Update to support different page sizes
+    let long_key_length = 10 * 4096 + 17;
+    db.update(|mut tx| {
+      tx.bucket_mut("woojits")
+        .unwrap()
+        .put(big_key, "*".repeat(long_key_length))?;
+      Ok(())
+    })?;
+    db.must_check();
+
+    // TODO: Support pagesize that's not 4096
+    let stat_4096 = BucketStats {
+      branch_page_n: 1,
+      branch_overflow_n: 0,
+      leaf_page_n: 7,
+      leaf_overflow_n: 10,
+      key_n: 501,
+      depth: 2,
+      branch_alloc: 4096,
+      branch_in_use: 149,
+      leaf_alloc: 69_632,
+      leaf_in_use: 0 +
+      7 * 16 + // leaf page header (x LeafPageN)
+      501 * 16 + // leaf elements
+      500 * 3 + big_key.len() as i64 + // leaf keys
+      1 * 10 + 2 * 90 + 3 * 400 + long_key_length as i64, // leaf values: 10 * 1digit, 90*2digits, ...
+      bucket_n: 1,
+      inline_bucket_n: 0,
+      inline_bucket_in_use: 0,
+    };
+    db.view(|tx| {
+      let b = tx.bucket("woojits").unwrap();
+      let stats = b.stats();
+      assert_eq!(stat_4096, stats, "stats differs from expectations");
+      Ok(())
+    })?;
+    Ok(())
   }
 
   #[test]
-  #[ignore]
   fn test_bucket_stats_random_fill() -> crate::Result<()> {
-    todo!()
+    let mut db = TestDb::new()?;
+    let mut count = 0;
+    let mut rand = StdRng::seed_from_u64(42);
+    let mut outer_range = (0..1000).collect_vec();
+    outer_range.shuffle(&mut rand);
+    for i in outer_range {
+      db.update(|mut tx| {
+        let mut b = tx.create_bucket_if_not_exists("woojits")?;
+        b.set_fill_percent(0.90);
+        let mut inner_range = (0..100).collect_vec();
+        inner_range.shuffle(&mut rand);
+        for j in inner_range {
+          let index = (j * 1000) + i;
+          b.put(format!("{:015}", index), "0000000000")?;
+          count += 1;
+        }
+        Ok(())
+      })?;
+    }
+    db.must_check();
+    db.view(|tx| {
+      let b = tx.bucket("woojits").unwrap();
+      let stats = b.stats();
+      assert_eq!(68, stats.branch_page_n, "unexpected BranchPageN");
+      assert_eq!(0, stats.branch_overflow_n, "unexpected BranchOverflowN");
+      assert_eq!(2946, stats.leaf_page_n, "unexpected LeafPageN");
+      assert_eq!(0, stats.leaf_overflow_n, "unexpected LeafOverflowN");
+      assert_eq!(10_0000, stats.key_n, "unexpected KeyN");
+      assert_eq!(94_491, stats.branch_in_use, "unexpected BranchInuse");
+      assert_eq!(4_147_136, stats.leaf_in_use, "unexpected LeafInuse");
+      assert_eq!(278_528, stats.branch_alloc, "unexpected BranchAlloc");
+      assert_eq!(12_066_816, stats.leaf_alloc, "unexpected LeafAlloc");
+      Ok(())
+    })?;
+    Ok(())
   }
 
   #[test]
-  #[ignore]
   fn test_bucket_stats_small() -> crate::Result<()> {
-    todo!()
+    let mut db = TestDb::new()?;
+    db.update(|mut tx| {
+      let mut b = tx.create_bucket("whozawhats")?;
+      b.put("foo", "bar")?;
+      Ok(())
+    })?;
+    db.must_check();
+    db.view(|tx| {
+      let b = tx.bucket("whozawhats").unwrap();
+      let stats = b.stats();
+      assert_eq!(0, stats.branch_page_n, "unexpected BranchPageN");
+      assert_eq!(0, stats.branch_overflow_n, "unexpected BranchOverflowN");
+      assert_eq!(0, stats.leaf_page_n, "unexpected LeafPageN");
+      assert_eq!(0, stats.leaf_overflow_n, "unexpected LeafOverflowN");
+      assert_eq!(1, stats.key_n, "unexpected KeyN");
+      assert_eq!(1, stats.depth, "unexpected Depth");
+      assert_eq!(0, stats.branch_in_use, "unexpected BranchInuse");
+      assert_eq!(0, stats.leaf_in_use, "unexpected LeafInuse");
+
+      //TODO: Fails if page_size != 4096? Db.Info?
+      assert_eq!(0, stats.branch_alloc, "unexpected BranchAlloc");
+      assert_eq!(0, stats.leaf_alloc, "unexpected LeafAlloc");
+
+      assert_eq!(1, stats.bucket_n, "unexpected BucketN");
+      assert_eq!(1, stats.inline_bucket_n, "unexpected InlineBucketN");
+      assert_eq!(
+        16 + 16 + 6,
+        stats.inline_bucket_in_use,
+        "unexpected InlineBucketInuse"
+      );
+
+      Ok(())
+    })?;
+    Ok(())
   }
 
   #[test]
-  #[ignore]
   fn test_bucket_stats_empty_bucket() -> crate::Result<()> {
-    todo!()
+    let mut db = TestDb::new()?;
+    db.update(|mut tx| {
+      tx.create_bucket("whozawhats")?;
+      Ok(())
+    })?;
+    db.must_check();
+    db.view(|tx| {
+      let b = tx.bucket("whozawhats").unwrap();
+      let stats = b.stats();
+      assert_eq!(0, stats.branch_page_n, "unexpected BranchPageN");
+      assert_eq!(0, stats.branch_overflow_n, "unexpected BranchOverflowN");
+      assert_eq!(0, stats.leaf_page_n, "unexpected LeafPageN");
+      assert_eq!(0, stats.leaf_overflow_n, "unexpected LeafOverflowN");
+      assert_eq!(0, stats.key_n, "unexpected KeyN");
+      assert_eq!(1, stats.depth, "unexpected Depth");
+      assert_eq!(0, stats.branch_in_use, "unexpected BranchInuse");
+      assert_eq!(0, stats.leaf_in_use, "unexpected LeafInuse");
+
+      //TODO: Fails if page_size != 4096? Db.Info?
+      assert_eq!(0, stats.branch_alloc, "unexpected BranchAlloc");
+      assert_eq!(0, stats.leaf_alloc, "unexpected LeafAlloc");
+
+      assert_eq!(1, stats.bucket_n, "unexpected BucketN");
+      assert_eq!(1, stats.inline_bucket_n, "unexpected InlineBucketN");
+      assert_eq!(
+        16, stats.inline_bucket_in_use,
+        "unexpected InlineBucketInuse"
+      );
+
+      Ok(())
+    })?;
+    Ok(())
   }
 
   #[test]
-  #[ignore]
   fn test_bucket_stats_nested() -> crate::Result<()> {
-    todo!()
+    let mut db = TestDb::new()?;
+    db.update(|mut tx| {
+      let mut b = tx.create_bucket("foo")?;
+      for i in 0..100 {
+        let i_str = format!("{:02}", i);
+        b.put(&i_str, &i_str)?;
+      }
+      let mut bar = b.create_bucket("bar")?;
+      for i in 0..10 {
+        let i_str = format!("{}", i);
+        bar.put(&i_str, &i_str)?;
+      }
+      let mut baz = bar.create_bucket("baz")?;
+      for i in 0..10 {
+        let i_str = format!("{}", i);
+        baz.put(&i_str, &i_str)?;
+      }
+      Ok(())
+    })?;
+    db.must_check();
+
+    db.view(|tx| {
+      let b = tx.bucket("foo").unwrap();
+      let stats = b.stats();
+      assert_eq!(0, stats.branch_page_n, "unexpected BranchPageN");
+      assert_eq!(0, stats.branch_overflow_n, "unexpected BranchOverflowN");
+      assert_eq!(2, stats.leaf_page_n, "unexpected LeafPageN");
+      assert_eq!(0, stats.leaf_overflow_n, "unexpected LeafOverflowN");
+      assert_eq!(122, stats.key_n, "unexpected KeyN");
+      assert_eq!(3, stats.depth, "unexpected Depth");
+      assert_eq!(0, stats.branch_in_use, "unexpected BranchInuse");
+
+      let mut foo = 16; // foo (pghdr)
+      foo += 101 * 16; // foo leaf elements
+      foo += 100 * 2 + 100 * 2; // foo leaf key/values
+      foo += 3 + 16; // foo -> bar key/value
+
+      let mut bar = 16; // bar (pghdr)
+      bar += 11 * 16; // bar leaf elements
+      bar += 10 + 10; // bar leaf key/values
+      bar += 3 + 16; //bar -> baz key/value
+
+      let mut baz = 16; // baz (inline) (pghdr)
+      baz += 10 * 16; // baz leaf elements
+      baz += 10 + 10; // baz leaf key/values
+
+      assert_eq!(foo + bar + baz, stats.leaf_in_use, "unexpected LeafInuse");
+
+      //TODO: Fails if page_size != 4096? Db.Info?
+      assert_eq!(0, stats.branch_alloc, "unexpected BranchAlloc");
+      assert_eq!(8192, stats.leaf_alloc, "unexpected LeafAlloc");
+
+      assert_eq!(3, stats.bucket_n, "unexpected BucketN");
+      assert_eq!(1, stats.inline_bucket_n, "unexpected InlineBucketN");
+      assert_eq!(
+        baz, stats.inline_bucket_in_use,
+        "unexpected InlineBucketInuse"
+      );
+      Ok(())
+    })?;
+    Ok(())
   }
 
   #[test]
-  #[ignore]
   fn test_bucket_stats_large() -> crate::Result<()> {
-    todo!()
+    let mut db = TestDb::new()?;
+    let mut index = 0;
+    for _ in 0..100 {
+      db.update(|mut tx| {
+        let mut b = tx.create_bucket_if_not_exists("widgets")?;
+        for _ in 0..1000 {
+          let i_str = format!("{}", index);
+          b.put(&i_str, &i_str)?;
+          index += 1;
+        }
+        Ok(())
+      })?;
+    }
+
+    db.must_check();
+
+    // TODO: Support pagesize that's not 4096
+    let stat_4096 = BucketStats {
+      branch_page_n: 13,
+      branch_overflow_n: 0,
+      leaf_page_n: 1196,
+      leaf_overflow_n: 0,
+      key_n: 100_000,
+      depth: 3,
+      branch_alloc: 53_248,
+      branch_in_use: 25_257,
+      leaf_alloc: 4_898_816,
+      leaf_in_use: 2_596_916,
+      bucket_n: 1,
+      inline_bucket_n: 0,
+      inline_bucket_in_use: 0,
+    };
+
+    db.view(|tx| {
+      let b = tx.bucket("widgets").unwrap();
+      let stats = b.stats();
+      assert_eq!(stat_4096, stats, "stats differs from expectations");
+      Ok(())
+    })?;
+    Ok(())
   }
 
   #[test]

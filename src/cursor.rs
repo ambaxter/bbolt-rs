@@ -231,6 +231,13 @@ pub(crate) struct InnerCursor<'tx, T: TxIApi<'tx>, B: BucketIApi<'tx, T>> {
 
 impl<'tx, T: TxIApi<'tx>, B: BucketIApi<'tx, T>> InnerCursor<'tx, T, B> {
   pub(crate) fn new(cell: B, bump: &'tx Bump) -> Self {
+    cell
+      .tx()
+      .split_r()
+      .stats
+      .as_ref()
+      .unwrap()
+      .inc_cursor_count(1);
     InnerCursor {
       bucket: cell,
       stack: BVec::with_capacity_in(0, bump),
@@ -629,7 +636,7 @@ impl<'tx, B: BucketRwIApi<'tx>> CursorRwIApi<'tx> for InnerCursor<'tx, TxRwCell<
 mod tests {
   use crate::test_support::TestDb;
   use crate::{
-    BucketApi, BucketRwApi, CursorApi, CursorRwApi, DbApi, DbRwAPI, Error, TxApi, TxRwApi,
+    BucketApi, BucketRwApi, CursorApi, CursorRwApi, DbApi, DbRwAPI, Error, TxApi, TxRwRefApi,
   };
 
   #[test]

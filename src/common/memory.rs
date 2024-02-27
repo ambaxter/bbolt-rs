@@ -49,7 +49,10 @@ where
 impl<'a, T> Eq for LCell<'a, T> where T: Eq {}
 
 /// A borrowed cell backed by `RefCell` with a bound value
-pub struct BCell<'a, T: Sized, B: Sized>(pub(crate) *const (RefCell<T>, B), pub(crate) PhantomData<&'a T>);
+pub struct BCell<'a, T: Sized, B: Sized>(
+  pub(crate) *const (RefCell<T>, B),
+  pub(crate) PhantomData<&'a T>,
+);
 
 impl<'a, T, B> Clone for BCell<'a, T, B> {
   fn clone(&self) -> Self {
@@ -66,7 +69,7 @@ impl<'a, T, B: Copy> BCell<'a, T, B> {
   }
 
   pub fn bound(&self) -> B {
-    unsafe {&*self.0}.1
+    unsafe { &*self.0 }.1
   }
 }
 
@@ -74,7 +77,7 @@ impl<'a, T, B> Deref for BCell<'a, T, B> {
   type Target = RefCell<T>;
 
   fn deref(&self) -> &Self::Target {
-    & unsafe{&*self.0}.0
+    &unsafe { &*self.0 }.0
   }
 }
 
@@ -83,7 +86,7 @@ where
   T: PartialEq,
 {
   fn eq(&self, other: &Self) -> bool {
-    &self == &other
+    self.deref() == other.deref()
   }
 }
 
@@ -123,6 +126,8 @@ where
       *self = CodSlice::Owned(o);
     }
   }
+
+  #[inline]
   pub fn get_ref(&self) -> &'tx [T] {
     match self {
       CodSlice::Owned(s) => s,

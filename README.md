@@ -14,11 +14,28 @@ Features:
 * Explicitly designed to prevent transaction dependant resources from escaping the transaction.
 * RwLock based transactions
 * File backed database
-* Memory backed database for Miri to use
+* Memory backed database for Miri to check for unsafe behavior against
 * Simple and straightforward public APIs
 
+Currently not supported:
+* Tx.copy
+* No freelist sync
+* Compact
+* Most of the main application
+* Strict mode
+* File open timeout
 
 ## TODO
+
+### Before Release 1.38
+- [ ] Most of the db tests
+- [ ] Most of the examples
+- [ ] Node leaf tests
+- [x] All stats 
+- [ ] db batch
+- [ ] main bench
+- [ ] clippy again
+
 
 ### General
 - [x] Read-only DB access
@@ -32,7 +49,7 @@ Features:
 - [x] Optional mlock
 - [ ] Strict mode
 - [x] impl trait for public apis?
-- [ ] Add try_begin(rw), try_begin(rw)_for, and try_begin(rw)_until to prevent deadlocks
+- [x] Add try_begin(rw), try_begin(rw)_for, and try_begin(rw)_until to prevent deadlocks
 - [ ] blag post
 
 ### Open Questions
@@ -47,7 +64,8 @@ Features:
 ## To Refactor
 
 ### src/tx.rs
-- [ ] API allows commit for TxRwRef
+- [x] API allows commit for TxRwRef
+- [ ] Move tx stats in db.allocate to tx.allocate
 
 ### src/nodes.rs
 - [ ] We have at least 3 different functions to write inodes
@@ -111,10 +129,10 @@ Features:
 - [x] test_tx_release_range
 - [ ] example_tx_rollback
 - [ ] example_tx_copy_file
-- [ ] test_tx_stats_get_and_inc_atomically
-- [ ] test_tx_stats_sub
+- [x] test_tx_stats_get_and_inc_atomically
+- [x] test_tx_stats_sub
 - [ ] test_tx_truncate_before_write
-- [ ] test_tx_stats_add
+- [x] test_tx_stats_add
 
 ### src/nodes.rs
 - [ ] test_node_read_leaf_page
@@ -158,9 +176,9 @@ Features:
 - [ ] test_db_update_panic
 - [ ] test_db_view_error
 - [ ] test_db_view_panic
-- [ ] test_db_stats
+- [x] test_db_stats
 - [ ] test_db_consistency
-- [ ] test_dbstats_sub
+- [x] test_dbstats_sub
 - [ ] test_db_batch
 - [ ] test_db_batch_panic
 - [ ] test_db_batch_full
@@ -188,7 +206,7 @@ Features:
 - [ ] example_cursor_reverse
 
 ### src/bucket.rs
-- [ ] BucketApi.stats
+- [x] BucketApi.stats
 - [x] BucketApi.set_sequence
 - [x] BucketApi.next_sequence
 - [x] test_bucket_delete_freelist_overflow
@@ -216,12 +234,12 @@ Features:
 - [x] test_bucket_put_empty_key
 - [x] test_bucket_put_key_too_large
 - [x] test_bucket_put_value_too_large
-- [ ] test_bucket_stats
-- [ ] test_bucket_stats_random_fill
-- [ ] test_bucket_stats_small
-- [ ] test_bucket_stats_empty_bucket
-- [ ] test_bucket_stats_nested
-- [ ] test_bucket_stats_large
+- [x] test_bucket_stats
+- [x] test_bucket_stats_random_fill
+- [x] test_bucket_stats_small
+- [x] test_bucket_stats_empty_bucket
+- [x] test_bucket_stats_nested
+- [x] test_bucket_stats_large
 - [ ] test_bucket_put_single
 - [ ] test_bucket_put_multiple
 - [ ] test_bucket_delete_quick

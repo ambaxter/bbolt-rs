@@ -205,7 +205,14 @@ impl<'tx> NodeSplit<'tx> {
     parent.cell.borrow_mut().children.push(next);
 
     // Update the statistics
-    cell.bucket.tx().split_r().stats.as_ref().unwrap().inc_split(1);
+    cell
+      .bucket
+      .tx()
+      .split_r()
+      .stats
+      .as_ref()
+      .unwrap()
+      .inc_split(1);
 
     (node, Some(next))
   }
@@ -393,13 +400,7 @@ impl<'tx> NodeRwCell<'tx> {
     let index = self_borrow
       .inodes
       .binary_search_by(|probe| probe.key().cmp(old_key));
-    let new_node = INode::new_owned_in(
-      flags,
-      pgid,
-      new_key,
-      value,
-      self_borrow.bucket.tx().bump(),
-    );
+    let new_node = INode::new_owned_in(flags, pgid, new_key, value, self_borrow.bucket.tx().bump());
     if new_node.key().is_empty() {
       panic!("put: zero-length new key");
     }
@@ -557,6 +558,8 @@ impl<'tx> NodeRwCell<'tx> {
     }
     self_borrow.is_unbalanced = false;
     let tx = self_borrow.bucket.tx();
+
+    tx.split_r().stats.as_ref().unwrap().inc_rebalance(1);
 
     // Ignore if node is above threshold (25%) and has enough keys.
     let threshold = tx.page_size() / 4;
@@ -727,7 +730,9 @@ impl<'tx> NodeRwCell<'tx> {
       .bucket
       .tx()
       .split_r()
-      .stats.as_ref().unwrap()
+      .stats
+      .as_ref()
+      .unwrap()
       .inc_node_deref(1);
   }
 

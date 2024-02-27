@@ -1,7 +1,7 @@
 use crate::common::page::CoerciblePage;
 use crate::common::self_owned::SelfOwned;
 use crate::tx::check::{TxCheck, UnsealRwTx, UnsealTx};
-use crate::{DBOptions, DbApi, TxApi, TxRwApi, DB};
+use crate::{DBOptions, DbApi, TxApi, TxRwRefApi, DB};
 use aligners::{alignment, AlignedBytes};
 use std::ops::{Deref, DerefMut};
 use tempfile::{Builder, NamedTempFile};
@@ -89,7 +89,7 @@ impl TestDb {
     self.db.begin_tx()
   }
 
-  pub(crate) fn begin_rw_unseal(&mut self) -> crate::Result<impl TxRwApi + UnsealRwTx> {
+  pub(crate) fn begin_rw_unseal(&mut self) -> crate::Result<impl TxRwRefApi + UnsealRwTx> {
     self.db.begin_rw_tx()
   }
 }

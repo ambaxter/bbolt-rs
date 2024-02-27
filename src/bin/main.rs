@@ -1,4 +1,4 @@
-use bbolt_rs::{BucketRwApi, DbApi, DbRwAPI, TxCheck, TxRwApi, DB};
+use bbolt_rs::{BucketRwApi, DbApi, DbRwAPI, TxCheck, TxRwRefApi, DB};
 use std::time::Instant;
 
 fn main() -> bbolt_rs::Result<()> {

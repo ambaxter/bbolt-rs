@@ -13,8 +13,8 @@ use crate::common::self_owned::SelfOwned;
 use crate::common::tree::MappedLeafPage;
 use crate::common::{BVec, PgId, SplitRef, TxId};
 use crate::freelist::{Freelist, MappedFreeListPage};
-use crate::tx::{TxIApi, TxImpl, TxRef, TxRwCell, TxRwImpl, TxRwRef, TxStats};
-use crate::{Error, TxApi, TxRwApi};
+use crate::tx::{TxIApi, TxImpl, TxRef, TxRwApi, TxRwCell, TxRwImpl, TxRwRef, TxStats};
+use crate::{Error, TxApi, TxRwRefApi};
 use aligners::{alignment, AlignedBytes};
 use fs4::FileExt;
 use memmap2::{Advice, MmapOptions, MmapRaw};
@@ -196,14 +196,10 @@ impl DbStats {
   }
 
   pub fn sub(&self, rhs: &DbStats) -> DbStats {
-    let stats = self.clone();
-    stats.inc_free_page_n(-rhs.get_free_page_n());
-    stats.inc_pending_page_n(-rhs.get_pending_page_n());
-    stats.inc_free_alloc(-rhs.get_free_alloc());
-    stats.inc_free_list_in_use(-rhs.get_free_list_in_use());
-    stats.inc_tx_n(-rhs.get_tx_n());
-    stats.inc_open_tx_n(-rhs.get_open_tx_n());
-    stats
+    let diff = self.clone();
+    diff.inc_tx_n(-rhs.get_tx_n());
+    diff.tx_stats.sub_assign(&rhs.tx_stats);
+    diff
   }
 }
 
@@ -919,7 +915,7 @@ impl<'tx> DbIApi<'tx> for DbShared {
     }
 
     let n = records.txs.len();
-    self.stats.inc_open_tx_n(n as i64);
+    self.stats.open_tx_n.store(n as i64, Ordering::Release);
     self.stats.tx_stats.add_assign(&tx_stats);
   }
 
@@ -933,6 +929,14 @@ impl<'tx> DbIApi<'tx> for DbShared {
     } else {
       AlignedBytes::new_zeroed(page_count as usize * self.backend.page_size())
     };
+
+    //TODO: This should reside in tx.allocate
+    {
+      let tx = tx.cell.borrow();
+      let stats = tx.r.stats.as_ref().unwrap();
+      stats.inc_page_count(page_count as i64);
+      stats.inc_page_alloc((page_count * tx.r.meta.page_size() as u64) as i64);
+    }
 
     let mut mut_page = SelfOwned::new_with_map(bytes, |b| MutPage::new(b.as_mut_ptr()));
     mut_page.overflow = (page_count - 1) as u32;
@@ -1427,6 +1431,11 @@ impl DB {
     let meta = state.current_meta;
     let txid = meta.txid();
     state.txs.push(txid);
+    self.stats.inc_tx_n(1);
+    self
+      .stats
+      .open_tx_n
+      .store(state.txs.len() as i64, Ordering::Release);
     Ok(TxImpl::new(bump, lock, meta))
   }
 
@@ -1441,6 +1450,11 @@ impl DB {
       let meta = state.current_meta;
       let txid = meta.txid();
       state.txs.push(txid);
+      self.stats.inc_tx_n(1);
+      self
+        .stats
+        .open_tx_n
+        .store(state.txs.len() as i64, Ordering::Release);
       Ok(Some(TxImpl::new(bump, lock, meta)))
     } else {
       Ok(None)
@@ -1566,6 +1580,9 @@ impl DbRwAPI for DB {
 
 #[cfg(test)]
 mod test {
+  use crate::db::DbStats;
+  use crate::test_support::TestDb;
+  use crate::{DbApi, DbRwAPI, TxRwRefApi};
 
   #[test]
   #[ignore]
@@ -1760,9 +1777,17 @@ mod test {
   }
 
   #[test]
-  #[ignore]
-  fn test_db_stats() {
-    todo!()
+  fn test_db_stats() -> crate::Result<()> {
+    let mut db = TestDb::new()?;
+    db.update(|mut tx| {
+      tx.create_bucket("widgets")?;
+      Ok(())
+    })?;
+    let stats = db.stats();
+    assert_eq!(2, stats.tx_stats.get_page_count());
+    assert_eq!(0, stats.get_free_page_n());
+    assert_eq!(2, stats.get_pending_page_n());
+    Ok(())
   }
 
   #[test]
@@ -1772,9 +1797,16 @@ mod test {
   }
 
   #[test]
-  #[ignore]
   fn test_dbstats_sub() {
-    todo!()
+    let a = DbStats::default();
+    let b = DbStats::default();
+    a.tx_stats.inc_page_count(3);
+    a.inc_free_page_n(4);
+    b.tx_stats.inc_page_count(10);
+    b.inc_free_page_n(14);
+    let diff = b.sub(&a);
+    assert_eq!(7, diff.tx_stats.get_page_count());
+    assert_eq!(14, diff.get_free_page_n());
   }
 
   #[test]

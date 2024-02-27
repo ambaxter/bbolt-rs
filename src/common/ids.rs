@@ -31,6 +31,7 @@ macro_rules! id {
     impl Add<u64> for $x {
       type Output = $x;
 
+      #[inline(always)]
       fn add(self, rhs: u64) -> Self::Output {
         $x(self.0 + rhs)
       }
@@ -39,24 +40,28 @@ macro_rules! id {
     impl Sub<u64> for $x {
       type Output = $x;
 
+      #[inline(always)]
       fn sub(self, rhs: u64) -> Self::Output {
         $x(self.0 - rhs)
       }
     }
 
     impl AddAssign<u64> for $x {
+      #[inline(always)]
       fn add_assign(&mut self, rhs: u64) {
         self.0 += rhs;
       }
     }
 
     impl SubAssign<u64> for $x {
+      #[inline(always)]
       fn sub_assign(&mut self, rhs: u64) {
         self.0 -= rhs;
       }
     }
 
     impl PartialEq<$x> for u64 {
+      #[inline(always)]
       fn eq(&self, other: &$x) -> bool {
         *self == other.0
       }
