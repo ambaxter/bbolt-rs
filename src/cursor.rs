@@ -9,37 +9,33 @@ use bumpalo::Bump;
 use either::Either;
 use std::marker::PhantomData;
 
+/// Read-only Cursor API
 pub trait CursorApi<'tx> {
   /// First moves the cursor to the first item in the bucket and returns its key and value.
-  /// If the bucket is empty then a nil key and value are returned.
-  /// The returned key and value are only valid for the life of the transaction.
+  /// If the bucket is empty then None is returned.
   fn first(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)>;
 
   /// Last moves the cursor to the last item in the bucket and returns its key and value.
-  /// If the bucket is empty then a nil key and value are returned.
-  /// The returned key and value are only valid for the life of the transaction.
+  /// If the bucket is empty then None is returned.
   fn last(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)>;
 
   /// Next moves the cursor to the next item in the bucket and returns its key and value.
-  /// If the cursor is at the end of the bucket then a nil key and value are returned.
-  /// The returned key and value are only valid for the life of the transaction.
+  /// If the cursor is at the end of the bucket then None is returned.
   fn next(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)>;
 
   /// Prev moves the cursor to the previous item in the bucket and returns its key and value.
-  /// If the cursor is at the beginning of the bucket then a nil key and value are returned.
-  /// The returned key and value are only valid for the life of the transaction.
+  /// If the cursor is at the beginning of the bucket then None is returned.
   fn prev(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)>;
 
   /// Seek moves the cursor to a given key using a b-tree search and returns it.
   /// If the key does not exist then the next key is used. If no keys
-  /// follow, a nil key is returned.
-  /// The returned key and value are only valid for the life of the transaction.
+  /// follow, None is returned.
   fn seek<T: AsRef<[u8]>>(&mut self, seek: T) -> Option<(&'tx [u8], Option<&'tx [u8]>)>;
 }
 
+/// RW Bucket API
 pub trait CursorRwApi<'tx>: CursorApi<'tx> {
   /// Delete removes the current key/value under the cursor from the bucket.
-  /// Delete fails if current key/value is a bucket or if the transaction is not writable.
   fn delete(&mut self) -> crate::Result<()>;
 }
 

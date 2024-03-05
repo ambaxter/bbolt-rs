@@ -26,6 +26,7 @@ use std::ptr::slice_from_raw_parts_mut;
 use std::slice::{from_raw_parts, from_raw_parts_mut};
 use std::{mem, ptr};
 
+/// Read-only Bucket API
 pub trait BucketApi<'tx>
 where
   Self: Sized,
@@ -37,18 +38,14 @@ where
   fn is_writeable(&self) -> bool;
 
   /// Cursor creates a cursor associated with the bucket.
-  /// The cursor is only valid as long as the transaction is open.
-  /// Do not use a cursor after the transaction is closed.
   fn cursor(&self) -> CursorImpl<'tx>;
 
   /// Bucket retrieves a nested bucket by name.
-  /// Returns nil if the bucket does not exist.
-  /// The bucket instance is only valid for the lifetime of the transaction.
+  /// Returns None if the bucket does not exist.
   fn bucket<T: AsRef<[u8]>>(&self, name: T) -> Option<BucketImpl<'tx>>;
 
   /// Get retrieves the value for a key in the bucket.
-  /// Returns a nil value if the key does not exist or if the key is a nested bucket.
-  /// The returned value is only valid for the life of the transaction.
+  /// Returns None if the key does not exist or if the key is a nested bucket.
   fn get<T: AsRef<[u8]>>(&self, key: T) -> Option<&'tx [u8]>;
 
   /// Sequence returns the current integer for the bucket without incrementing it.
@@ -63,30 +60,33 @@ where
     &self, f: F,
   ) -> crate::Result<()>;
 
+  /// ForEach executes a function for each bucket in a bucket.
+  /// Because ForEach uses a Cursor, the iteration over keys is in lexicographical order.
+  /// If the provided function returns an error then the iteration is stopped and
+  /// the error is returned to the caller. The provided function must not modify
+  /// the bucket; this will result in undefined behavior.
   fn for_each_bucket<F: FnMut(&'tx [u8]) -> crate::Result<()>>(&self, f: F) -> crate::Result<()>;
 
   /// Stats returns stats on a bucket.
   fn stats(&self) -> BucketStats;
 }
 
+/// RW Bucket API
 pub trait BucketRwApi<'tx>: BucketApi<'tx> {
   fn bucket_mut<T: AsRef<[u8]>>(&mut self, name: T) -> Option<impl BucketRwApi<'tx>>;
 
   /// CreateBucket creates a new bucket at the given key and returns the new bucket.
   /// Returns an error if the key already exists, if the bucket name is blank, or if the bucket name is too long.
-  /// The bucket instance is only valid for the lifetime of the transaction.
   fn create_bucket<T: AsRef<[u8]>>(&mut self, key: T) -> crate::Result<impl BucketRwApi<'tx>>;
 
   /// CreateBucketIfNotExists creates a new bucket if it doesn't already exist and returns a reference to it.
   /// Returns an error if the bucket name is blank, or if the bucket name is too long.
-  /// The bucket instance is only valid for the lifetime of the transaction.
   fn create_bucket_if_not_exists<T: AsRef<[u8]>>(
     &mut self, key: T,
   ) -> crate::Result<impl BucketRwApi<'tx>>;
 
   /// Cursor creates a cursor associated with the bucket.
   /// The cursor is only valid as long as the transaction is open.
-  /// Do not use a cursor after the transaction is closed.
   fn cursor_mut(&self) -> impl CursorRwApi<'tx>;
 
   /// DeleteBucket deletes a bucket at the given key.
@@ -95,13 +95,11 @@ pub trait BucketRwApi<'tx>: BucketApi<'tx> {
 
   /// Put sets the value for a key in the bucket.
   /// If the key exist then its previous value will be overwritten.
-  /// Supplied value must remain valid for the life of the transaction.
-  /// Returns an error if the bucket was created from a read-only transaction, if the key is blank, if the key is too large, or if the value is too large.
+  /// Returns an error if the key is blank, if the key is too large, or if the value is too large.
   fn put<T: AsRef<[u8]>, U: AsRef<[u8]>>(&mut self, key: T, data: U) -> crate::Result<()>;
 
   /// Delete removes a key from the bucket.
-  /// If the key does not exist then nothing is done and a nil error is returned.
-  /// Returns an error if the bucket was created from a read-only transaction.
+  /// If the key does not exist then nothing is done.
   fn delete<T: AsRef<[u8]>>(&mut self, key: T) -> crate::Result<()>;
 
   /// SetSequence updates the sequence number for the bucket.
@@ -110,6 +108,7 @@ pub trait BucketRwApi<'tx>: BucketApi<'tx> {
   /// NextSequence returns an autoincrementing integer for the bucket.
   fn next_sequence(&mut self) -> crate::Result<u64>;
 
+  /// Set the fill percent of the bucket
   fn set_fill_percent(&mut self, fill_percent: f64);
 }
 
@@ -174,7 +173,7 @@ impl<'tx> BucketApi<'tx> for BucketImpl<'tx> {
   }
 
   fn for_each<F: FnMut(&'tx [u8], Option<&'tx [u8]>) -> crate::Result<()>>(
-    &self, mut f: F,
+    &self, f: F,
   ) -> crate::Result<()> {
     match self {
       BucketImpl::R(r) => r.api_for_each(f),
@@ -182,9 +181,7 @@ impl<'tx> BucketApi<'tx> for BucketImpl<'tx> {
     }
   }
 
-  fn for_each_bucket<F: FnMut(&'tx [u8]) -> crate::Result<()>>(
-    &self, mut f: F,
-  ) -> crate::Result<()> {
+  fn for_each_bucket<F: FnMut(&'tx [u8]) -> crate::Result<()>>(&self, f: F) -> crate::Result<()> {
     match self {
       BucketImpl::R(r) => r.api_for_each_bucket(f),
       BucketImpl::RW(rw) => rw.api_for_each_bucket(f),
@@ -821,15 +818,6 @@ pub struct BucketRW<'tx> {
   pub(crate) w: BucketW<'tx>,
 }
 
-impl<'tx> BucketRW<'tx> {
-  pub fn new_in(bump: &'tx Bump, in_bucket: InBucket) -> BucketRW<'tx> {
-    BucketRW {
-      r: BucketR::new(in_bucket),
-      w: BucketW::new_in(bump),
-    }
-  }
-}
-
 #[derive(Copy, Clone)]
 pub struct BucketCell<'tx> {
   cell: BCell<'tx, BucketR<'tx>, TxCell<'tx>>,
@@ -888,15 +876,6 @@ impl<'tx> SplitRef<BucketR<'tx>, TxCell<'tx>, InnerBucketW<'tx, TxCell<'tx>, Buc
     self.cell.borrow_mut()
   }
 
-  fn split_ref_mut(
-    &self,
-  ) -> (
-    RefMut<BucketR<'tx>>,
-    Option<RefMut<InnerBucketW<'tx, TxCell<'tx>, BucketCell<'tx>>>>,
-  ) {
-    (self.cell.borrow_mut(), None)
-  }
-
   fn split_ow_mut(&self) -> Option<RefMut<InnerBucketW<'tx, TxCell<'tx>, BucketCell<'tx>>>> {
     None
   }
@@ -927,11 +906,6 @@ impl<'tx> SplitRef<BucketR<'tx>, TxRwCell<'tx>, BucketW<'tx>> for BucketRwCell<'
 
   fn split_r_mut(&self) -> RefMut<BucketR<'tx>> {
     RefMut::map(self.cell.borrow_mut(), |b| &mut b.r)
-  }
-
-  fn split_ref_mut(&self) -> (RefMut<BucketR<'tx>>, Option<RefMut<BucketW<'tx>>>) {
-    let (r, w) = RefMut::map_split(self.cell.borrow_mut(), |b| (&mut b.r, &mut b.w));
-    (r, Some(w))
   }
 
   fn split_ow_mut(&self) -> Option<RefMut<BucketW<'tx>>> {
@@ -1325,7 +1299,7 @@ mod tests {
   use itertools::Itertools;
   use rand::rngs::StdRng;
   use rand::seq::SliceRandom;
-  use rand::{Rng, SeedableRng};
+  use rand::SeedableRng;
   use std::sync::atomic::{AtomicU32, Ordering};
 
   #[test]

@@ -36,6 +36,7 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+/// Read-only transaction API
 pub trait TxApi<'tx>: TxCheck<'tx> {
   /// ID returns the transaction id.
   fn id(&self) -> TxId;
@@ -47,49 +48,40 @@ pub trait TxApi<'tx>: TxCheck<'tx> {
   fn writeable(&self) -> bool;
 
   /// Cursor creates a cursor associated with the root bucket.
-  /// All items in the cursor will return a nil value because all root bucket keys point to buckets.
-  /// The cursor is only valid as long as the transaction is open.
-  /// Do not use a cursor after the transaction is closed.
+  /// All items in the cursor will return None value because all root bucket keys point to buckets.
   fn cursor(&self) -> CursorImpl<'tx>;
 
   /// Stats retrieves a copy of the current transaction statistics.
   fn stats(&self) -> Arc<TxStats>;
 
   /// Bucket retrieves a bucket by name.
-  /// Returns nil if the bucket does not exist.
-  /// The bucket instance is only valid for the lifetime of the transaction.
+  /// Returns None if the bucket does not exist.
   fn bucket<T: AsRef<[u8]>>(&self, name: T) -> Option<BucketImpl<'tx>>;
 
   fn for_each<F: FnMut(&[u8], BucketImpl<'tx>) -> crate::Result<()>>(
     &self, f: F,
   ) -> crate::Result<()>;
 
-  /// Rollback closes the transaction and ignores all previous updates. Read-only
-  /// transactions must be rolled back and not committed.
+  /// Rollback closes the transaction and ignores all previous updates.
   fn rollback(self) -> crate::Result<()>;
-
-  /// Page returns page information for a given page number.
-  /// This is only safe for concurrent use when used by a writable transaction.
-  fn page(&self, id: PgId) -> crate::Result<Option<PageInfo>>;
 }
 
+/// RW transaction API
 pub trait TxRwRefApi<'tx>: TxApi<'tx> {
-  /// Cursor creates a cursor associated with the root bucket.
-  /// All items in the cursor will return a nil value because all root bucket keys point to buckets.
-  /// The cursor is only valid as long as the transaction is open.
-  /// Do not use a cursor after the transaction is closed.
+  /// Cursor creates a mutable cursor associated with the root bucket.
+  /// All items in the cursor will return None because all root bucket keys point to buckets.
   fn cursor_mut(&mut self) -> CursorRwImpl<'tx>;
 
+  /// bucket_mut retrieves a mutable bucket by name.
+  /// Returns None if the bucket does not exist.
   fn bucket_mut<T: AsRef<[u8]>>(&mut self, name: T) -> Option<BucketRwImpl<'tx>>;
 
   /// CreateBucket creates a new bucket.
   /// Returns an error if the bucket already exists, if the bucket name is blank, or if the bucket name is too long.
-  /// The bucket instance is only valid for the lifetime of the transaction.
   fn create_bucket<T: AsRef<[u8]>>(&mut self, name: T) -> crate::Result<BucketRwImpl<'tx>>;
 
   /// CreateBucketIfNotExists creates a new bucket if it doesn't already exist.
   /// Returns an error if the bucket name is blank, or if the bucket name is too long.
-  /// The bucket instance is only valid for the lifetime of the transaction.
   fn create_bucket_if_not_exists<T: AsRef<[u8]>>(
     &mut self, name: T,
   ) -> crate::Result<BucketRwImpl<'tx>>;
@@ -102,14 +94,14 @@ pub trait TxRwRefApi<'tx>: TxApi<'tx> {
   fn on_commit<F: FnMut() + 'tx>(&mut self, f: F);
 }
 
+/// RW transaction API + Commit
 pub trait TxRwApi<'tx>: TxRwRefApi<'tx> {
   /// Commit writes all changes to disk and updates the meta page.
-  /// Returns an error if a disk write error occurs, or if Commit is
-  /// called on a read-only transaction.
+  /// Returns an error if a disk write error occurs
   fn commit(self) -> crate::Result<()>;
 }
 
-// TODO: Add functions to simplify access
+/// Stats for the transaction
 #[derive(Default)]
 pub struct TxStats {
   // Page statistics.
@@ -413,11 +405,6 @@ pub(crate) trait TxIApi<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
     r.meta.pgid().0 * r.meta.page_size() as u64
   }
 
-  /// See [TxApi::writeable]
-  fn api_writeable(self) -> bool {
-    self.split_ow().is_some()
-  }
-
   /// See [TxApi::cursor]
   fn api_cursor(self) -> InnerCursor<'tx, Self, Self::BucketType> {
     let root_bucket = self.root_bucket();
@@ -444,7 +431,6 @@ pub(crate) trait TxIApi<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
     &self, mut f: F,
   ) -> crate::Result<()> {
     let root_bucket = self.root_bucket();
-    // TODO: Are we calling the right function?
     root_bucket.api_for_each_bucket(|k| {
       let bucket = root_bucket.api_bucket(k).unwrap();
       f(k, bucket.into_impl())?;
@@ -475,11 +461,6 @@ pub(crate) trait TxIApi<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
         pgid_stack.pop();
       }
     }
-  }
-
-  /// See [TxApi::rollback]
-  fn api_rollback(self) -> crate::Result<()> {
-    self.rollback()
   }
 
   fn rollback(self) -> crate::Result<()> {
@@ -596,10 +577,6 @@ impl<'tx> SplitRef<TxR<'tx>, BucketCell<'tx>, TxW<'tx>> for TxCell<'tx> {
     self.cell.borrow_mut()
   }
 
-  fn split_ref_mut(&self) -> (RefMut<TxR<'tx>>, Option<RefMut<TxW<'tx>>>) {
-    (self.cell.borrow_mut(), None)
-  }
-
   fn split_ow_mut(&self) -> Option<RefMut<TxW<'tx>>> {
     None
   }
@@ -634,11 +611,6 @@ impl<'tx> SplitRef<TxR<'tx>, BucketRwCell<'tx>, TxW<'tx>> for TxRwCell<'tx> {
 
   fn split_r_mut(&self) -> RefMut<TxR<'tx>> {
     RefMut::map(self.cell.borrow_mut(), |c| &mut c.r)
-  }
-
-  fn split_ref_mut(&self) -> (RefMut<TxR<'tx>>, Option<RefMut<TxW<'tx>>>) {
-    let (r, w) = RefMut::map_split(self.cell.borrow_mut(), |b| (&mut b.r, &mut b.w));
-    (r, Some(w))
   }
 
   fn split_ow_mut(&self) -> Option<RefMut<TxW<'tx>>> {
@@ -896,10 +868,6 @@ impl<'tx> TxApi<'tx> for TxImpl<'tx> {
   fn rollback(self) -> crate::Result<()> {
     self.tx.rollback()
   }
-
-  fn page(&self, id: PgId) -> crate::Result<Option<PageInfo>> {
-    self.tx.api_page(id)
-  }
 }
 
 pub struct TxRef<'tx> {
@@ -940,10 +908,6 @@ impl<'tx> TxApi<'tx> for TxRef<'tx> {
   fn rollback(self) -> crate::Result<()> {
     self.tx.rollback()
   }
-
-  fn page(&self, id: PgId) -> crate::Result<Option<PageInfo>> {
-    self.tx.api_page(id)
-  }
 }
 
 pub struct TxRwImpl<'tx> {
@@ -961,7 +925,7 @@ impl<'tx> TxRwImpl<'tx> {
 
   pub(crate) fn new(
     bump: SyncReusable<Pin<Box<PinBump>>>, lock: RwLockUpgradableReadGuard<'tx, DbShared>,
-    mut meta: Meta,
+    meta: Meta,
   ) -> TxRwImpl<'tx> {
     let no_sync = lock.options.no_sync();
     let page_size = meta.page_size() as usize;
@@ -1088,10 +1052,6 @@ impl<'tx> TxApi<'tx> for TxRwImpl<'tx> {
   fn rollback(self) -> crate::Result<()> {
     self.tx.rollback()
   }
-
-  fn page(&self, id: PgId) -> crate::Result<Option<PageInfo>> {
-    self.tx.api_page(id)
-  }
 }
 
 impl<'tx> TxRwRefApi<'tx> for TxRwImpl<'tx> {
@@ -1136,7 +1096,6 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
 
     let tx_stats = self.tx.split_r().stats.as_ref().cloned().unwrap();
     let bump = self.tx.bump();
-    let precommitted_bytes = bump.allocated_bytes();
 
     let start_time = Instant::now();
     self.tx.root_bucket().rebalance();
@@ -1214,7 +1173,6 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
     for f in commit_handlers.into_iter() {
       f();
     }
-    let committed_bytes = bump.allocated_bytes();
     Ok(())
   }
 }
@@ -1256,10 +1214,6 @@ impl<'tx> TxApi<'tx> for TxRwRef<'tx> {
 
   fn rollback(self) -> crate::Result<()> {
     self.tx.rollback()
-  }
-
-  fn page(&self, id: PgId) -> crate::Result<Option<PageInfo>> {
-    self.tx.api_page(id)
   }
 }
 

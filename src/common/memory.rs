@@ -92,7 +92,7 @@ where
 
 impl<'a, T, B> Eq for BCell<'a, T, B> where T: Eq {}
 
-/// Copy on Demand handling the case where we need to either point to a memory mapped slice or an Bump owned slice.
+/// Copy on Demand handling the case where we need to either point to a memory mapped slice or a Bump owned slice.
 #[derive(Copy, Clone)]
 pub enum CodSlice<'tx, T: Pod> {
   Owned(&'tx [T]),

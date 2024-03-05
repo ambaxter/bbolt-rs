@@ -73,16 +73,6 @@ impl LeafPageElement {
     self.flags & BUCKET_LEAF_FLAG != 0
   }
 
-  pub fn new(flags: u32, pos: u32, key_size: u32, value_size: u32) -> LeafPageElement {
-    LeafPageElement {
-      flags,
-      pos,
-      key_size,
-      value_size,
-      unsend: PhantomData,
-    }
-  }
-
   pub(crate) unsafe fn key(&self, page_ptr: *const u8) -> &[u8] {
     let elem_ptr = self as *const LeafPageElement as *const u8;
     let dist = usize::try_from(elem_ptr.offset_from(page_ptr)).unwrap_unchecked();

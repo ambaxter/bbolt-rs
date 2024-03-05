@@ -44,9 +44,6 @@ pub(crate) trait SplitRef<R, B, W>: Copy + Clone {
   /// Mutably access the read section of the struct
   fn split_r_mut(&self) -> cell::RefMut<R>;
 
-  /// Mutably access the read and optional write section of the struct
-  fn split_ref_mut(&self) -> (cell::RefMut<R>, Option<cell::RefMut<W>>);
-
   /// Mutably access the option write section of the struct
   fn split_ow_mut(&self) -> Option<cell::RefMut<W>>;
 }

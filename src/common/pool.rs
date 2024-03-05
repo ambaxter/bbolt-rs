@@ -14,10 +14,10 @@ pub struct SyncPool<T> {
 }
 
 impl<T> SyncPool<T> {
-  pub fn new<I: Fn() -> T, R: Fn(&mut T)>(init: I, reset: R) -> Arc<SyncPool<T>>
+  pub fn new<I, R>(init: I, reset: R) -> Arc<SyncPool<T>>
   where
-    I: 'static,
-    R: 'static,
+    I: Fn() -> T + 'static,
+    R: Fn(&mut T) + 'static,
   {
     let init = Arc::new(init);
     let reset = Arc::new(reset);

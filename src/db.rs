@@ -14,7 +14,7 @@ use crate::common::tree::MappedLeafPage;
 use crate::common::{BVec, PgId, SplitRef, TxId};
 use crate::freelist::{Freelist, MappedFreeListPage};
 use crate::tx::{TxIApi, TxImpl, TxRef, TxRwApi, TxRwCell, TxRwImpl, TxRwRef, TxStats};
-use crate::{Error, TxApi, TxRwRefApi};
+use crate::{Error, TxApi};
 use aligners::{alignment, AlignedBytes};
 use fs4::FileExt;
 use memmap2::{Advice, MmapOptions, MmapRaw};
@@ -30,6 +30,7 @@ use std::time::{Duration, Instant};
 use std::{fs, io, mem};
 use typed_builder::TypedBuilder;
 
+/// Read-only DB API
 pub trait DbApi: Clone + Send + Sync
 where
   Self: Sized,
@@ -54,7 +55,7 @@ where
   /// needed, you might want to set DB.InitialMmapSize to a large enough value
   /// to avoid potential blocking of write transaction.
   ///
-  /// IMPORTANT: You must close read-only transactions after you are finished or
+  /// IMPORTANT: You must drop the read-only transactions after you are finished or
   /// else the database will not reclaim old pages.
   fn begin(&self) -> crate::Result<impl TxApi>;
 
@@ -67,7 +68,6 @@ where
   /// View executes a function within the context of a managed read-only transaction.
   /// Any error that is returned from the function is returned from the View() method.
   ///
-  /// Attempting to manually rollback within the function will cause a panic.
   fn view<'tx, F: Fn(TxRef<'tx>) -> crate::Result<()>>(&'tx self, f: F) -> crate::Result<()>;
 
   /// Stats retrieves ongoing performance stats for the database.
@@ -75,6 +75,7 @@ where
   fn stats(&self) -> Arc<DbStats>;
 }
 
+/// RW DB API
 pub trait DbRwAPI: DbApi {
   /// Begin starts a new transaction.
   /// Multiple read-only transactions can be used concurrently but only one
@@ -90,9 +91,6 @@ pub trait DbRwAPI: DbApi {
   /// If a long running read transaction (for example, a snapshot transaction) is
   /// needed, you might want to set DB.InitialMmapSize to a large enough value
   /// to avoid potential blocking of write transaction.
-  ///
-  /// IMPORTANT: You must close read-only transactions after you are finished or
-  /// else the database will not reclaim old pages.
   fn begin_rw(&mut self) -> crate::Result<impl TxRwApi>;
 
   fn try_begin_rw(&self) -> crate::Result<Option<impl TxRwApi>>;
@@ -106,8 +104,6 @@ pub trait DbRwAPI: DbApi {
   /// If an error is returned then the entire transaction is rolled back.
   /// Any error that is returned from the function or returned from the commit is
   /// returned from the Update() method.
-  ///
-  /// Attempting to manually commit or rollback within the function will cause a panic.
   fn update<'tx, F: FnMut(TxRwRef<'tx>) -> crate::Result<()>>(
     &'tx mut self, f: F,
   ) -> crate::Result<()>;
@@ -189,10 +185,6 @@ impl DbStats {
 
   pub fn get_open_tx_n(&self) -> i64 {
     self.open_tx_n.load(Ordering::Acquire)
-  }
-
-  pub(crate) fn inc_open_tx_n(&self, delta: i64) {
-    self.open_tx_n.fetch_add(delta, Ordering::AcqRel);
   }
 
   pub fn sub(&self, rhs: &DbStats) -> DbStats {
@@ -1064,6 +1056,7 @@ impl<'tx> DbMutIApi<'tx> for DbShared {
   }
 }
 
+/// Database options
 #[derive(Clone, Default, Debug, PartialEq, Eq, TypedBuilder)]
 #[builder(doc)]
 pub struct DBOptions {
@@ -1192,20 +1185,26 @@ impl DBOptions {
     self.read_only
   }
 
+  /// Open creates and opens a database at the given path.
+  /// If the file does not exist then it will be created automatically.
   pub fn open<T: Into<PathBuf>>(self, path: T) -> crate::Result<DB> {
     DB::open_path(path, self)
   }
 
+  /// Opens a database as read-only at the given path.
+  /// If the file does not exist then it will be created automatically.
   pub fn open_ro<T: Into<PathBuf>>(mut self, path: T) -> crate::Result<impl DbApi> {
     self.read_only = true;
     DB::open_path(path, self)
   }
 
+  /// Opens an in-memory database
   pub fn new_mem(self) -> crate::Result<DB> {
     DB::new_mem_with_options(self)
   }
 }
 
+/// A BBolt Database
 #[derive(Clone)]
 pub struct DB {
   // TODO: Save a single Bump for RW transactions with a size hint?
@@ -1220,11 +1219,12 @@ unsafe impl Sync for DB {}
 impl DB {
   /// Open creates and opens a database at the given path.
   /// If the file does not exist then it will be created automatically.
-  /// Passing in nil options will cause Bolt to open the database with the default options.
   pub fn open<T: Into<PathBuf>>(path: T) -> crate::Result<Self> {
     DB::open_path(path, DBOptions::default())
   }
 
+  /// Opens a database as read-only at the given path.
+  /// If the file does not exist then it will be created automatically.
   pub fn open_ro<T: Into<PathBuf>>(path: T) -> crate::Result<impl DbApi> {
     DB::open_path(
       path,
@@ -1277,7 +1277,7 @@ impl DB {
         mmap.lock()?;
       }
     }
-    let mut backend = FileBackend {
+    let backend = FileBackend {
       path,
       file: Mutex::new(FileState { file, file_size }),
       page_size,
@@ -1319,6 +1319,7 @@ impl DB {
     })
   }
 
+  /// Opens an in-memory database
   pub fn new_mem() -> crate::Result<Self> {
     DB::new_mem_with_options(DBOptions::default())
   }
