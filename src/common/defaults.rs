@@ -8,9 +8,12 @@ pub const MAX_MMAP_STEP: Size = Size::from_const(1 * GiB);
 
 pub const VERSION: u32 = 2;
 
+#[cfg(not(feature = "compat"))]
 // Chosen from https://nedbatchelder.com/text/hexwords.html
 // as we are using the Go BBolt project code as a scaffold
 pub const MAGIC: u32 = 0x5caff01d;
+#[cfg(feature = "compat")]
+pub const MAGIC: u32 = 0xED0CDAED;
 
 pub const PGID_NO_FREE_LIST: PgId = PgId(0xffffffffffffffff);
 

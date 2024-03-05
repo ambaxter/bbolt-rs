@@ -11,7 +11,7 @@ rust-version = "1.76"
 
 [dependencies]
 aligners = "0.0.10"
-bumpalo = { version = "3.15.2", features = ["collections", "allocator-api2"]}
+bumpalo = { version = "3.15.3", features = ["collections", "allocator-api2"]}
 hashbrown = "0.14.3"
 memmap2 = "0.9.4"
 page_size = "0.6.0"
@@ -32,12 +32,16 @@ typed-builder = "0.18.1"
 crossbeam-channel = "0.5.11"
 crossbeam-queue = "0.3.11"
 rand = "0.8.5"
+tempfile = "3.10"
+clap = { version = "4.5.1", features = ["derive"] }
+byteorder = "1.5.0"
+
 
 [features]
 allgasnobrakes = []
+compat = []
 
 [dev-dependencies]
-tempfile = "3.10"
 
 [build-dependencies]
 cfg_aliases = "0.2.0"

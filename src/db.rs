@@ -901,7 +901,9 @@ unsafe impl Send for DbShared {}
 
 impl<'tx> DbIApi<'tx> for DbShared {
   fn page(&self, pg_id: PgId) -> RefPage<'tx> {
-    self.backend.page(pg_id)
+    let page = self.backend.page(pg_id);
+    debug_assert_eq!(pg_id, page.id);
+    page
   }
 
   fn is_page_free(&self, pg_id: PgId) -> bool {

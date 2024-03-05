@@ -162,9 +162,9 @@ impl CoerciblePage for MappedBranchPage {
 #[derive(Debug, Copy, Clone, Pod, Zeroable, CopyGetters, Setters)]
 #[getset(get_copy = "pub", set = "pub")]
 pub struct BranchPageElement {
-  pgid: PgId,
   pos: u32,
   key_size: u32,
+  pgid: PgId,
   unsend: PhantomUnsend,
 }
 

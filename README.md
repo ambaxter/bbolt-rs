@@ -33,7 +33,7 @@ Currently not supported:
 - [ ] Node leaf tests
 - [x] All stats 
 - [ ] db batch
-- [ ] main bench
+- [x] main bench
 - [ ] clippy again
 
 

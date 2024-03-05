@@ -59,11 +59,11 @@ where
   /// If the provided function returns an error then the iteration is stopped and
   /// the error is returned to the caller. The provided function must not modify
   /// the bucket; this will result in undefined behavior.
-  fn for_each<F: Fn(&'tx [u8], Option<&'tx [u8]>) -> crate::Result<()>>(
+  fn for_each<F: FnMut(&'tx [u8], Option<&'tx [u8]>) -> crate::Result<()>>(
     &self, f: F,
   ) -> crate::Result<()>;
 
-  fn for_each_bucket<F: Fn(&'tx [u8]) -> crate::Result<()>>(&self, f: F) -> crate::Result<()>;
+  fn for_each_bucket<F: FnMut(&'tx [u8]) -> crate::Result<()>>(&self, f: F) -> crate::Result<()>;
 
   /// Stats returns stats on a bucket.
   fn stats(&self) -> BucketStats;
@@ -173,8 +173,8 @@ impl<'tx> BucketApi<'tx> for BucketImpl<'tx> {
     }
   }
 
-  fn for_each<F: Fn(&'tx [u8], Option<&'tx [u8]>) -> crate::Result<()>>(
-    &self, f: F,
+  fn for_each<F: FnMut(&'tx [u8], Option<&'tx [u8]>) -> crate::Result<()>>(
+    &self, mut f: F,
   ) -> crate::Result<()> {
     match self {
       BucketImpl::R(r) => r.api_for_each(f),
@@ -182,7 +182,9 @@ impl<'tx> BucketApi<'tx> for BucketImpl<'tx> {
     }
   }
 
-  fn for_each_bucket<F: Fn(&'tx [u8]) -> crate::Result<()>>(&self, f: F) -> crate::Result<()> {
+  fn for_each_bucket<F: FnMut(&'tx [u8]) -> crate::Result<()>>(
+    &self, mut f: F,
+  ) -> crate::Result<()> {
     match self {
       BucketImpl::R(r) => r.api_for_each_bucket(f),
       BucketImpl::RW(rw) => rw.api_for_each_bucket(f),
@@ -232,13 +234,13 @@ impl<'tx> BucketApi<'tx> for BucketRwImpl<'tx> {
     self.b.api_sequence()
   }
 
-  fn for_each<F: Fn(&'tx [u8], Option<&'tx [u8]>) -> crate::Result<()>>(
+  fn for_each<F: FnMut(&'tx [u8], Option<&'tx [u8]>) -> crate::Result<()>>(
     &self, f: F,
   ) -> crate::Result<()> {
     self.b.api_for_each(f)
   }
 
-  fn for_each_bucket<F: Fn(&'tx [u8]) -> crate::Result<()>>(&self, f: F) -> crate::Result<()> {
+  fn for_each_bucket<F: FnMut(&'tx [u8]) -> crate::Result<()>>(&self, f: F) -> crate::Result<()> {
     self.b.api_for_each_bucket(f)
   }
 
@@ -506,8 +508,8 @@ pub(crate) trait BucketIApi<'tx, T: TxIApi<'tx>>:
   }
 
   /// See [BucketApi::for_each]
-  fn api_for_each<F: Fn(&'tx [u8], Option<&'tx [u8]>) -> crate::Result<()>>(
-    self, f: F,
+  fn api_for_each<F: FnMut(&'tx [u8], Option<&'tx [u8]>) -> crate::Result<()>>(
+    self, mut f: F,
   ) -> crate::Result<()> {
     let mut c = self.i_cursor();
     let mut inode = c.api_first();
