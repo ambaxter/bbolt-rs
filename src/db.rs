@@ -1065,23 +1065,30 @@ pub struct DBOptions {
     default,
     setter(
       strip_option,
+      skip,
       doc = "Timeout is the amount of time to wait to obtain a file lock. \
     When set to zero it will wait indefinitely."
     )
   )]
   timeout: Option<Duration>,
-  #[builder(setter(
-    strip_bool,
-    doc = "Sets the DB.NoGrowSync flag before memory mapping the file."
-  ))]
+  #[builder(
+    default,
+    setter(
+      skip,
+      doc = "Sets the DB.NoGrowSync flag before memory mapping the file."
+    )
+  )]
   no_grow_sync: bool,
   // TODO: How do we handle this?
-  #[builder(setter(
-    strip_bool,
-    doc = "Do not sync freelist to disk.\
+  #[builder(
+    default,
+    setter(
+      skip,
+      doc = "Do not sync freelist to disk.\
     This improves the database write performance under normal operation,\
     but requires a full database re-sync during recovery."
-  ))]
+    )
+  )]
   no_freelist_sync: bool,
   #[builder(setter(
     strip_bool,

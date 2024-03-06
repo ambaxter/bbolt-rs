@@ -47,7 +47,7 @@ Currently not supported:
 - [x] Remove commented out trace
 - [x] Optional fsync
 - [x] Optional mlock
-- [ ] Strict mode
+- [x] Strict mode
 - [x] impl trait for public apis?
 - [x] Add try_begin(rw), try_begin(rw)_for, and try_begin(rw)_until to prevent deadlocks
 - [ ] blag post

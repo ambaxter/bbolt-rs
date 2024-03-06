@@ -1155,7 +1155,13 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
       }
     };
 
-    // TODO: Add strict mode
+   #[cfg(feature = "strict")]
+   {
+     let errors = self.tx.check();
+     if !errors.is_empty() {
+       panic!("check fail: {}", errors.join("\n"))
+     }
+   }
 
     match self.tx.write_meta() {
       Ok(_) => {
