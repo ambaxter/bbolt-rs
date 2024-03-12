@@ -80,6 +80,10 @@ pub enum Error {
   MMapTooLarge,
   #[error("file size too small")]
   MMapFileSizeTooSmall,
+  #[error("try function without batch call")]
+  TrySolo,
+  #[error("max batch delay or length is set to 0")]
+  BatchDisabled,
   // Chained errors from other sources
   #[error(transparent)]
   IO(#[from] io::Error),
@@ -111,6 +115,8 @@ impl PartialEq for Error {
         | (Error::IncompatibleValue, Error::IncompatibleValue)
         | (Error::MMapTooLarge, Error::MMapTooLarge)
         | (Error::MMapFileSizeTooSmall, Error::MMapFileSizeTooSmall)
+        | (Error::TrySolo, Error::TrySolo)
+        | (Error::BatchDisabled, Error::BatchDisabled)
     )
   }
 }

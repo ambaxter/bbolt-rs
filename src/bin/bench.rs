@@ -144,7 +144,7 @@ fn run_reads(db: &mut DB, options: &Bench) -> bbolt_rs::Result<BenchResults> {
   };
   Ok(BenchResults {
     ops,
-    duration: Instant::now().duration_since(start),
+    duration: start.elapsed(),
   })
 }
 
@@ -177,7 +177,7 @@ fn run_writes(db: &mut DB, options: &Bench) -> bbolt_rs::Result<BenchResults> {
 
   Ok(BenchResults {
     ops,
-    duration: Instant::now().duration_since(start),
+    duration: start.elapsed(),
   })
 }
 
@@ -254,7 +254,7 @@ fn run_reads_sequential(db: &DB, options: &Bench) -> bbolt_rs::Result<u32> {
       }
       *result += count;
 
-      if Instant::now().duration_since(t) > Duration::from_secs(1) {
+      if t.elapsed() > Duration::from_secs(1) {
         break;
       }
     }
@@ -291,7 +291,7 @@ fn run_reads_sequential_nested(db: &DB, options: &Bench) -> bbolt_rs::Result<u32
       }
       *result += count;
 
-      if Instant::now().duration_since(t) > Duration::from_secs(1) {
+      if t.elapsed() > Duration::from_secs(1) {
         break;
       }
     }

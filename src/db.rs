@@ -3,12 +3,13 @@ use crate::bucket::BucketRwIApi;
 use crate::common::bucket::InBucket;
 use crate::common::bump::PinBump;
 use crate::common::defaults::{
-  DEFAULT_ALLOC_SIZE, DEFAULT_PAGE_SIZE, MAGIC, MAX_MMAP_STEP, PGID_NO_FREE_LIST, VERSION,
+  DEFAULT_ALLOC_SIZE, DEFAULT_MAX_BATCH_DELAY, DEFAULT_MAX_BATCH_SIZE, DEFAULT_PAGE_SIZE, MAGIC,
+  MAX_MMAP_STEP, PGID_NO_FREE_LIST, VERSION,
 };
 use crate::common::lock::LockGuard;
 use crate::common::meta::{MappedMetaPage, Meta};
 use crate::common::page::{CoerciblePage, MutPage, Page, RefPage};
-use crate::common::pool::SyncPool;
+use crate::common::pool::{SyncPool, SyncReusable};
 use crate::common::self_owned::SelfOwned;
 use crate::common::tree::MappedLeafPage;
 use crate::common::{BVec, PgId, SplitRef, TxId};
@@ -18,6 +19,7 @@ use crate::{Error, TxApi};
 use aligners::{alignment, AlignedBytes};
 use fs4::FileExt;
 use memmap2::{Advice, MmapOptions, MmapRaw};
+use monotonic_timer::{Guard, Timer};
 use parking_lot::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockUpgradableReadGuard};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -25,9 +27,10 @@ use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::mpsc::{Receiver, SyncSender};
+use std::sync::{mpsc, Arc, OnceLock, Weak};
 use std::time::{Duration, Instant};
-use std::{fs, io, mem};
+use std::{fs, io, mem, thread};
 use typed_builder::TypedBuilder;
 
 /// Read-only DB API
@@ -107,6 +110,10 @@ pub trait DbRwAPI: DbApi {
   fn update<'tx, F: FnMut(TxRwRef<'tx>) -> crate::Result<()>>(
     &'tx mut self, f: F,
   ) -> crate::Result<()>;
+
+  fn batch<'tx, F>(&'tx mut self, f: F) -> crate::Result<()>
+  where
+    F: FnMut(&mut TxRwRef) -> crate::Result<()> + Send + Sync + Clone + 'static;
 
   /// Sync executes fdatasync() against the database file handle.
   ///
@@ -1128,6 +1135,19 @@ pub struct DBOptions {
   /// used memory can't be reclaimed. (UNIX only)
   #[builder(setter(strip_bool))]
   mlock: bool,
+  #[builder(
+    default,
+    setter(strip_option, doc = "MaxBatchSize is the maximum size of a batch.")
+  )]
+  max_batch_size: Option<u32>,
+  #[builder(
+    default,
+    setter(
+      strip_option,
+      doc = "MaxBatchDelay is the maximum delay before a batch starts."
+    )
+  )]
+  max_batch_delay: Option<Duration>,
   #[builder(default = false, setter(skip))]
   /// Open database in read-only mode. Uses flock(..., LOCK_SH |LOCK_NB) to
   /// grab a shared lock (UNIX).
@@ -1211,17 +1231,191 @@ impl DBOptions {
   }
 }
 
+type BatchFn = dyn FnMut(&mut TxRwRef) -> crate::Result<()> + Send + Sync + 'static;
+
+struct Call {
+  f: Box<BatchFn>,
+  err: SyncSender<crate::Result<()>>,
+}
+
+struct ScheduledBatch {
+  timer_guard: Option<Guard>,
+  calls: Vec<Call>,
+}
+
+impl ScheduledBatch {
+  fn cancel_schedule(&mut self) {
+    if let Some(guard) = self.timer_guard.take() {
+      guard.ignore()
+    }
+  }
+
+  fn run(&mut self, db: &mut DB) {
+    'retry: loop {
+      if self.calls.is_empty() {
+        break;
+      }
+      let mut fail_idx = None;
+      let _ = db.update(|mut tx| {
+        for (i, call) in self.calls.iter_mut().enumerate() {
+          let result = (call.f)(&mut tx);
+          if result.is_err() {
+            fail_idx = Some(i);
+            return result;
+          }
+        }
+        Ok(())
+      });
+      if let Some(idx) = fail_idx {
+        let call = self.calls.remove(idx);
+        call.err.send(Err(Error::TrySolo)).unwrap();
+        continue 'retry;
+      }
+      for call in &self.calls {
+        call.err.send(Ok(())).unwrap()
+      }
+      break;
+    }
+  }
+}
+
+struct InnerBatcher {
+  timer: Timer,
+  batch_pool: Arc<SyncPool<ScheduledBatch>>,
+  scheduled: Mutex<SyncReusable<ScheduledBatch>>,
+}
+
+impl InnerBatcher {
+  fn new(parent: &Arc<Batcher>) -> InnerBatcher {
+    let b = Arc::downgrade(parent);
+    let timer = Timer::new();
+    let batch_pool = SyncPool::new(
+      || ScheduledBatch {
+        timer_guard: None,
+        calls: Vec::with_capacity(0),
+      },
+      |batch| {
+        batch.timer_guard = None;
+        batch.calls.clear();
+      },
+    );
+    let guard = timer.schedule_with_delay(parent.max_batch_delay, move || {
+      let batcher = b.upgrade().unwrap();
+      let mut db = DB {
+        inner: batcher.db.upgrade().unwrap(),
+      };
+      batcher.take_batch().run(&mut db)
+    });
+
+    let mut scheduled = batch_pool.pull();
+    scheduled.timer_guard = Some(guard);
+    InnerBatcher {
+      timer,
+      batch_pool,
+      scheduled: scheduled.into(),
+    }
+  }
+}
+
+struct Batcher {
+  inner: OnceLock<InnerBatcher>,
+  db: Weak<InnerDB>,
+  max_batch_delay: Duration,
+  max_batch_size: u32,
+}
+
+impl Batcher {
+  fn new(db: Weak<InnerDB>, max_batch_delay: Duration, max_batch_size: u32) -> Arc<Batcher> {
+    Arc::new(Batcher {
+      inner: Default::default(),
+      db,
+      max_batch_delay,
+      max_batch_size,
+    })
+  }
+
+  fn inner<'a>(self: &'a Arc<Batcher>) -> &'a InnerBatcher {
+    self.inner.get_or_init(move || InnerBatcher::new(self))
+  }
+
+  fn batch<F>(self: &Arc<Batcher>, mut db: DB, mut f: F) -> crate::Result<()>
+  where
+    F: FnMut(&mut TxRwRef) -> crate::Result<()> + Send + Sync + Clone + 'static,
+  {
+    if self.max_batch_size == 0 || self.max_batch_delay.is_zero() {
+      return Err(Error::BatchDisabled);
+    }
+    let inner = self.inner();
+    let (call_len, rx) = {
+      let mut batch = inner.scheduled.lock();
+
+      let (tx, rx): (SyncSender<crate::Result<()>>, Receiver<crate::Result<()>>) =
+        mpsc::sync_channel(1);
+      batch.calls.push(Call {
+        f: Box::new(f.clone()),
+        err: tx,
+      });
+      (batch.calls.len(), rx)
+    };
+    if call_len > self.max_batch_size as usize {
+      let mut immediate = self.take_batch();
+      if !immediate.calls.is_empty() {
+        let mut i_db = db.clone();
+        thread::spawn(move || immediate.run(&mut i_db));
+      }
+    }
+
+    let result = rx.recv().unwrap();
+    if Err(Error::TrySolo) == result {
+      db.update(|mut tx| f(&mut tx))?;
+    }
+    Ok(())
+  }
+
+  fn schedule_batch(self: &Arc<Batcher>) -> Guard {
+    let inner = self.inner();
+    let b = Arc::downgrade(self);
+    inner
+      .timer
+      .schedule_with_delay(self.max_batch_delay, move || {
+        let batcher = b.upgrade().unwrap();
+        let mut db = DB {
+          inner: batcher.db.upgrade().unwrap(),
+        };
+        batcher.take_batch().run(&mut db)
+      })
+  }
+
+  fn take_batch(self: &Arc<Batcher>) -> SyncReusable<ScheduledBatch> {
+    let inner = self.inner();
+    let mut swap_batch = inner.batch_pool.pull();
+    let mut lock = inner.scheduled.lock();
+    mem::swap(&mut swap_batch, &mut *lock);
+    swap_batch.cancel_schedule();
+    let guard = self.schedule_batch();
+    lock.timer_guard = Some(guard);
+    swap_batch
+  }
+}
+
+/// A BBolt Database
+pub struct InnerDB {
+  // TODO: Save a single Bump for RW transactions with a size hint?
+  bump_pool: Arc<SyncPool<Pin<Box<PinBump>>>>,
+  db: RwLock<DbShared>,
+  stats: Arc<DbStats>,
+  db_state: Arc<Mutex<DbState>>,
+  batcher: Arc<Batcher>,
+}
+
+unsafe impl Send for InnerDB {}
+unsafe impl Sync for InnerDB {}
+
 /// A BBolt Database
 #[derive(Clone)]
 pub struct DB {
-  // TODO: Save a single Bump for RW transactions with a size hint?
-  bump_pool: Arc<SyncPool<Pin<Box<PinBump>>>>,
-  db: Arc<RwLock<DbShared>>,
-  stats: Arc<DbStats>,
-  db_state: Arc<Mutex<DbState>>,
+  inner: Arc<InnerDB>,
 }
-unsafe impl Send for DB {}
-unsafe impl Sync for DB {}
 
 impl DB {
   /// Open creates and opens a database at the given path.
@@ -1312,18 +1506,27 @@ impl DB {
       |bump| Pin::as_mut(bump).reset(),
     );
 
-    Ok(DB {
+    let inner = Arc::new_cyclic(|weak| InnerDB {
       bump_pool,
-      db: Arc::new(RwLock::new(DbShared {
+      db: RwLock::new(DbShared {
         stats: arc_stats.clone(),
         db_state: db_state.clone(),
         backend: Box::new(backend),
         page_pool: Mutex::new(vec![]),
-        options: db_options,
-      })),
+        options: db_options.clone(),
+      }),
       stats: arc_stats,
       db_state,
-    })
+      batcher: Arc::new(Batcher {
+        inner: Default::default(),
+        db: weak.clone(),
+        max_batch_delay: db_options
+          .max_batch_delay
+          .unwrap_or(DEFAULT_MAX_BATCH_DELAY),
+        max_batch_size: db_options.max_batch_size.unwrap_or(DEFAULT_MAX_BATCH_SIZE),
+      }),
+    });
+    Ok(DB { inner })
   }
 
   /// Opens an in-memory database
@@ -1370,18 +1573,29 @@ impl DB {
       || Box::pin(PinBump::default()),
       |bump| Pin::as_mut(bump).reset(),
     );
-    Ok(DB {
+
+    let inner = Arc::new_cyclic(|weak| InnerDB {
       bump_pool,
-      db: Arc::new(RwLock::new(DbShared {
+      db: RwLock::new(DbShared {
         stats: arc_stats.clone(),
         db_state: db_state.clone(),
         backend: Box::new(backend),
         page_pool: Mutex::new(vec![]),
-        options: db_options,
-      })),
+        options: db_options.clone(),
+      }),
       stats: arc_stats,
       db_state,
-    })
+      batcher: Arc::new(Batcher {
+        inner: Default::default(),
+        db: weak.clone(),
+        max_batch_delay: db_options
+          .max_batch_delay
+          .unwrap_or(DEFAULT_MAX_BATCH_DELAY),
+        max_batch_size: db_options.max_batch_size.unwrap_or(DEFAULT_MAX_BATCH_SIZE),
+      }),
+    });
+
+    Ok(DB { inner })
   }
 
   fn init_page(page_size: usize) -> AlignedBytes<alignment::Page> {
@@ -1434,15 +1648,16 @@ impl DB {
   }
 
   pub(crate) fn begin_tx(&self) -> crate::Result<TxImpl> {
-    let mut state = self.db_state.lock();
+    let mut state = self.inner.db_state.lock();
     DB::require_open(&state)?;
-    let lock = self.db.read();
-    let bump = self.bump_pool.pull();
+    let lock = self.inner.db.read();
+    let bump = self.inner.bump_pool.pull();
     let meta = state.current_meta;
     let txid = meta.txid();
     state.txs.push(txid);
-    self.stats.inc_tx_n(1);
+    self.inner.stats.inc_tx_n(1);
     self
+      .inner
       .stats
       .open_tx_n
       .store(state.txs.len() as i64, Ordering::Release);
@@ -1453,15 +1668,16 @@ impl DB {
   where
     F: Fn() -> Option<RwLockReadGuard<'a, DbShared>>,
   {
-    let mut state = self.db_state.lock();
+    let mut state = self.inner.db_state.lock();
     DB::require_open(&state)?;
     if let Some(lock) = f() {
-      let bump = self.bump_pool.pull();
+      let bump = self.inner.bump_pool.pull();
       let meta = state.current_meta;
       let txid = meta.txid();
       state.txs.push(txid);
-      self.stats.inc_tx_n(1);
+      self.inner.stats.inc_tx_n(1);
       self
+        .inner
         .stats
         .open_tx_n
         .store(state.txs.len() as i64, Ordering::Release);
@@ -1472,11 +1688,11 @@ impl DB {
   }
 
   pub(crate) fn begin_rw_tx(&mut self) -> crate::Result<TxRwImpl> {
-    let lock = self.db.upgradable_read();
+    let lock = self.inner.db.upgradable_read();
     lock.free_pages();
-    let mut state = self.db_state.lock();
+    let mut state = self.inner.db_state.lock();
     DB::require_open(&state)?;
-    let bump = self.bump_pool.pull();
+    let bump = self.inner.bump_pool.pull();
     let mut meta = state.current_meta;
     let txid = meta.txid() + 1;
     meta.set_txid(txid);
@@ -1490,9 +1706,9 @@ impl DB {
   {
     if let Some(lock) = f() {
       lock.free_pages();
-      let mut state = self.db_state.lock();
+      let mut state = self.inner.db_state.lock();
       DB::require_open(&state)?;
-      let bump = self.bump_pool.pull();
+      let bump = self.inner.bump_pool.pull();
       let mut meta = state.current_meta;
       let txid = meta.txid() + 1;
       meta.set_txid(txid);
@@ -1506,14 +1722,17 @@ impl DB {
 
 impl DbApi for DB {
   fn close(self) {
-    let mut lock = self.db.write();
-    let mut state = self.db_state.lock();
+    let mut lock = self.inner.db.write();
+    let mut state = self.inner.db_state.lock();
     if DB::require_open(&state).is_ok() {
       state.is_open = false;
       let mut closed_db: Box<dyn DBBackend> = Box::new(ClosedBackend {});
       mem::swap(&mut closed_db, &mut lock.backend);
       lock.page_pool.lock().clear();
-      self.bump_pool.clear();
+      self.inner.bump_pool.clear();
+      if let Some(inner_batcher) = self.inner.batcher.inner.get() {
+        inner_batcher.batch_pool.clear();
+      }
     }
   }
 
@@ -1522,15 +1741,15 @@ impl DbApi for DB {
   }
 
   fn try_begin(&self) -> crate::Result<Option<impl TxApi>> {
-    self.try_begin_tx(|| self.db.try_read())
+    self.try_begin_tx(|| self.inner.db.try_read())
   }
 
   fn try_begin_for(&self, duration: Duration) -> crate::Result<Option<impl TxApi>> {
-    self.try_begin_tx(|| self.db.try_read_for(duration))
+    self.try_begin_tx(|| self.inner.db.try_read_for(duration))
   }
 
   fn try_begin_until(&self, instant: Instant) -> crate::Result<Option<impl TxApi>> {
-    self.try_begin_tx(|| self.db.try_read_until(instant))
+    self.try_begin_tx(|| self.inner.db.try_read_until(instant))
   }
 
   fn view<'tx, F: FnMut(TxRef<'tx>) -> crate::Result<()>>(
@@ -1544,7 +1763,7 @@ impl DbApi for DB {
   }
 
   fn stats(&self) -> Arc<DbStats> {
-    self.stats.clone()
+    self.inner.stats.clone()
   }
 }
 
@@ -1554,15 +1773,15 @@ impl DbRwAPI for DB {
   }
 
   fn try_begin_rw(&self) -> crate::Result<Option<impl TxRwApi>> {
-    self.try_begin_rw_tx(|| self.db.try_upgradable_read())
+    self.try_begin_rw_tx(|| self.inner.db.try_upgradable_read())
   }
 
   fn try_begin_rw_for(&self, duration: Duration) -> crate::Result<Option<impl TxRwApi>> {
-    self.try_begin_rw_tx(|| self.db.try_upgradable_read_for(duration))
+    self.try_begin_rw_tx(|| self.inner.db.try_upgradable_read_for(duration))
   }
 
   fn try_begin_rw_until(&self, instant: Instant) -> crate::Result<Option<impl TxRwApi>> {
-    self.try_begin_rw_tx(|| self.db.try_upgradable_read_until(instant))
+    self.try_begin_rw_tx(|| self.inner.db.try_upgradable_read_until(instant))
   }
 
   fn update<'tx, F: FnMut(TxRwRef<'tx>) -> crate::Result<()>>(
@@ -1582,8 +1801,15 @@ impl DbRwAPI for DB {
     }
   }
 
+  fn batch<'tx, F>(&'tx mut self, f: F) -> crate::Result<()>
+  where
+    F: FnMut(&mut TxRwRef) -> crate::Result<()> + Send + Sync + Clone + 'static,
+  {
+    self.inner.batcher.batch(self.clone(), f)
+  }
+
   fn sync(&mut self) -> crate::Result<()> {
-    self.db.write().backend.fsync()?;
+    self.inner.db.write().backend.fsync()?;
     Ok(())
   }
 }
@@ -1592,7 +1818,8 @@ impl DbRwAPI for DB {
 mod test {
   use crate::db::DbStats;
   use crate::test_support::TestDb;
-  use crate::{DbApi, DbRwAPI, TxRwRefApi};
+  use crate::{BucketApi, BucketRwApi, DbApi, DbRwAPI, TxApi, TxRwRefApi};
+  use std::thread;
 
   #[test]
   #[ignore]
@@ -1821,8 +2048,40 @@ mod test {
 
   #[test]
   #[ignore]
-  fn test_db_batch() {
-    todo!()
+  fn test_db_batch() -> crate::Result<()> {
+    let mut db = TestDb::new()?;
+    db.update(|mut tx| {
+      let _ = tx.create_bucket("widgets")?;
+      Ok(())
+    })?;
+
+    let n = 2;
+    let mut threads = Vec::with_capacity(n);
+    for i in 0..n {
+      let mut t_db = db.clone_db();
+      let join = thread::spawn(move || {
+        t_db.batch(move |tx| {
+          let mut b = tx.bucket_mut("widgets").unwrap();
+          b.put(format!("{}", i), "")
+        })
+      });
+      threads.push(join);
+    }
+
+    for t in threads {
+      t.join().unwrap()?;
+    }
+
+    db.view(|tx| {
+      let b = tx.bucket("widgets").unwrap();
+      for i in 0..n {
+        let g = b.get(format!("{}", i));
+        assert!(g.is_some(), "key not found {}", i);
+      }
+      Ok(())
+    })?;
+
+    Ok(())
   }
 
   #[test]

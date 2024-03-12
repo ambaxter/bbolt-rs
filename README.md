@@ -22,8 +22,8 @@ Currently not supported:
 * No freelist sync
 * Compact
 * Most of the main application
-* Strict mode
 * File open timeout
+* A variety of DB Options
 
 ## TODO
 
@@ -32,7 +32,7 @@ Currently not supported:
 - [ ] Most of the examples
 - [ ] Node leaf tests
 - [x] All stats 
-- [ ] db batch
+- [x] db batch
 - [x] main bench
 - [ ] clippy again
 
@@ -143,7 +143,7 @@ Currently not supported:
 - [ ] Log IO Errors
 - [ ] Save a special bump just for the RW?
 - [x] DbApi.close
-- [ ] DbApi.batch
+- [x] DbApi.batch
 - [ ] test_open
 - [ ] test_open_multiple_goroutines
 - [ ] test_open_err_path_required
@@ -179,7 +179,7 @@ Currently not supported:
 - [x] test_db_stats
 - [ ] test_db_consistency
 - [x] test_dbstats_sub
-- [ ] test_db_batch
+- [x] test_db_batch
 - [ ] test_db_batch_panic
 - [ ] test_db_batch_full
 - [ ] test_db_batch_time

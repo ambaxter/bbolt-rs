@@ -1155,13 +1155,13 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
       }
     };
 
-   #[cfg(feature = "strict")]
-   {
-     let errors = self.tx.check();
-     if !errors.is_empty() {
-       panic!("check fail: {}", errors.join("\n"))
-     }
-   }
+    #[cfg(feature = "strict")]
+    {
+      let errors = self.tx.check();
+      if !errors.is_empty() {
+        panic!("check fail: {}", errors.join("\n"))
+      }
+    }
 
     match self.tx.write_meta() {
       Ok(_) => {
@@ -1850,7 +1850,6 @@ mod test {
   }
 
   #[test]
-  #[ignore]
   fn test_tx_release_range() -> crate::Result<()> {
     // Set initial mmap size well beyond the limit we will hit in this
     // test, since we are testing with long running read transactions
