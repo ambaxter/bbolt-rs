@@ -10,26 +10,26 @@ rust-version = "1.76"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-aligners = "0.0.10"
+# Until the aligners miri fix is in crates.io depend on the git main branch
+aligners = {git = "https://github.com/V0ldek/aligners.git"}
 bumpalo = { version = "3.15.4", features = ["collections", "allocator-api2"]}
 hashbrown = "0.14.3"
 memmap2 = "0.9.4"
 page_size = "0.6.0"
 itertools = "0.12.1"
-bytemuck = { version = "1.14", features = ["derive"] }
+bytemuck = { version = "1.15", features = ["derive"] }
 size = "0.4.1"
 either = "1.10.0"
 getset = "0.1.2"
 once_cell = "1.19.0"
 fnv_rs = "0.4.3"
-thiserror = "1.0.57"
-anyhow = "1.0.80"
-fs4 = { version = "0.8.0", features = ["sync"] }
+thiserror = "1.0.58"
+anyhow = "1.0.81"
+fs4 = { version = "0.8.1", features = ["sync"] }
 parking_lot = "0.12.1"
 aliasable = "0.1.3"
 pin-project = "1.1.5"
 typed-builder = "0.18.1"
-crossbeam-channel = "0.5.12"
 rand = "0.8.5"
 tempfile = "3.10"
 clap = { version = "4.5.2", features = ["derive"] }

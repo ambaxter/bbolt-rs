@@ -19,11 +19,12 @@ Features:
 
 Currently not supported:
 * Tx.copy
-* No freelist sync
 * Compact
 * Most of the main application
-* File open timeout
-* A variety of DB Options
+* A variety of DB Options including 
+  * no freelist sync
+  * file open timeout
+* Panic handling during bench
 
 ## TODO
 
@@ -50,6 +51,7 @@ Currently not supported:
 - [x] Strict mode
 - [x] impl trait for public apis?
 - [x] Add try_begin(rw), try_begin(rw)_for, and try_begin(rw)_until to prevent deadlocks
+- [ ] Replace NodeW.inodes with BTreeMap because woof - it does not scale. (Note: Shared CodSlice key with RefCell)
 - [ ] blag post
 
 ### Open Questions
