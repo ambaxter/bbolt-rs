@@ -31,6 +31,7 @@ use std::sync::mpsc::{Receiver, SyncSender};
 use std::sync::{mpsc, Arc, OnceLock, Weak};
 use std::time::{Duration, Instant};
 use std::{fs, io, mem, thread};
+use anyhow::anyhow;
 use typed_builder::TypedBuilder;
 
 /// Read-only DB API
@@ -1495,6 +1496,9 @@ impl DB {
       free_count = backend.freelist().free_count();
     }
     let meta = backend.meta();
+    if meta.free_list() == PGID_NO_FREE_LIST {
+      return Err(Error::Other(anyhow!("PGID_NO_FREE_LIST not currently supported")))
+    }
     let db_state = Arc::new(Mutex::new(DbState::new(meta)));
     let stats = DbStats {
       free_page_n: (free_count as i64).into(),
