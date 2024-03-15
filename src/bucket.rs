@@ -1,8 +1,8 @@
-use crate::common::bucket::{InBucket, IN_BUCKET_SIZE};
+use crate::common::bucket::{BucketHeader, BUCKET_HEADER_SIZE};
 use crate::common::cell::{Ref, RefMut};
 use crate::common::memory::{BCell, IsAligned};
 use crate::common::page::{
-  CoerciblePage, MutPage, Page, RefPage, BUCKET_LEAF_FLAG, LEAF_PAGE_FLAG, PAGE_HEADER_SIZE,
+  CoerciblePage, MutPage, PageHeader, RefPage, BUCKET_LEAF_FLAG, LEAF_PAGE_FLAG, PAGE_HEADER_SIZE,
 };
 use crate::common::tree::{
   MappedBranchPage, MappedLeafPage, TreePage, BRANCH_PAGE_ELEMENT_SIZE, LEAF_PAGE_ELEMENT_SIZE,
@@ -377,15 +377,15 @@ pub(crate) const MAX_FILL_PERCENT: f64 = 1.0;
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
 struct InlineBucket {
-  header: InBucket,
-  page: Page,
+  header: BucketHeader,
+  page: PageHeader,
 }
 
 impl Default for InlineBucket {
   fn default() -> Self {
     InlineBucket {
-      header: InBucket::new(ZERO_PGID, 0),
-      page: Page {
+      header: BucketHeader::new(ZERO_PGID, 0),
+      page: PageHeader {
         id: Default::default(),
         flags: LEAF_PAGE_FLAG,
         count: 0,
@@ -400,7 +400,7 @@ pub(crate) trait BucketIApi<'tx, T: TxIApi<'tx>>:
   SplitRef<BucketR<'tx>, T, InnerBucketW<'tx, T, Self>>
 {
   fn new_in(
-    bump: &'tx Bump, bucket_header: InBucket, tx: T, inline_page: Option<RefPage<'tx>>,
+    bump: &'tx Bump, bucket_header: BucketHeader, tx: T, inline_page: Option<RefPage<'tx>>,
   ) -> Self;
 
   /// Returns whether the bucket is writable.
@@ -468,7 +468,7 @@ pub(crate) trait BucketIApi<'tx, T: TxIApi<'tx>>:
       new_value.copy_from_slice(value);
       value = new_value;
     }
-    let bucket_header = *bytemuck::from_bytes::<InBucket>(value.split_at(IN_BUCKET_SIZE).0);
+    let bucket_header = *bytemuck::from_bytes::<BucketHeader>(value.split_at(BUCKET_HEADER_SIZE).0);
     // Save a reference to the inline page if the bucket is inline.
     let ref_page = if bucket_header.root() == ZERO_PGID {
       assert!(
@@ -478,7 +478,7 @@ pub(crate) trait BucketIApi<'tx, T: TxIApi<'tx>>:
         value.len()
       );
       unsafe {
-        let ref_page_ptr = value.as_ptr().add(IN_BUCKET_SIZE);
+        let ref_page_ptr = value.as_ptr().add(BUCKET_HEADER_SIZE);
         Some(RefPage::new(ref_page_ptr))
       }
     } else {
@@ -766,14 +766,14 @@ pub(crate) trait BucketRwIApi<'tx>: BucketIApi<'tx, TxRwCell<'tx>> {
 }
 
 pub struct BucketR<'tx> {
-  pub(crate) bucket_header: InBucket,
+  pub(crate) bucket_header: BucketHeader,
   /// inline page reference
   pub(crate) inline_page: Option<RefPage<'tx>>,
   p: PhantomData<&'tx u8>,
 }
 
 impl<'tx> BucketR<'tx> {
-  pub fn new(in_bucket: InBucket) -> BucketR<'tx> {
+  pub fn new(in_bucket: BucketHeader) -> BucketR<'tx> {
     BucketR {
       bucket_header: in_bucket,
       inline_page: None,
@@ -825,7 +825,7 @@ pub struct BucketCell<'tx> {
 
 impl<'tx> BucketIApi<'tx, TxCell<'tx>> for BucketCell<'tx> {
   fn new_in(
-    bump: &'tx Bump, bucket_header: InBucket, tx: TxCell<'tx>, inline_page: Option<RefPage<'tx>>,
+    bump: &'tx Bump, bucket_header: BucketHeader, tx: TxCell<'tx>, inline_page: Option<RefPage<'tx>>,
   ) -> Self {
     let r = BucketR {
       bucket_header,
@@ -915,7 +915,7 @@ impl<'tx> SplitRef<BucketR<'tx>, TxRwCell<'tx>, BucketW<'tx>> for BucketRwCell<'
 
 impl<'tx> BucketIApi<'tx, TxRwCell<'tx>> for BucketRwCell<'tx> {
   fn new_in(
-    bump: &'tx Bump, bucket_header: InBucket, tx: TxRwCell<'tx>, inline_page: Option<RefPage<'tx>>,
+    bump: &'tx Bump, bucket_header: BucketHeader, tx: TxRwCell<'tx>, inline_page: Option<RefPage<'tx>>,
   ) -> Self {
     let r = BucketR {
       bucket_header,
@@ -1119,12 +1119,12 @@ impl<'tx> BucketRwIApi<'tx> for BucketRwCell<'tx> {
         child.write(bump)
       } else {
         child.spill(bump)?;
-        let layout = Layout::from_size_align(IN_BUCKET_SIZE, INLINE_BUCKET_ALIGNMENT).unwrap();
+        let layout = Layout::from_size_align(BUCKET_HEADER_SIZE, INLINE_BUCKET_ALIGNMENT).unwrap();
         let inline_bucket_ptr = bump.alloc_layout(layout).as_ptr();
         unsafe {
-          let inline_bucket = &mut (*(inline_bucket_ptr as *mut InBucket));
+          let inline_bucket = &mut (*(inline_bucket_ptr as *mut BucketHeader));
           *inline_bucket = child.split_r().bucket_header;
-          from_raw_parts(inline_bucket_ptr, IN_BUCKET_SIZE)
+          from_raw_parts(inline_bucket_ptr, BUCKET_HEADER_SIZE)
         }
       };
       if child.cell.borrow().w.root_node.is_none() {
@@ -1166,14 +1166,14 @@ impl<'tx> BucketRwIApi<'tx> for BucketRwCell<'tx> {
 
   fn write(self, bump: &'tx Bump) -> &'tx [u8] {
     let root_node = self.materialize_root();
-    let page_size = IN_BUCKET_SIZE + root_node.size();
+    let page_size = BUCKET_HEADER_SIZE + root_node.size();
     let layout = Layout::from_size_align(page_size, INLINE_BUCKET_ALIGNMENT).unwrap();
     let inline_bucket_ptr = bump.alloc_layout(layout).as_ptr();
 
     unsafe {
-      let inline_bucket = &mut (*(inline_bucket_ptr as *mut InBucket));
+      let inline_bucket = &mut (*(inline_bucket_ptr as *mut BucketHeader));
       *inline_bucket = self.cell.borrow().r.bucket_header;
-      let mut mut_page = MutPage::new(inline_bucket_ptr.add(IN_BUCKET_SIZE));
+      let mut mut_page = MutPage::new(inline_bucket_ptr.add(BUCKET_HEADER_SIZE));
       mut_page.id = PgId(0);
       mut_page.overflow = 0;
       root_node.write(&mut mut_page);

@@ -1,6 +1,6 @@
 use crate::arch::size::MAX_MAP_SIZE;
 use crate::bucket::BucketRwIApi;
-use crate::common::bucket::InBucket;
+use crate::common::bucket::BucketHeader;
 use crate::common::bump::PinBump;
 use crate::common::defaults::{
   DEFAULT_ALLOC_SIZE, DEFAULT_MAX_BATCH_DELAY, DEFAULT_MAX_BATCH_SIZE, DEFAULT_PAGE_SIZE, MAGIC,
@@ -8,7 +8,7 @@ use crate::common::defaults::{
 };
 use crate::common::lock::LockGuard;
 use crate::common::meta::{MappedMetaPage, Meta};
-use crate::common::page::{CoerciblePage, MutPage, Page, RefPage};
+use crate::common::page::{CoerciblePage, MutPage, PageHeader, RefPage};
 use crate::common::pool::{SyncPool, SyncReusable};
 use crate::common::self_owned::SelfOwned;
 use crate::common::tree::MappedLeafPage;
@@ -763,7 +763,7 @@ pub(crate) trait DbIApi<'tx>: 'tx {
   fn remove_tx(&self, rem_tx: TxId, tx_stats: Arc<TxStats>);
   fn allocate(&self, tx: TxRwCell, page_count: u64) -> AllocateResult<'tx>;
 
-  fn free_page(&self, txid: TxId, p: &Page);
+  fn free_page(&self, txid: TxId, p: &PageHeader);
   fn free_pages(&self);
 
   fn freelist_count(&self) -> u64;
@@ -814,7 +814,7 @@ impl<'tx> DbIApi<'tx> for LockGuard<'tx, DbShared> {
     }
   }
 
-  fn free_page(&self, txid: TxId, p: &Page) {
+  fn free_page(&self, txid: TxId, p: &PageHeader) {
     match self {
       LockGuard::R(guard) => guard.free_page(txid, p),
       LockGuard::U(guard) => guard.borrow().free_page(txid, p),
@@ -958,7 +958,7 @@ impl<'tx> DbIApi<'tx> for DbShared {
     }
   }
 
-  fn free_page(&self, txid: TxId, p: &Page) {
+  fn free_page(&self, txid: TxId, p: &PageHeader) {
     self.backend.freelist().free(txid, p)
   }
 
@@ -1610,7 +1610,7 @@ impl DB {
         meta.set_version(VERSION);
         meta.set_page_size(page_size as u32);
         meta.set_free_list(PgId(2));
-        meta.set_root(InBucket::new(PgId(3), 0));
+        meta.set_root(BucketHeader::new(PgId(3), 0));
         meta.set_pgid(PgId(4));
         meta.set_txid(TxId(i as u64));
         meta.set_checksum(meta.sum64());

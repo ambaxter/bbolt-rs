@@ -1,6 +1,6 @@
-use crate::common::bucket::InBucket;
+use crate::common::bucket::BucketHeader;
 use crate::common::defaults::{MAGIC, PGID_NO_FREE_LIST, VERSION};
-use crate::common::page::{CoerciblePage, Page, META_PAGE_FLAG};
+use crate::common::page::{CoerciblePage, PageHeader, META_PAGE_FLAG};
 use crate::common::{PgId, TxId};
 use crate::Error::{ChecksumMismatch, InvalidDatabase, VersionMismatch};
 use bytemuck::{Pod, Zeroable};
@@ -14,6 +14,8 @@ use std::ops::{Deref, DerefMut};
 pub const META_HEADER_SIZE: usize = mem::size_of::<Meta>();
 
 /// `Meta` represents the on-file layout of a database's metadata
+/// 
+/// `meta` in Go BBolt
 #[repr(C)]
 #[derive(Debug, Default, Copy, Clone, CopyGetters, Setters, Pod, Zeroable)]
 #[getset(get_copy = "pub", set = "pub")]
@@ -22,11 +24,11 @@ pub struct Meta {
   magic: u32,
   /// Database version number
   version: u32,
-  /// Database page size where page address = PgId * meta.page_size
+  /// Database page size where page address = [PgId] * meta.page_size
   page_size: u32,
   flags: u32,
   /// Root bucket header
-  root: InBucket,
+  root: BucketHeader,
   /// FreeList page location
   free_list: PgId,
   /// The end of the database where EOF = meta.pgid * meta.page_size
@@ -85,7 +87,7 @@ impl Meta {
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
 pub struct MetaPage {
-  pub page: Page,
+  pub page: PageHeader,
   pub meta: Meta,
 }
 

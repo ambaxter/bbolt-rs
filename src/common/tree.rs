@@ -1,7 +1,7 @@
 use crate::common::inode::INode;
 use crate::common::memory::{PhantomUnsend, RWSlice};
 use crate::common::page::{
-  CoerciblePage, Page, BRANCH_PAGE_FLAG, BUCKET_LEAF_FLAG, LEAF_PAGE_FLAG, PAGE_HEADER_SIZE,
+  CoerciblePage, PageHeader, BRANCH_PAGE_FLAG, BUCKET_LEAF_FLAG, LEAF_PAGE_FLAG, PAGE_HEADER_SIZE,
 };
 use crate::common::PgId;
 use bytemuck::{Pod, Zeroable};
@@ -30,16 +30,16 @@ impl MappedLeafPage {
 }
 
 impl Deref for MappedLeafPage {
-  type Target = Page;
+  type Target = PageHeader;
 
   fn deref(&self) -> &Self::Target {
-    unsafe { &*(self.bytes as *const Page) }
+    unsafe { &*(self.bytes as *const PageHeader) }
   }
 }
 
 impl DerefMut for MappedLeafPage {
   fn deref_mut(&mut self) -> &mut Self::Target {
-    unsafe { &mut *(self.bytes as *mut Page) }
+    unsafe { &mut *(self.bytes as *mut PageHeader) }
   }
 }
 
@@ -57,6 +57,8 @@ impl CoerciblePage for MappedLeafPage {
 }
 
 /// `LeafPageElement` represents the on-file layout of a leaf page's element
+///
+/// `leafPageElement` in Go BBolt
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Pod, Zeroable, CopyGetters, Setters)]
 #[getset(get_copy = "pub", set = "pub")]
@@ -128,16 +130,16 @@ impl MappedBranchPage {
 }
 
 impl Deref for MappedBranchPage {
-  type Target = Page;
+  type Target = PageHeader;
 
   fn deref(&self) -> &Self::Target {
-    unsafe { &*(self.bytes as *const Page) }
+    unsafe { &*(self.bytes as *const PageHeader) }
   }
 }
 
 impl DerefMut for MappedBranchPage {
   fn deref_mut(&mut self) -> &mut Self::Target {
-    unsafe { &mut *(self.bytes as *mut Page) }
+    unsafe { &mut *(self.bytes as *mut PageHeader) }
   }
 }
 
@@ -155,6 +157,8 @@ impl CoerciblePage for MappedBranchPage {
 }
 
 ///`BranchPageElement` represents the on-file layout of a branch page's element
+///
+/// `branchPageElement` in Go BBolt
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Pod, Zeroable, CopyGetters, Setters)]
 #[getset(get_copy = "pub", set = "pub")]
@@ -199,7 +203,7 @@ impl<'tx> Deref for BranchElementRef<'tx> {
   }
 }
 
-pub trait TreePage<'tx>: Deref<Target = Page> + DerefMut {
+pub trait TreePage<'tx>: Deref<Target =PageHeader> + DerefMut {
   type Elem: 'tx;
   type ElemRef: 'tx;
   unsafe fn page_ptr(&self) -> *mut u8;

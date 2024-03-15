@@ -1,4 +1,4 @@
-use crate::common::page::Page;
+use crate::common::page::PageHeader;
 use crate::common::page::{CoerciblePage, FREE_LIST_PAGE_FLAG, PAGE_HEADER_SIZE};
 use crate::common::utility::is_sorted;
 use crate::common::{PgId, TxId};
@@ -33,16 +33,16 @@ impl MappedFreeListPage {
 }
 
 impl Deref for MappedFreeListPage {
-  type Target = Page;
+  type Target = PageHeader;
 
   fn deref(&self) -> &Self::Target {
-    unsafe { &*(self.bytes as *const Page) }
+    unsafe { &*(self.bytes as *const PageHeader) }
   }
 }
 
 impl DerefMut for MappedFreeListPage {
   fn deref_mut(&mut self) -> &mut Self::Target {
-    unsafe { &mut *(self.bytes as *mut Page) }
+    unsafe { &mut *(self.bytes as *mut PageHeader) }
   }
 }
 
@@ -298,7 +298,7 @@ impl Freelist {
 
   /// free releases a page and its overflow for a given transaction id.
   /// If the page is already free then a panic will occur.
-  pub(crate) fn free(&mut self, txid: TxId, p: &Page) {
+  pub(crate) fn free(&mut self, txid: TxId, p: &PageHeader) {
     assert!(u64::from(p.id) > 1, "Cannot free page 0 or 1: {}", p.id);
 
     // Free page and all its overflow pages.
@@ -503,7 +503,7 @@ impl Freelist {
   }
 
   //TODO: reload
-  pub(crate) fn reload(&mut self, header: &Page) {
+  pub(crate) fn reload(&mut self, header: &PageHeader) {
     todo!()
   }
 
@@ -520,7 +520,7 @@ impl Freelist {
 
 #[cfg(test)]
 mod tests {
-  use crate::common::page::Page;
+  use crate::common::page::PageHeader;
   use crate::common::{PgId, TxId};
   use crate::freelist::{Freelist, MappedFreeListPage, TxPending};
   use crate::test_support::mapped_page;
@@ -546,7 +546,7 @@ mod tests {
   // Ensure that a page is added to a transaction's freelist.
   fn freelist_free() {
     let mut f = Freelist::new();
-    let p = Page {
+    let p = PageHeader {
       id: pg(12),
       ..Default::default()
     };
@@ -558,7 +558,7 @@ mod tests {
   // Ensure that a page and its overflow is added to a transaction's freelist.
   fn freelist_free_overflow() {
     let mut f = Freelist::new();
-    let p = Page {
+    let p = PageHeader {
       id: pg(12),
       overflow: 3,
       ..Default::default()
@@ -576,7 +576,7 @@ mod tests {
     let mut f = Freelist::new();
     f.free(
       tx(100),
-      &Page {
+      &PageHeader {
         id: pg(12),
         overflow: 1,
         ..Default::default()
@@ -584,14 +584,14 @@ mod tests {
     );
     f.free(
       tx(100),
-      &Page {
+      &PageHeader {
         id: pg(9),
         ..Default::default()
       },
     );
     f.free(
       tx(102),
-      &Page {
+      &PageHeader {
         id: pg(39),
         ..Default::default()
       },
@@ -735,7 +735,7 @@ mod tests {
       for p in &c.pages_in {
         f.free(
           p.free_txn,
-          &Page {
+          &PageHeader {
             id: p.id,
             overflow: p.n as u32 - 1,
             ..Default::default()

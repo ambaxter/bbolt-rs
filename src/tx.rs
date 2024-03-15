@@ -9,7 +9,7 @@ use crate::common::defaults::IGNORE_NO_SYNC;
 use crate::common::lock::{LockGuard, PinLockGuard};
 use crate::common::memory::BCell;
 use crate::common::meta::{MappedMetaPage, Meta, MetaPage};
-use crate::common::page::{CoerciblePage, MutPage, Page, PageInfo, RefPage};
+use crate::common::page::{CoerciblePage, MutPage, PageHeader, PageInfo, RefPage};
 use crate::common::pool::SyncReusable;
 use crate::common::self_owned::SelfOwned;
 use crate::common::tree::{MappedBranchPage, TreePage};
@@ -498,7 +498,7 @@ pub(crate) trait TxIApi<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
 
 pub(crate) trait TxRwIApi<'tx>: TxIApi<'tx> + TxICheck<'tx> {
   type CursorRwType: CursorRwIApi<'tx>;
-  fn freelist_free_page(self, txid: TxId, p: &Page);
+  fn freelist_free_page(self, txid: TxId, p: &PageHeader);
 
   fn root_bucket_mut(self) -> BucketRwCell<'tx>;
 
@@ -624,7 +624,7 @@ impl<'tx> TxIApi<'tx> for TxRwCell<'tx> {
 impl<'tx> TxRwIApi<'tx> for TxRwCell<'tx> {
   type CursorRwType = InnerCursor<'tx, Self, Self::BucketType>;
 
-  fn freelist_free_page(self, txid: TxId, p: &Page) {
+  fn freelist_free_page(self, txid: TxId, p: &PageHeader) {
     self.cell.borrow().r.db.free_page(txid, p)
   }
 

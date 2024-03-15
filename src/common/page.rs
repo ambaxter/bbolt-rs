@@ -8,7 +8,7 @@ use std::ops::{Deref, DerefMut};
 
 pub const MIN_KEYS_PER_PAGE: usize = 2;
 
-pub const PAGE_HEADER_SIZE: usize = mem::size_of::<Page>();
+pub const PAGE_HEADER_SIZE: usize = mem::size_of::<PageHeader>();
 
 pub const BRANCH_PAGE_FLAG: u16 = 0x01;
 pub const LEAF_PAGE_FLAG: u16 = 0x02;
@@ -18,14 +18,14 @@ pub const FREE_LIST_PAGE_FLAG: u16 = 0x10;
 pub const BUCKET_LEAF_FLAG: u32 = 0x01;
 
 //TODO: This needs to be cleaned up.
-/// Represents a page type that can be coerced or mutated from a `RefPage` or `MutPage`
+/// Represents a page type that can be coerced or mutated from a [RefPage] or [MutPage]
 pub trait CoerciblePage {
   /// The page flag discriminator
   fn page_flag() -> u16;
 
   /// Set the page flag
   #[inline]
-  fn set_flag(page: &mut Page) {
+  fn set_flag(page: &mut PageHeader) {
     page.flags = Self::page_flag();
   }
 
@@ -34,7 +34,7 @@ pub trait CoerciblePage {
   // but rather as a type
   fn own(bytes: *mut u8) -> Self;
 
-  /// Const cast a `RefPage` into a specific page type
+  /// Const cast a [RefPage] into a specific page type
   #[inline]
   unsafe fn unchecked_ref<'a>(mapped_page: &'a RefPage<'_>) -> &'a Self
   where
@@ -43,7 +43,7 @@ pub trait CoerciblePage {
     &*(mapped_page as *const RefPage as *const Self)
   }
 
-  /// Mut cast a `MutPage` into a specific page type
+  /// Mut cast a [MutPage] into a specific page type
   #[inline]
   unsafe fn unchecked_mut<'a>(mapped_page: &'a mut MutPage<'_>) -> &'a mut Self
   where
@@ -52,7 +52,7 @@ pub trait CoerciblePage {
     &mut *(mapped_page as *mut MutPage<'_> as *mut Self)
   }
 
-  /// Mutate a `MutPage` into a specific page type.
+  /// Mutate a [MutPage] into a specific page type.
   #[inline]
   fn mut_into<'a>(mapped_page: &'a mut MutPage<'_>) -> &'a mut Self
   where
@@ -62,7 +62,7 @@ pub trait CoerciblePage {
     unsafe { Self::unchecked_mut(mapped_page) }
   }
 
-  /// Const cast a `RefPage` into a specific page type if the type matches
+  /// Const cast a [RefPage] into a specific page type if the type matches
   #[inline]
   fn coerce_ref<'a>(mapped_page: &'a RefPage<'_>) -> Option<&'a Self>
   where
@@ -75,7 +75,7 @@ pub trait CoerciblePage {
     }
   }
 
-  /// Mut cast a `MutPage` into a specific page type if the type matches
+  /// Mut cast a [MutPage] into a specific page type if the type matches
   #[inline]
   fn coerce_mut<'a>(mapped_page: &'a mut MutPage<'_>) -> Option<&'a mut Self>
   where
@@ -90,7 +90,7 @@ pub trait CoerciblePage {
 }
 
 /// A read-only view of page aligned, multiple of page-sized section of memory.
-/// Always begins with a 'Page' header
+/// Always begins with a [PageHeader]
 #[derive(Copy, Clone)]
 pub struct RefPage<'tx> {
   bytes: *const u8,
@@ -107,15 +107,15 @@ impl<'tx> RefPage<'tx> {
 }
 
 impl<'tx> Deref for RefPage<'tx> {
-  type Target = Page;
+  type Target = PageHeader;
 
   fn deref(&self) -> &Self::Target {
-    unsafe { &*(self.bytes as *const Page) }
+    unsafe { &*(self.bytes as *const PageHeader) }
   }
 }
 
 /// A mutable view of page aligned, multiple of page-sized section of memory.
-/// Always begins with a 'Page' header
+/// Always begins with a [PageHeader]
 pub struct MutPage<'tx> {
   bytes: *mut u8,
   phantom: PhantomData<&'tx mut [u8]>,
@@ -137,23 +137,25 @@ impl<'tx> AsRef<RefPage<'tx>> for MutPage<'tx> {
 }
 
 impl<'tx> Deref for MutPage<'tx> {
-  type Target = Page;
+  type Target = PageHeader;
 
   fn deref(&self) -> &Self::Target {
-    unsafe { &*(self.bytes as *const Page) }
+    unsafe { &*(self.bytes as *const PageHeader) }
   }
 }
 
 impl<'tx> DerefMut for MutPage<'tx> {
   fn deref_mut(&mut self) -> &mut Self::Target {
-    unsafe { &mut *(self.bytes as *mut Page) }
+    unsafe { &mut *(self.bytes as *mut PageHeader) }
   }
 }
 
-/// `Page` represents the on-file layout of a page header
+/// `PageHeader` represents the on-file layout of a page header.
+///
+/// `page` in Go BBolt
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default, Pod, Zeroable)]
-pub struct Page {
+pub struct PageHeader {
   /// This Page's ID
   pub id: PgId,
   /// Page's type. Branch(0x01), Leaf(0x02), Meta(0x04), or FreeList(0x10)
@@ -165,27 +167,27 @@ pub struct Page {
   pub overflow: u32,
 }
 
-impl PartialOrd for Page {
+impl PartialOrd for PageHeader {
   fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
     Some(self.cmp(other))
   }
 }
 
-impl Ord for Page {
+impl Ord for PageHeader {
   fn cmp(&self, other: &Self) -> Ordering {
     self.id.cmp(&other.id)
   }
 }
 
-impl PartialEq for Page {
+impl PartialEq for PageHeader {
   fn eq(&self, other: &Self) -> bool {
     self.id == other.id
   }
 }
 
-impl Eq for Page {}
+impl Eq for PageHeader {}
 
-impl Page {
+impl PageHeader {
   #[inline]
   pub fn set_branch(&mut self) {
     self.flags = BRANCH_PAGE_FLAG;
