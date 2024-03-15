@@ -56,14 +56,20 @@ impl CoerciblePage for MappedLeafPage {
   }
 }
 
+/// `LeafPageElement` represents the on-file layout of a leaf page's element
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Pod, Zeroable, CopyGetters, Setters)]
 #[getset(get_copy = "pub", set = "pub")]
 pub struct LeafPageElement {
+  /// Additional flag for each element. If leaf is a Bucket then 0x01 set
   flags: u32,
+  /// The distance from this element's pointer to its key/value location
   pos: u32,
+  /// Key length
   key_size: u32,
+  /// Value length
   value_size: u32,
+  /// To implement !Send
   unsend: PhantomUnsend,
 }
 
@@ -148,13 +154,18 @@ impl CoerciblePage for MappedBranchPage {
   }
 }
 
+///`BranchPageElement` represents the on-file layout of a branch page's element
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Pod, Zeroable, CopyGetters, Setters)]
 #[getset(get_copy = "pub", set = "pub")]
 pub struct BranchPageElement {
+  /// The distance from this element's pointer to its key location
   pos: u32,
+  /// Key length
   key_size: u32,
+  /// Page ID of this branch
   pgid: PgId,
+  /// To implement !Send
   unsend: PhantomUnsend,
 }
 

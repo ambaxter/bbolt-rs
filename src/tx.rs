@@ -468,7 +468,6 @@ pub(crate) trait TxIApi<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
     Ok(())
   }
 
-  /// See [TxApi::page]
   fn api_page(&self, id: PgId) -> crate::Result<Option<PageInfo>> {
     let r = self.split_r();
     if id >= r.meta.pgid() {

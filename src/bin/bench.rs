@@ -5,12 +5,12 @@ use bbolt_rs::{
 use byteorder::{BigEndian, ByteOrder};
 use clap::{Parser, ValueEnum};
 use rand::rngs::StdRng;
+use rand::seq::SliceRandom;
 use rand::{RngCore, SeedableRng};
 use std::cell::RefCell;
 use std::fmt::{Display, Formatter};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
-use rand::seq::SliceRandom;
 use tempfile::Builder;
 
 #[derive(Parser)]
@@ -140,7 +140,7 @@ fn run_reads(db: &mut DB, options: &Bench) -> bbolt_rs::Result<BenchResults> {
   let ops = match (options.read_mode, options.write_mode) {
     (ReadMode::Seq, WriteMode::RndNest | WriteMode::SeqNest) => {
       run_reads_sequential_nested(db, options)?
-    },
+    }
     (ReadMode::Rnd, WriteMode::RndNest | WriteMode::SeqNest) => {
       let mut rng = StdRng::from_entropy();
       let mut keys = collect_nested_keys(db)?;
@@ -234,11 +234,7 @@ where
         let k = key_source();
         BigEndian::write_u32(&mut key, k);
         b.put(&key, &value)?;
-        if j % (options.batch_size / 10) == 0 {
-          println!("batch {}%", (j as f64 * 100f64) / (options.batch_size as f64) );
-        }
       }
-      println!("bucket {}%", ((i + options.batch_size) as f64 * 100f64) / (options.count as f64));
       Ok(())
     })?
   }
@@ -293,7 +289,9 @@ fn run_reads_sequential(db: &DB, options: &Bench) -> bbolt_rs::Result<u32> {
   Ok(results.take())
 }
 
-fn run_reads_random(db: &DB, options: &Bench, rng: &mut StdRng, keys: &mut[Box<[u8]>]) -> bbolt_rs::Result<u32> {
+fn run_reads_random(
+  db: &DB, options: &Bench, rng: &mut StdRng, keys: &mut [Box<[u8]>],
+) -> bbolt_rs::Result<u32> {
   keys.shuffle(rng);
   let results = RefCell::new(0u32);
   db.view(|tx| {
@@ -382,7 +380,9 @@ fn run_reads_sequential_nested(db: &DB, options: &Bench) -> bbolt_rs::Result<u32
   Ok(results.take())
 }
 
-fn run_reads_random_nested(db: &DB, options: &Bench, rng: &mut StdRng, keys: &mut[(Rc<[u8]>, Box<[u8]>)]) -> bbolt_rs::Result<u32> {
+fn run_reads_random_nested(
+  db: &DB, options: &Bench, rng: &mut StdRng, keys: &mut [(Rc<[u8]>, Box<[u8]>)],
+) -> bbolt_rs::Result<u32> {
   keys.shuffle(rng);
   let results = RefCell::new(0u32);
   db.view(|tx| {

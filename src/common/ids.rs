@@ -3,7 +3,13 @@ use std::fmt::{Display, Formatter};
 use std::ops::{Add, AddAssign, Sub, SubAssign};
 
 macro_rules! id {
-  ( $x:ident ) => {
+
+  (
+    $(#[$meta:meta])*
+    $x:ident
+  ) => {
+
+    $(#[$meta])*
     #[repr(C)]
     #[derive(Default, Debug, Copy, Clone, PartialOrd, PartialEq, Ord, Eq, Hash, Pod, Zeroable)]
     pub struct $x(pub u64);
@@ -69,6 +75,12 @@ macro_rules! id {
   };
 }
 
-id!(PgId);
+id!(
+  /// The Page ID. Page address = `PgId` * page_size
+  PgId
+);
 
-id!(TxId);
+id!(
+  /// The Transaction ID. Monotonic and incremented every commit
+  TxId
+);

@@ -150,13 +150,18 @@ impl<'tx> DerefMut for MutPage<'tx> {
   }
 }
 
+/// `Page` represents the on-file layout of a page header
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Default, Pod, Zeroable)]
 pub struct Page {
+  /// This Page's ID
   pub id: PgId,
+  /// Page's type. Branch(0x01), Leaf(0x02), Meta(0x04), or FreeList(0x10)
   pub flags: u16,
+  /// Defines the number of items in the Branch, Leaf, and Freelist pages
   pub count: u16,
   //TODO: make setting this unsafe
+  /// How many additional meta.page_size pages are included in this page
   pub overflow: u32,
 }
 

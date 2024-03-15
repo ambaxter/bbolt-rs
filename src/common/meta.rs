@@ -13,18 +13,27 @@ use std::ops::{Deref, DerefMut};
 
 pub const META_HEADER_SIZE: usize = mem::size_of::<Meta>();
 
+/// `Meta` represents the on-file layout of a database's metadata
 #[repr(C)]
 #[derive(Debug, Default, Copy, Clone, CopyGetters, Setters, Pod, Zeroable)]
 #[getset(get_copy = "pub", set = "pub")]
 pub struct Meta {
+  /// Uniquely ID for BBolt databases
   magic: u32,
+  /// Database version number
   version: u32,
+  /// Database page size where page address = PgId * meta.page_size
   page_size: u32,
   flags: u32,
+  /// Root bucket header
   root: InBucket,
+  /// FreeList page location
   free_list: PgId,
+  /// The end of the database where EOF = meta.pgid * meta.page_size
   pgid: PgId,
+  /// Current transaction ID
   txid: TxId,
+  /// Checksum of the previous Meta fields using the 64-bit version of the Fowler-Noll-Vo hash function
   checksum: u64,
 }
 
