@@ -825,7 +825,8 @@ pub struct BucketCell<'tx> {
 
 impl<'tx> BucketIApi<'tx, TxCell<'tx>> for BucketCell<'tx> {
   fn new_in(
-    bump: &'tx Bump, bucket_header: BucketHeader, tx: TxCell<'tx>, inline_page: Option<RefPage<'tx>>,
+    bump: &'tx Bump, bucket_header: BucketHeader, tx: TxCell<'tx>,
+    inline_page: Option<RefPage<'tx>>,
   ) -> Self {
     let r = BucketR {
       bucket_header,
@@ -915,7 +916,8 @@ impl<'tx> SplitRef<BucketR<'tx>, TxRwCell<'tx>, BucketW<'tx>> for BucketRwCell<'
 
 impl<'tx> BucketIApi<'tx, TxRwCell<'tx>> for BucketRwCell<'tx> {
   fn new_in(
-    bump: &'tx Bump, bucket_header: BucketHeader, tx: TxRwCell<'tx>, inline_page: Option<RefPage<'tx>>,
+    bump: &'tx Bump, bucket_header: BucketHeader, tx: TxRwCell<'tx>,
+    inline_page: Option<RefPage<'tx>>,
   ) -> Self {
     let r = BucketR {
       bucket_header,

@@ -40,6 +40,7 @@ monotonic-timer = "1.0.0"
 allgasnobrakes = []
 compat = []
 strict = []
+try-begin = []
 
 [dev-dependencies]
 

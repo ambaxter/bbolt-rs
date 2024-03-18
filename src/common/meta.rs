@@ -14,7 +14,7 @@ use std::ops::{Deref, DerefMut};
 pub const META_HEADER_SIZE: usize = mem::size_of::<Meta>();
 
 /// `Meta` represents the on-file layout of a database's metadata
-/// 
+///
 /// `meta` in Go BBolt
 #[repr(C)]
 #[derive(Debug, Default, Copy, Clone, CopyGetters, Setters, Pod, Zeroable)]

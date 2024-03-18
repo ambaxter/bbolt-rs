@@ -56,14 +56,6 @@ pub enum LockGuard<'a, T> {
 }
 
 impl<'a, T> LockGuard<'a, T> {
-  pub fn is_write(&self) -> bool {
-    if let LockGuard::U(g) = self {
-      g.borrow().is_write()
-    } else {
-      false
-    }
-  }
-
   pub fn get_mut(&self) -> Option<RefMut<T>> {
     match self {
       LockGuard::R(_) => None,

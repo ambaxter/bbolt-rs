@@ -17,10 +17,11 @@ use crate::freelist::{Freelist, MappedFreeListPage};
 use crate::tx::{TxIApi, TxImpl, TxRef, TxRwApi, TxRwCell, TxRwImpl, TxRwRef, TxStats};
 use crate::{Error, TxApi};
 use aligners::{alignment, AlignedBytes};
+use anyhow::anyhow;
 use fs4::FileExt;
 use memmap2::{Advice, MmapOptions, MmapRaw};
 use monotonic_timer::{Guard, Timer};
-use parking_lot::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockUpgradableReadGuard};
+use parking_lot::{Mutex, MutexGuard, RwLock};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::ops::{Deref, DerefMut};
@@ -29,9 +30,10 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender};
 use std::sync::{mpsc, Arc, OnceLock, Weak};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(feature = "try-begin")]
+use std::time::Instant;
 use std::{fs, io, mem, thread};
-use anyhow::anyhow;
 use typed_builder::TypedBuilder;
 
 /// Read-only DB API
@@ -39,10 +41,6 @@ pub trait DbApi: Clone + Send + Sync
 where
   Self: Sized,
 {
-  /// Close releases all database resources.
-  /// It will block waiting for any open transactions to finish
-  /// before closing the database and returning.
-  fn close(self);
 
   /// Begin starts a new transaction.
   /// Multiple read-only transactions can be used concurrently but only one
@@ -61,22 +59,91 @@ where
   ///
   /// IMPORTANT: You must drop the read-only transactions after you are finished or
   /// else the database will not reclaim old pages.
+  ///
+  /// ```rust
+  /// use bbolt_rs::{BucketApi, BucketRwApi, DB, DbApi, DbRwAPI, TxApi, TxRwRefApi};
+  ///
+  /// fn main() -> bbolt_rs::Result<()> {
+  ///   let mut db = DB::new_mem()?;
+  ///
+  ///   db.update(|mut tx| {
+  ///     let mut b = tx.create_bucket_if_not_exists("test")?;
+  ///     b.put("key", "value")?;
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   let tx = db.begin()?;
+  ///   let b = tx.bucket("test").unwrap();
+  ///   assert_eq!(Some(b"value".as_ref()), b.get("key"));
+  ///
+  ///   Ok(())
+  /// }
+  /// ```
   fn begin(&self) -> crate::Result<impl TxApi>;
 
+  #[cfg(feature = "try-begin")]
   fn try_begin(&self) -> crate::Result<Option<impl TxApi>>;
 
+  #[cfg(feature = "try-begin")]
   fn try_begin_for(&self, duration: Duration) -> crate::Result<Option<impl TxApi>>;
 
+  #[cfg(feature = "try-begin")]
   fn try_begin_until(&self, instant: Instant) -> crate::Result<Option<impl TxApi>>;
 
   /// View executes a function within the context of a managed read-only transaction.
   /// Any error that is returned from the function is returned from the View() method.
   ///
+  /// ```rust
+  /// use bbolt_rs::{BucketApi, BucketRwApi, DB, DbApi, DbRwAPI, TxApi, TxRwRefApi};
+  ///
+  /// fn main() -> bbolt_rs::Result<()> {
+  ///   let mut db = DB::new_mem()?;
+  ///
+  ///   db.update(|mut tx| {
+  ///     let mut b = tx.create_bucket_if_not_exists("test")?;
+  ///     b.put("key", "value")?;
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   db.view(|tx| {
+  ///     let b = tx.bucket("test").unwrap();
+  ///     assert_eq!(Some(b"value".as_ref()), b.get("key"));
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   Ok(())
+  /// }
+  /// ```
   fn view<'tx, F: Fn(TxRef<'tx>) -> crate::Result<()>>(&'tx self, f: F) -> crate::Result<()>;
 
   /// Stats retrieves ongoing performance stats for the database.
   /// This is only updated when a transaction closes.
   fn stats(&self) -> Arc<DbStats>;
+
+  /// Close releases all database resources.
+  /// It will block waiting for any open transactions to finish
+  /// before closing the database and returning.
+  ///
+  /// Once closed, other instances return [Error::DatabaseNotOpen]
+  ///
+  /// ```rust
+  /// use bbolt_rs::{BucketApi, BucketRwApi, DB, DbApi, DbRwAPI, TxApi, TxRwRefApi, Error};
+  ///
+  /// fn main() -> bbolt_rs::Result<()> {
+  ///   let mut db = DB::new_mem()?;
+  ///   let cloned = db.clone();
+  ///   db.update(|mut tx| {
+  ///     let mut b = tx.create_bucket_if_not_exists("test")?;
+  ///     b.put("key", "value")?;
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   db.close();
+  ///   assert_eq!(Some(Error::DatabaseNotOpen), cloned.begin().err());
+  ///   Ok(())
+  /// }
+  /// ```
+  fn close(self);
 }
 
 /// RW DB API
@@ -95,12 +162,36 @@ pub trait DbRwAPI: DbApi {
   /// If a long running read transaction (for example, a snapshot transaction) is
   /// needed, you might want to set DB.InitialMmapSize to a large enough value
   /// to avoid potential blocking of write transaction.
+  ///
+  /// ```rust
+  /// use bbolt_rs::{BucketApi, BucketRwApi, DB, DbApi, DbRwAPI, TxApi, TxRwApi, TxRwRefApi};
+  ///
+  /// fn main() -> bbolt_rs::Result<()> {
+  ///   let mut db = DB::new_mem()?;
+  ///
+  ///   let mut tx = db.begin_rw()?;
+  ///   let mut b = tx.create_bucket_if_not_exists("test")?;
+  ///   b.put("key", "value")?;
+  ///   tx.commit()?;
+  ///
+  ///   db.view(|tx| {
+  ///     let b = tx.bucket("test").unwrap();
+  ///     assert_eq!(Some(b"value".as_ref()), b.get("key"));
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   Ok(())
+  /// }
+  /// ```
   fn begin_rw(&mut self) -> crate::Result<impl TxRwApi>;
 
+  #[cfg(feature = "try-begin")]
   fn try_begin_rw(&self) -> crate::Result<Option<impl TxRwApi>>;
 
+  #[cfg(feature = "try-begin")]
   fn try_begin_rw_for(&self, duration: Duration) -> crate::Result<Option<impl TxRwApi>>;
 
+  #[cfg(feature = "try-begin")]
   fn try_begin_rw_until(&self, instant: Instant) -> crate::Result<Option<impl TxRwApi>>;
 
   /// Update executes a function within the context of a read-write managed transaction.
@@ -108,10 +199,53 @@ pub trait DbRwAPI: DbApi {
   /// If an error is returned then the entire transaction is rolled back.
   /// Any error that is returned from the function or returned from the commit is
   /// returned from the Update() method.
+  ///
+  /// ```rust
+  /// use bbolt_rs::{BucketApi, BucketRwApi, DB, DbApi, DbRwAPI, TxApi, TxRwRefApi};
+  ///
+  /// fn main() -> bbolt_rs::Result<()> {
+  ///   let mut db = DB::new_mem()?;
+  ///
+  ///   db.update(|mut tx| {
+  ///     let mut b = tx.create_bucket_if_not_exists("test")?;
+  ///     b.put("key", "value")?;
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   db.view(|tx| {
+  ///     let b = tx.bucket("test").unwrap();
+  ///     assert_eq!(Some(b"value".as_ref()), b.get("key"));
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   Ok(())
+  /// }
+  /// ```
   fn update<'tx, F: FnMut(TxRwRef<'tx>) -> crate::Result<()>>(
     &'tx mut self, f: F,
   ) -> crate::Result<()>;
 
+  /// ```rust
+  /// use bbolt_rs::{BucketApi, BucketRwApi, DB, DbApi, DbRwAPI, TxApi, TxRwRefApi};
+  ///
+  /// fn main() -> bbolt_rs::Result<()> {
+  ///   let mut db = DB::new_mem()?;
+  ///
+  ///   db.batch(|mut tx| {
+  ///     let mut b = tx.create_bucket_if_not_exists("test")?;
+  ///     b.put("key", "value")?;
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   db.view(|tx| {
+  ///     let b = tx.bucket("test").unwrap();
+  ///     assert_eq!(Some(b"value".as_ref()), b.get("key"));
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   Ok(())
+  /// }
+  /// ```
   fn batch<'tx, F>(&'tx mut self, f: F) -> crate::Result<()>
   where
     F: FnMut(&mut TxRwRef) -> crate::Result<()> + Send + Sync + Clone + 'static;
@@ -120,6 +254,23 @@ pub trait DbRwAPI: DbApi {
   ///
   /// This is not necessary under normal operation, however, if you use NoSync
   /// then it allows you to force the database file to sync against the disk.
+  /// ```rust
+  /// use bbolt_rs::{BucketApi, BucketRwApi, DB, DbApi, DbRwAPI, TxApi, TxRwRefApi};
+  ///
+  /// fn main() -> bbolt_rs::Result<()> {
+  ///   let mut db = DB::new_mem()?;
+  ///
+  ///   db.batch(|mut tx| {
+  ///     let mut b = tx.create_bucket_if_not_exists("test")?;
+  ///     b.put("key", "value")?;
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   db.sync()?;
+  ///
+  ///   Ok(())
+  /// }
+  /// ```
   fn sync(&mut self) -> crate::Result<()>;
 }
 
@@ -1497,7 +1648,9 @@ impl DB {
     }
     let meta = backend.meta();
     if meta.free_list() == PGID_NO_FREE_LIST {
-      return Err(Error::Other(anyhow!("PGID_NO_FREE_LIST not currently supported")))
+      return Err(Error::Other(anyhow!(
+        "PGID_NO_FREE_LIST not currently supported"
+      )));
     }
     let db_state = Arc::new(Mutex::new(DbState::new(meta)));
     let stats = DbStats {
@@ -1639,6 +1792,14 @@ impl DB {
       .truncate(true)
       .read(true)
       .open(path)?;
+    #[cfg(unix)]
+    {
+      use std::os::unix::fs::PermissionsExt;
+      let metadata = db.metadata()?;
+      let mut permissions = metadata.permissions();
+      permissions.set_mode(0o600);
+      fs::set_permissions(path, permissions)?;
+    }
     db.write_all(&buffer)?;
     db.flush()?;
     Ok(buffer.len())
@@ -1668,6 +1829,7 @@ impl DB {
     Ok(TxImpl::new(bump, lock, meta))
   }
 
+  #[cfg(feature = "try-begin")]
   pub(crate) fn try_begin_tx<'a, F>(&'a self, f: F) -> crate::Result<Option<TxImpl>>
   where
     F: Fn() -> Option<RwLockReadGuard<'a, DbShared>>,
@@ -1704,6 +1866,7 @@ impl DB {
     Ok(TxRwImpl::new(bump, lock, meta))
   }
 
+  #[cfg(feature = "try-begin")]
   pub(crate) fn try_begin_rw_tx<'a, F>(&'a self, f: F) -> crate::Result<Option<TxRwImpl>>
   where
     F: Fn() -> Option<RwLockUpgradableReadGuard<'a, DbShared>>,
@@ -1744,14 +1907,17 @@ impl DbApi for DB {
     self.begin_tx()
   }
 
+  #[cfg(feature = "try-begin")]
   fn try_begin(&self) -> crate::Result<Option<impl TxApi>> {
     self.try_begin_tx(|| self.inner.db.try_read())
   }
 
+  #[cfg(feature = "try-begin")]
   fn try_begin_for(&self, duration: Duration) -> crate::Result<Option<impl TxApi>> {
     self.try_begin_tx(|| self.inner.db.try_read_for(duration))
   }
 
+  #[cfg(feature = "try-begin")]
   fn try_begin_until(&self, instant: Instant) -> crate::Result<Option<impl TxApi>> {
     self.try_begin_tx(|| self.inner.db.try_read_until(instant))
   }
@@ -1776,14 +1942,17 @@ impl DbRwAPI for DB {
     self.begin_rw_tx()
   }
 
+  #[cfg(feature = "try-begin")]
   fn try_begin_rw(&self) -> crate::Result<Option<impl TxRwApi>> {
     self.try_begin_rw_tx(|| self.inner.db.try_upgradable_read())
   }
 
+  #[cfg(feature = "try-begin")]
   fn try_begin_rw_for(&self, duration: Duration) -> crate::Result<Option<impl TxRwApi>> {
     self.try_begin_rw_tx(|| self.inner.db.try_upgradable_read_for(duration))
   }
 
+  #[cfg(feature = "try-begin")]
   fn try_begin_rw_until(&self, instant: Instant) -> crate::Result<Option<impl TxRwApi>> {
     self.try_begin_rw_tx(|| self.inner.db.try_upgradable_read_until(instant))
   }

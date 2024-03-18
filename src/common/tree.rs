@@ -203,7 +203,7 @@ impl<'tx> Deref for BranchElementRef<'tx> {
   }
 }
 
-pub trait TreePage<'tx>: Deref<Target =PageHeader> + DerefMut {
+pub trait TreePage<'tx>: Deref<Target = PageHeader> + DerefMut {
   type Elem: 'tx;
   type ElemRef: 'tx;
   unsafe fn page_ptr(&self) -> *mut u8;
