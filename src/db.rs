@@ -41,7 +41,6 @@ pub trait DbApi: Clone + Send + Sync
 where
   Self: Sized,
 {
-
   /// Begin starts a new transaction.
   /// Multiple read-only transactions can be used concurrently but only one
   /// write transaction can be used at a time. Starting multiple write transactions
@@ -1052,9 +1051,7 @@ unsafe impl Send for DbShared {}
 
 impl<'tx> DbIApi<'tx> for DbShared {
   fn page(&self, pg_id: PgId) -> RefPage<'tx> {
-    let page = self.backend.page(pg_id);
-    debug_assert_eq!(pg_id, page.id);
-    page
+    self.backend.page(pg_id)
   }
 
   fn is_page_free(&self, pg_id: PgId) -> bool {

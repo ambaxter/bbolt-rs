@@ -388,10 +388,14 @@ pub(crate) trait TxIApi<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
   fn any_page<'a>(&'a self, id: PgId) -> AnyPage<'a, 'tx> {
     if let Some(tx) = self.split_ow() {
       if tx.pages.contains_key(&id) {
-        return AnyPage::Pending(Ref::map(tx, |t| t.pages.get(&id).unwrap().as_ref()));
+        let page = Ref::map(tx, |t| t.pages.get(&id).unwrap().as_ref());
+        page.fast_check(id);
+        return AnyPage::Pending(page);
       }
     }
-    AnyPage::Ref(self.split_r().db.page(id))
+    let page = self.split_r().db.page(id);
+    page.fast_check(id);
+    AnyPage::Ref(page)
   }
 
   /// See [TxApi::id]
