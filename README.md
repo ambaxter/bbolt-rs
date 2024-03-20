@@ -39,52 +39,31 @@ Currently not supported:
 
 
 ### General
-- [x] Read-only DB access
-- [x] Rework Meta storage in DbShared
-- [x] Optional freelist loading
 - [ ] Quick Check analog
 - [ ] Logging capabilities
-- [x] Follow Clippy guidance
-- [x] Remove commented out trace
-- [x] Optional fsync
-- [x] Optional mlock
-- [x] Strict mode
-- [x] impl trait for public apis?
-- [x] Add try_begin(rw), try_begin(rw)_for, and try_begin(rw)_until to prevent deadlocks
 - [ ] Replace NodeW.inodes with BTreeMap because woof - it does not scale. (Note: Shared CodSlice key with RefCell)
 - [ ] blag post
 
 ### Open Questions
-- [x] How do we properly pin memory for the transactions?
-- [x] How do we properly set up sync and send for the database?
-- [x] Why do I need to transmute the key deref in key(&'a self) -> &'tx [u8] in inode.rs?
-- [x] Why do we leak memory when dropping TxRwImpl?
-- [x] We leak memory when dropping TxImpl/TxRwImpl due to Rc's Weak pointers. As long as they're alive Rc's memory will not be de-allocated. Fix this later.
 - [ ] Why do we need so much memory on large commits? Almost 3x the Go version
 - [ ] Can we squeeze performance by moving the leaf keys all next to each other?
 
 ## To Refactor
 
 ### src/tx.rs
-- [x] API allows commit for TxRwRef
 - [ ] Move tx stats in db.allocate to tx.allocate
 
 ### src/nodes.rs
 - [ ] We have at least 3 different functions to write inodes
-- [x] Double check inodes aren't used after they're spilled
 - [ ] Rebalance could be a lot better
 
 ### src/db.rs
 - [ ] Rework page size determination functions
-- [x] Access freelist easier
 
 ### src/bucket.rs
 - [ ] Centralize memory aligned bump allocation (BucketIApi.open_bucket)
 - [ ] Proper error chaining (BucketIApi.api_delete_bucket)
 - [ ] Bucket tests: test_bucket_get_capacity - allow editing values?
-
-### src/common/mod.rs
-- [x] Remove unnecessary functions for SplitRef
 
 ### src/common/page.rs
 - [ ] CoerciblePage API needs cleanup and renaming
@@ -97,44 +76,21 @@ Currently not supported:
 ## To Complete
 
 ### src/tx.rs
-- [x] TxStats getter/setters
-- [x] TxIAPI Double check api_for_each -> api_for_each_bucket call 
-- [x] TxIAPI.\*rollback\*
-- [x] TxApi.for_each
-- [x] TxCheck for TxImpl, TxRef
 - [ ] Copy file
 - [ ] test_tx_check_read_only
 - [ ] test_tx_commit_err_tx_closed
 - [ ] test_tx_rollback_err_tx_closed
 - [ ] test_tx_commit_err_tx_not_writable
-- [x] test_tx_cursor
 - [ ] test_tx_create_bucket_err_tx_not_writable
 - [ ] test_tx_create_bucket_err_tx_closed
-- [x] test_tx_bucket
-- [x] test_tx_get_not_found
-- [x] test_tx_create_bucket_if_not_exists
-- [x] test_tx_create_bucket_if_not_exists_err_bucket_name_required
-- [x] test_tx_create_bucket_err_bucket_exists
-- [x] test_tx_create_bucket_err_bucket_name_required
-- [x] test_tx_delete_bucket
 - [ ] test_tx_delete_bucket_err_tx_closed
 - [ ] test_tx_delete_bucket_read_only
-- [x] test_tx_delete_bucket_not_found
-- [x] test_tx_for_each_no_error
-- [x] test_tx_for_each_with_error
-- [x] test_tx_on_commit
-- [x] test_tx_on_commit_rollback
 - [ ] test_tx_copy_file
 - [ ] test_tx_copy_file_error_meta
 - [ ] test_tx_copy_file_error_normal
-- [x] test_tx_rollback
-- [x] test_tx_release_range
 - [ ] example_tx_rollback
 - [ ] example_tx_copy_file
-- [x] test_tx_stats_get_and_inc_atomically
-- [x] test_tx_stats_sub
 - [ ] test_tx_truncate_before_write
-- [x] test_tx_stats_add
 
 ### src/nodes.rs
 - [ ] test_node_read_leaf_page
@@ -144,8 +100,6 @@ Currently not supported:
 - [ ] Rework page size determination functions
 - [ ] Log IO Errors
 - [ ] Save a special bump just for the RW?
-- [x] DbApi.close
-- [x] DbApi.batch
 - [ ] test_open
 - [ ] test_open_multiple_goroutines
 - [ ] test_open_err_path_required
@@ -178,10 +132,7 @@ Currently not supported:
 - [ ] test_db_update_panic
 - [ ] test_db_view_error
 - [ ] test_db_view_panic
-- [x] test_db_stats
 - [ ] test_db_consistency
-- [x] test_dbstats_sub
-- [x] test_db_batch
 - [ ] test_db_batch_panic
 - [ ] test_db_batch_full
 - [ ] test_db_batch_time
@@ -208,40 +159,11 @@ Currently not supported:
 - [ ] example_cursor_reverse
 
 ### src/bucket.rs
-- [x] BucketApi.stats
-- [x] BucketApi.set_sequence
-- [x] BucketApi.next_sequence
-- [x] test_bucket_delete_freelist_overflow
-- [x] test_bucket_delete_non_existing
-- [x] test_bucket_nested
-- [x] test_bucket_delete_bucket
 - [ ] test_bucket_delete_read_only
 - [ ] test_bucket_delete_closed
-- [x] test_bucket_delete_bucket_nested
-- [x] test_bucket_delete_bucket_nested2
-- [x] test_bucket_delete_bucket_large
-- [x] test_bucket_bucket_incompatible_value
-- [x] test_bucket_create_bucket_incompatible_value
-- [x] test_bucket_delete_bucket_incompatible_value
-- [x] test_bucket_sequence
-- [x] test_bucket_next_sequence
-- [x] test_bucket_next_sequence_persist
 - [ ] test_bucket_next_sequence_read_only
 - [ ] test_bucket_next_sequence_closed
-- [x] test_bucket_for_each
-- [x] test_bucket_for_each_bucket
-- [x] test_bucket_for_each_bucket_no_buckets
-- [x] test_bucket_for_each_short_circuit
 - [ ] test_bucket_for_each_closed
-- [x] test_bucket_put_empty_key
-- [x] test_bucket_put_key_too_large
-- [x] test_bucket_put_value_too_large
-- [x] test_bucket_stats
-- [x] test_bucket_stats_random_fill
-- [x] test_bucket_stats_small
-- [x] test_bucket_stats_empty_bucket
-- [x] test_bucket_stats_nested
-- [x] test_bucket_stats_large
 - [ ] test_bucket_put_single
 - [ ] test_bucket_put_multiple
 - [ ] test_bucket_delete_quick
