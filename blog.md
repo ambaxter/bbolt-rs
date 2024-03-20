@@ -4,11 +4,14 @@
 # Read  1.000046609s    (24ns/op)       (41666666 op/sec)
 ```
 
-With those two lines the last few months of labor bear fruit. I reimplemented the BBolt database in Rust. It is the culmination of my journey where I learned how to build a database, how to design database architecture in Rust, and how to use API design to remove footguns.
+With those two lines the last few months of labor bear fruit. 
+I reimplemented the BBolt database in Rust. 
+It is the culmination of my journey where I learned how to build a database, how to design database architecture in Rust, and how to use API design to remove footguns.
 
 # Impetus
 
-The project started last year when I wanted to learn how ETCD and the Raft algorithm worked which then lead me to learning how the BBolt database worked. Following in the software engineering tradition what started as curiosity turned into an all-consuming case of yak shaving. 
+The project started last year when I wanted to learn how ETCD and the Raft algorithm worked which then lead me to learning how the BBolt database worked. 
+Following in the software engineering tradition what started as curiosity turned into an all-consuming case of yak shaving. 
 
 # Goals and Standards
 * Built in stable Rust
@@ -18,7 +21,9 @@ The project started last year when I wanted to learn how ETCD and the Raft algor
 * Unsafe behavior validated by Miri
 
 # BBolt Under a Microscope
-Under the covers BBolt is a minimalistic B+ tree database designed to store Buckets. Buckets may store key/value pairs in bytes and sub-Buckets. Sub-buckets may be stored inline inside a parent bucket or on its own page.  
+Under the covers BBolt is a minimalistic B+ tree database designed to store Buckets. 
+Buckets may store key/value pairs in bytes and sub-Buckets. 
+Sub-buckets may be stored inline inside a parent bucket or on its own page.  
 
 The data types used to represent the BBolt database are relatively straightforward. 
 
