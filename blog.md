@@ -4,26 +4,30 @@
 # Read  1.000046609s    (24ns/op)       (41666666 op/sec)
 ```
 
-With those two lines the last few months of labor bear fruit. 
-I reimplemented the BBolt database in Rust. 
-It is the culmination of my journey where I learned how to build a database, how to design database architecture in Rust, and how to use API design to remove footguns.
+With those results, the last few months of labor bear fruit. 
+Over those months, I have reimplemented the Go-based [BBolt key-value database](https://github.com/etcd-io/bbolt) in Rust. 
+This marks the culmination of my journey where I learned how to:
+* Build a database
+* Design a Rust-centric database architecturet
+* How to use API design to remove ["footguns"](https://en.wiktionary.org/wiki/footgun)
 
 # Impetus
 
-The project started last year when I wanted to learn how ETCD and the Raft algorithm worked which then lead me to learning how the BBolt database worked. 
-Following in the software engineering tradition what started as curiosity turned into an all-consuming case of yak shaving. 
+The project started in late 2023 when I wanted to learn how ETCD and the Raft algorithm work.
+This also led me to learn how the BBolt database works. 
+I proceeded to follow in the software-engineering tradition of allowing curiosity to turn into an all-consuming case of [yak shaving](https://en.wiktionary.org/wiki/yak_shaving). 
 
-# Goals and Standards
-* Built in stable Rust
-* Library API as close to the original as possible
-* On-file representation exactly matches original code 
+# Project Standards
+* Use only stable Rust
+* Keep the library API as close to the original as possible
+* The on-file representation _must_ match original code exactly
 * Manage transaction memory without Rc
 * Unsafe behavior validated by Miri
 
 # BBolt Under a Microscope
-Under the covers BBolt is a minimalistic B+ tree database designed to store Buckets. 
-Buckets may store key/value pairs in bytes and sub-Buckets. 
-Sub-buckets may be stored inline inside a parent bucket or on its own page.  
+Under the covers, BBolt is a minimalistic B+ tree database designed to store buckets. 
+_Buckets_ store key-value pairs in bytes and sub-Buckets. 
+Sub-buckets live inline within a parent bucket or on their own page.
 
 The data types used to represent the BBolt database are relatively straightforward. 
 
@@ -227,7 +231,7 @@ func (n *leafPageElement) key() []byte {
 }
 ```
 
-# Removing Footguns With API Design
+# Hardening the API at the Design Level
 
 ```go
 // Commit writes all changes to disk and updates the meta page.
