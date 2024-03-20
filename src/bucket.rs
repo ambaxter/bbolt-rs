@@ -32,6 +32,27 @@ where
   Self: Sized,
 {
   /// Root returns the root of the bucket.
+  /// ```rust
+  /// use bbolt_rs::{BucketApi, BucketRwApi, DB, DbApi, DbRwAPI, TxApi, TxRwRefApi};
+  ///
+  /// fn main() -> bbolt_rs::Result<()> {
+  ///   let mut db = DB::new_mem()?;
+  ///
+  ///   db.update(|mut tx| {
+  ///     let mut b = tx.create_bucket_if_not_exists("test")?;
+  ///     b.put("key", "value")?;
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   let tx = db.begin()?;
+  ///   let b = tx.bucket("test").unwrap();
+  ///   let page_id = b.root();
+  ///   let page_info = tx.page(page_id)?.unwrap();
+  ///   println!("{:?}", page_info);
+  ///
+  ///   Ok(())
+  /// }
+  /// ```
   fn root(&self) -> PgId;
 
   /// Writable returns whether the bucket is writable.

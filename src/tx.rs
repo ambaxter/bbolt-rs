@@ -64,6 +64,31 @@ pub trait TxApi<'tx>: TxCheck<'tx> {
 
   /// Rollback closes the transaction and ignores all previous updates.
   fn rollback(self) -> crate::Result<()>;
+
+  /// Page returns page information for a given page number.
+  /// This is only safe for concurrent use when used by a writable transaction.
+  /// ```rust
+  /// use bbolt_rs::{BucketApi, BucketRwApi, DB, DbApi, DbRwAPI, TxApi, TxRwRefApi};
+  ///
+  /// fn main() -> bbolt_rs::Result<()> {
+  ///   let mut db = DB::new_mem()?;
+  ///
+  ///   db.update(|mut tx| {
+  ///     let mut b = tx.create_bucket_if_not_exists("test")?;
+  ///     b.put("key", "value")?;
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   let tx = db.begin()?;
+  ///   let b = tx.bucket("test").unwrap();
+  ///   let page_id = b.root();
+  ///   let page_info = tx.page(page_id)?.unwrap();
+  ///   println!("{:?}", page_info);
+  ///
+  ///   Ok(())
+  /// }
+  /// ```
+  fn page(&self, id: PgId) -> crate::Result<Option<PageInfo>>;
 }
 
 /// RW transaction API
@@ -472,6 +497,7 @@ pub(crate) trait TxIApi<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
     Ok(())
   }
 
+  /// See [TxApi::page]
   fn api_page(&self, id: PgId) -> crate::Result<Option<PageInfo>> {
     let r = self.split_r();
     if id >= r.meta.pgid() {
@@ -871,6 +897,10 @@ impl<'tx> TxApi<'tx> for TxImpl<'tx> {
   fn rollback(self) -> crate::Result<()> {
     self.tx.rollback()
   }
+
+  fn page(&self, id: PgId) -> crate::Result<Option<PageInfo>> {
+    self.tx.api_page(id)
+  }
 }
 
 pub struct TxRef<'tx> {
@@ -910,6 +940,10 @@ impl<'tx> TxApi<'tx> for TxRef<'tx> {
 
   fn rollback(self) -> crate::Result<()> {
     self.tx.rollback()
+  }
+
+  fn page(&self, id: PgId) -> crate::Result<Option<PageInfo>> {
+    self.tx.api_page(id)
   }
 }
 
@@ -1054,6 +1088,10 @@ impl<'tx> TxApi<'tx> for TxRwImpl<'tx> {
 
   fn rollback(self) -> crate::Result<()> {
     self.tx.rollback()
+  }
+
+  fn page(&self, id: PgId) -> crate::Result<Option<PageInfo>> {
+    self.tx.api_page(id)
   }
 }
 
@@ -1223,6 +1261,10 @@ impl<'tx> TxApi<'tx> for TxRwRef<'tx> {
 
   fn rollback(self) -> crate::Result<()> {
     self.tx.rollback()
+  }
+
+  fn page(&self, id: PgId) -> crate::Result<Option<PageInfo>> {
+    self.tx.api_page(id)
   }
 }
 
