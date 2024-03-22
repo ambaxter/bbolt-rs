@@ -128,29 +128,30 @@ fn main() -> bbolt_rs::Result<()> {
     .tempfile()?;
 
   let mut db = DBOptions::default().open(tmp_file.path())?;
-  let write_results = run_writes(&mut db, &bench)?;
-  let read_results = run_reads(&mut db, &bench)?;
-  eprintln!("# Write\t{}", write_results);
-  eprintln!("# Read\t{}", read_results);
+  let mut rng = StdRng::seed_from_u64(42);
+  let write_results = run_writes(&mut db, &bench, &mut rng)?;
+  let read_results = run_reads(&mut db, &bench, &mut rng)?;
+  println!("# Write\t{}", write_results);
+  println!("# Read\t{}", read_results);
   Ok(())
 }
 
-fn run_reads(db: &mut DB, options: &Bench) -> bbolt_rs::Result<BenchResults> {
+fn run_reads(db: &mut DB, options: &Bench, rng: &mut StdRng) -> bbolt_rs::Result<BenchResults> {
   let start = Instant::now();
   let ops = match (options.read_mode, options.write_mode) {
     (ReadMode::Seq, WriteMode::RndNest | WriteMode::SeqNest) => {
       run_reads_sequential_nested(db, options)?
     }
     (ReadMode::Rnd, WriteMode::RndNest | WriteMode::SeqNest) => {
-      let mut rng = StdRng::from_entropy();
       let mut keys = collect_nested_keys(db)?;
-      run_reads_random_nested(db, options, &mut rng, &mut keys)?
+      keys.shuffle(rng);
+      run_reads_random_nested(db, options, &keys)?
     }
     (ReadMode::Seq, _) => run_reads_sequential(db, options)?,
     (ReadMode::Rnd, _) => {
-      let mut rng = StdRng::from_entropy();
       let mut keys = collect_keys(db)?;
-      run_reads_random(db, options, &mut rng, &mut keys)?
+      keys.shuffle(rng);
+      run_reads_random(db, options, &keys)?
     }
   };
   Ok(BenchResults {
@@ -159,7 +160,7 @@ fn run_reads(db: &mut DB, options: &Bench) -> bbolt_rs::Result<BenchResults> {
   })
 }
 
-fn run_writes(db: &mut DB, options: &Bench) -> bbolt_rs::Result<BenchResults> {
+fn run_writes(db: &mut DB, options: &Bench, rng: &mut StdRng) -> bbolt_rs::Result<BenchResults> {
   let start = Instant::now();
   let ops = match options.write_mode {
     WriteMode::Seq => {
@@ -170,7 +171,6 @@ fn run_writes(db: &mut DB, options: &Bench) -> bbolt_rs::Result<BenchResults> {
       })?
     }
     WriteMode::Rnd => {
-      let mut rng = StdRng::from_entropy();
       run_write_with_sources(db, options, || rng.next_u32())?
     }
     WriteMode::SeqNest => {
@@ -181,7 +181,6 @@ fn run_writes(db: &mut DB, options: &Bench) -> bbolt_rs::Result<BenchResults> {
       })?
     }
     WriteMode::RndNest => {
-      let mut rng = StdRng::from_entropy();
       run_write_nested_with_sources(db, options, || rng.next_u32())?
     }
   };
@@ -290,9 +289,8 @@ fn run_reads_sequential(db: &DB, options: &Bench) -> bbolt_rs::Result<u32> {
 }
 
 fn run_reads_random(
-  db: &DB, options: &Bench, rng: &mut StdRng, keys: &mut [Box<[u8]>],
+  db: &DB, options: &Bench, keys: &[Box<[u8]>],
 ) -> bbolt_rs::Result<u32> {
-  keys.shuffle(rng);
   let results = RefCell::new(0u32);
   db.view(|tx| {
     let mut result = results.borrow_mut();
@@ -381,9 +379,8 @@ fn run_reads_sequential_nested(db: &DB, options: &Bench) -> bbolt_rs::Result<u32
 }
 
 fn run_reads_random_nested(
-  db: &DB, options: &Bench, rng: &mut StdRng, keys: &mut [(Rc<[u8]>, Box<[u8]>)],
+  db: &DB, options: &Bench, keys: &[(Rc<[u8]>, Box<[u8]>)],
 ) -> bbolt_rs::Result<u32> {
-  keys.shuffle(rng);
   let results = RefCell::new(0u32);
   db.view(|tx| {
     let mut result = results.borrow_mut();
