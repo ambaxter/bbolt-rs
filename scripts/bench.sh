@@ -2,17 +2,22 @@
 
 CMD=./target/release/bench
 
-for options in {seq,rnd,seq-nest,rnd-nest}" "{seq,rnd}" "{1000,10000,100000,1000000}
+for options in {seq,rnd,seq-nest,rnd-nest}" "{seq,rnd}" "{100000,1000000}
 do
   set -f; IFS=' '
   set -- $options
-  for i in {1,5,10,25,50,100}
+  for i in {5000,10000,25000,50000,100000,250000,500000}
   do
-    BATCH=$(($3*$i/100))
-    if [[ "$BATCH" -gt 100000 ]] ; then
+    BATCH=$i
+    if [[ "$BATCH" -gt "$3" ]] ; then
       continue
     fi
-    echo $CMD -w $1 -r $2 -c $3 -b $BATCH
-    $CMD -w $1 -r $2 -c $3 -b $BATCH
+    if [[ "$1" -eq "rnd" ]] && [[ "$BATCH" -gt "250000" ]] ; then
+      continue
+    fi
+    for j in {1,2,3,4,5}; do
+      RUN=$($CMD -w $1 -r $2 -c $3 -b $BATCH 2>&1 | awk '{sub(/\(/, "", $5);print $5}' | tr '\n' ',' | sed 's/,,//')
+      echo $1,$2,$3,$BATCH,$RUN | awk -F',' '{print "release," $1 "," $2 "," $3 "," $4 "," $5 "," $6}'
+    done
   done
 done
