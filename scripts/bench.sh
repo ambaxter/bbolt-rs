@@ -17,7 +17,7 @@ do
     fi
     for j in {1,2,3,4,5}; do
       RUN=$($CMD -w $1 -r $2 -c $3 -b $BATCH 2>&1 | awk '{sub(/\(/, "", $5);print $5}' | tr '\n' ',' | sed 's/,,//')
-      echo $1,$2,$3,$BATCH,$RUN | awk -F',' '{print "release," $1 "," $2 "," $3 "," $4 "," $5 "," $6}'
+      echo $1,$2,$3,$BATCH,$RUN | awk -F',' '{print "unsafe," $1 "," $2 "," $3 "," $4 "," $5 "," $6}'
     done
   done
 done
