@@ -137,21 +137,27 @@ fn main() -> bbolt_rs::Result<()> {
 }
 
 fn run_reads(db: &mut DB, options: &Bench, rng: &mut StdRng) -> bbolt_rs::Result<BenchResults> {
-  let start = Instant::now();
-  let ops = match (options.read_mode, options.write_mode) {
+  
+  let (ops, start) = match (options.read_mode, options.write_mode) {
     (ReadMode::Seq, WriteMode::RndNest | WriteMode::SeqNest) => {
-      run_reads_sequential_nested(db, options)?
+      let start = Instant::now();
+      (run_reads_sequential_nested(db, options)?, start)
     }
     (ReadMode::Rnd, WriteMode::RndNest | WriteMode::SeqNest) => {
       let mut keys = collect_nested_keys(db)?;
       keys.shuffle(rng);
-      run_reads_random_nested(db, options, &keys)?
+      let start = Instant::now();
+      (run_reads_random_nested(db, options, &keys)?, start)
     }
-    (ReadMode::Seq, _) => run_reads_sequential(db, options)?,
+    (ReadMode::Seq, _) => {
+      let start = Instant::now();
+      (run_reads_sequential(db, options)?, start)
+    },
     (ReadMode::Rnd, _) => {
       let mut keys = collect_keys(db)?;
       keys.shuffle(rng);
-      run_reads_random(db, options, &keys)?
+      let start = Instant::now();
+      (run_reads_random(db, options, &keys)?, start)
     }
   };
   Ok(BenchResults {
