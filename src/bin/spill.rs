@@ -9,7 +9,7 @@ struct Spill {
 
 fn main() -> Result<()> {
   let spill = Spill::parse();
-  let db = DB::open_ro(&spill.path)?;
+  let db = Bolt::open_ro(&spill.path)?;
   db.view(|tx| tx.for_each(|key, bucket| display_bucket(0, key, &bucket)))
 }
 

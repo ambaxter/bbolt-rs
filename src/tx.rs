@@ -68,10 +68,10 @@ pub trait TxApi<'tx>: TxCheck<'tx> {
   /// Page returns page information for a given page number.
   /// This is only safe for concurrent use when used by a writable transaction.
   /// ```rust
-  /// use bbolt_rs::{BucketApi, BucketRwApi, DB, DbApi, DbRwAPI, TxApi, TxRwRefApi};
+  /// use bbolt_rs::{BucketApi, BucketRwApi, Bolt, DbApi, DbRwAPI, TxApi, TxRwRefApi};
   ///
   /// fn main() -> bbolt_rs::Result<()> {
-  ///   let mut db = DB::new_mem()?;
+  ///   let mut db = Bolt::new_mem()?;
   ///
   ///   db.update(|mut tx| {
   ///     let mut b = tx.create_bucket_if_not_exists("test")?;
@@ -121,7 +121,7 @@ pub trait TxRwRefApi<'tx>: TxApi<'tx> {
 
 /// RW transaction API + Commit
 pub trait TxRwApi<'tx>: TxRwRefApi<'tx> {
-  /// Commit writes all changes to disk and updates the meta page.
+  /// commit writes all changes to disk and updates the meta page.
   /// Returns an error if a disk write error occurs
   fn commit(self) -> crate::Result<()>;
 }
@@ -1589,8 +1589,8 @@ mod test {
   use crate::tx::check::TxCheck;
   use crate::tx::{TxRwApi, TxStats};
   use crate::{
-    BucketApi, BucketRwApi, CursorApi, DBOptions, DbApi, DbRwAPI, Error, TxApi, TxImpl, TxRwRefApi,
-    DB,
+    BucketApi, BucketRwApi, CursorApi, BoltOptions, DbApi, DbRwAPI, Error, TxApi, TxImpl, TxRwRefApi,
+    Bolt,
   };
   use anyhow::anyhow;
   use std::time::Duration;
@@ -1607,7 +1607,7 @@ mod test {
     close_db.close();
 
     let file = db.tmp_file.as_ref().unwrap();
-    let ro = DB::open_ro(file.as_ref());
+    let ro = Bolt::open_ro(file.as_ref());
     let ro_db = ro.unwrap();
     let tx = ro_db.begin()?;
     let errors = tx.check();
@@ -1900,7 +1900,7 @@ mod test {
     // test, since we are testing with long running read transactions
     // and will deadlock if db.grow is triggered.
     let initial_mmap_size = DEFAULT_PAGE_SIZE.bytes() as u64 * 100;
-    let db_options = DBOptions::builder()
+    let db_options = BoltOptions::builder()
       .initial_mmap_size(initial_mmap_size)
       .build();
     let db = TestDb::with_options(db_options)?;

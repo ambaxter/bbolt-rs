@@ -53,17 +53,17 @@ where
   /// as it grows and it cannot do that while a read transaction is open.
   ///
   /// If a long running read transaction (for example, a snapshot transaction) is
-  /// needed, you might want to set DB.InitialMmapSize to a large enough value
+  /// needed, you might want to set BoltOptions.initial_map_size to a large enough value
   /// to avoid potential blocking of write transaction.
   ///
   /// IMPORTANT: You must drop the read-only transactions after you are finished or
   /// else the database will not reclaim old pages.
   ///
   /// ```rust
-  /// use bbolt_rs::{BucketApi, BucketRwApi, DB, DbApi, DbRwAPI, TxApi, TxRwRefApi};
+  /// use bbolt_rs::{BucketApi, BucketRwApi, Bolt, DbApi, DbRwAPI, TxApi, TxRwRefApi};
   ///
   /// fn main() -> bbolt_rs::Result<()> {
-  ///   let mut db = DB::new_mem()?;
+  ///   let mut db = Bolt::new_mem()?;
   ///
   ///   db.update(|mut tx| {
   ///     let mut b = tx.create_bucket_if_not_exists("test")?;
@@ -93,10 +93,10 @@ where
   /// Any error that is returned from the function is returned from the View() method.
   ///
   /// ```rust
-  /// use bbolt_rs::{BucketApi, BucketRwApi, DB, DbApi, DbRwAPI, TxApi, TxRwRefApi};
+  /// use bbolt_rs::{BucketApi, BucketRwApi, Bolt, DbApi, DbRwAPI, TxApi, TxRwRefApi};
   ///
   /// fn main() -> bbolt_rs::Result<()> {
-  ///   let mut db = DB::new_mem()?;
+  ///   let mut db = Bolt::new_mem()?;
   ///
   ///   db.update(|mut tx| {
   ///     let mut b = tx.create_bucket_if_not_exists("test")?;
@@ -126,10 +126,10 @@ where
   /// Once closed, other instances return [Error::DatabaseNotOpen]
   ///
   /// ```rust
-  /// use bbolt_rs::{BucketApi, BucketRwApi, DB, DbApi, DbRwAPI, TxApi, TxRwRefApi, Error};
+  /// use bbolt_rs::{BucketApi, BucketRwApi, Bolt, DbApi, DbRwAPI, TxApi, TxRwRefApi, Error};
   ///
   /// fn main() -> bbolt_rs::Result<()> {
-  ///   let mut db = DB::new_mem()?;
+  ///   let mut db = Bolt::new_mem()?;
   ///   let cloned = db.clone();
   ///   db.update(|mut tx| {
   ///     let mut b = tx.create_bucket_if_not_exists("test")?;
@@ -159,14 +159,14 @@ pub trait DbRwAPI: DbApi {
   /// as it grows and it cannot do that while a read transaction is open.
   ///
   /// If a long running read transaction (for example, a snapshot transaction) is
-  /// needed, you might want to set DB.InitialMmapSize to a large enough value
+  /// needed, you might want to set BoltOptions.initial_map_size to a large enough value
   /// to avoid potential blocking of write transaction.
   ///
   /// ```rust
-  /// use bbolt_rs::{BucketApi, BucketRwApi, DB, DbApi, DbRwAPI, TxApi, TxRwApi, TxRwRefApi};
+  /// use bbolt_rs::{BucketApi, BucketRwApi, Bolt, DbApi, DbRwAPI, TxApi, TxRwApi, TxRwRefApi};
   ///
   /// fn main() -> bbolt_rs::Result<()> {
-  ///   let mut db = DB::new_mem()?;
+  ///   let mut db = Bolt::new_mem()?;
   ///
   ///   let mut tx = db.begin_rw()?;
   ///   let mut b = tx.create_bucket_if_not_exists("test")?;
@@ -200,10 +200,10 @@ pub trait DbRwAPI: DbApi {
   /// returned from the Update() method.
   ///
   /// ```rust
-  /// use bbolt_rs::{BucketApi, BucketRwApi, DB, DbApi, DbRwAPI, TxApi, TxRwRefApi};
+  /// use bbolt_rs::{BucketApi, BucketRwApi, Bolt, DbApi, DbRwAPI, TxApi, TxRwRefApi};
   ///
   /// fn main() -> bbolt_rs::Result<()> {
-  ///   let mut db = DB::new_mem()?;
+  ///   let mut db = Bolt::new_mem()?;
   ///
   ///   db.update(|mut tx| {
   ///     let mut b = tx.create_bucket_if_not_exists("test")?;
@@ -225,10 +225,10 @@ pub trait DbRwAPI: DbApi {
   ) -> crate::Result<()>;
 
   /// ```rust
-  /// use bbolt_rs::{BucketApi, BucketRwApi, DB, DbApi, DbRwAPI, TxApi, TxRwRefApi};
+  /// use bbolt_rs::{BucketApi, BucketRwApi, Bolt, DbApi, DbRwAPI, TxApi, TxRwRefApi};
   ///
   /// fn main() -> bbolt_rs::Result<()> {
-  ///   let mut db = DB::new_mem()?;
+  ///   let mut db = Bolt::new_mem()?;
   ///
   ///   db.batch(|mut tx| {
   ///     let mut b = tx.create_bucket_if_not_exists("test")?;
@@ -254,10 +254,10 @@ pub trait DbRwAPI: DbApi {
   /// This is not necessary under normal operation, however, if you use NoSync
   /// then it allows you to force the database file to sync against the disk.
   /// ```rust
-  /// use bbolt_rs::{BucketApi, BucketRwApi, DB, DbApi, DbRwAPI, TxApi, TxRwRefApi};
+  /// use bbolt_rs::{BucketApi, BucketRwApi, Bolt, DbApi, DbRwAPI, TxApi, TxRwRefApi};
   ///
   /// fn main() -> bbolt_rs::Result<()> {
-  ///   let mut db = DB::new_mem()?;
+  ///   let mut db = Bolt::new_mem()?;
   ///
   ///   db.batch(|mut tx| {
   ///     let mut b = tx.create_bucket_if_not_exists("test")?;
@@ -1042,7 +1042,7 @@ pub struct DbShared {
   pub(crate) db_state: Arc<Mutex<DbState>>,
   page_pool: Mutex<Vec<AlignedBytes<alignment::Page>>>,
   pub(crate) backend: Box<dyn DBBackend>,
-  pub(crate) options: DBOptions,
+  pub(crate) options: BoltOptions,
 }
 
 // Safe because this is all protected by RwLock
@@ -1215,7 +1215,7 @@ impl<'tx> DbMutIApi<'tx> for DbShared {
 /// Database options
 #[derive(Clone, Default, Debug, PartialEq, Eq, TypedBuilder)]
 #[builder(doc)]
-pub struct DBOptions {
+pub struct BoltOptions {
   // TODO: How do we handle this?
   #[builder(
     default,
@@ -1262,13 +1262,13 @@ pub struct DBOptions {
     large enough to hold database mmap size."
     )
   )]
-  /// InitialMmapSize is the initial mmap size of the database
+  /// initial_mmap_size is the initial mmap size of the database
   /// in bytes. Read transactions won't block write transaction
-  /// if the InitialMmapSize is large enough to hold database mmap
+  /// if the initial_mmap_size is large enough to hold database mmap
   /// size. (See DB.Begin for more information)
   ///
   /// If <=0, the initial map size is 0.
-  /// If initialMmapSize is smaller than the previous database size,
+  /// If initial_mmap_size is smaller than the previous database size,
   /// it takes no effect.
   initial_mmap_size: Option<u64>,
   #[builder(default, setter(strip_option))]
@@ -1286,14 +1286,14 @@ pub struct DBOptions {
   mlock: bool,
   #[builder(
     default,
-    setter(strip_option, doc = "MaxBatchSize is the maximum size of a batch.")
+    setter(strip_option, doc = "max_batch_size is the maximum size of a batch.")
   )]
   max_batch_size: Option<u32>,
   #[builder(
     default,
     setter(
       strip_option,
-      doc = "MaxBatchDelay is the maximum delay before a batch starts."
+      doc = "max_batch_delay is the maximum delay before a batch starts."
     )
   )]
   max_batch_delay: Option<Duration>,
@@ -1303,7 +1303,7 @@ pub struct DBOptions {
   read_only: bool,
 }
 
-impl DBOptions {
+impl BoltOptions {
   #[inline]
   pub(crate) fn timeout(&self) -> Option<Duration> {
     if cfg!(use_timeout) {
@@ -1363,20 +1363,20 @@ impl DBOptions {
 
   /// Open creates and opens a database at the given path.
   /// If the file does not exist then it will be created automatically.
-  pub fn open<T: Into<PathBuf>>(self, path: T) -> crate::Result<DB> {
-    DB::open_path(path, self)
+  pub fn open<T: Into<PathBuf>>(self, path: T) -> crate::Result<Bolt> {
+    Bolt::open_path(path, self)
   }
 
   /// Opens a database as read-only at the given path.
   /// If the file does not exist then it will be created automatically.
   pub fn open_ro<T: Into<PathBuf>>(mut self, path: T) -> crate::Result<impl DbApi> {
     self.read_only = true;
-    DB::open_path(path, self)
+    Bolt::open_path(path, self)
   }
 
   /// Opens an in-memory database
-  pub fn new_mem(self) -> crate::Result<DB> {
-    DB::new_mem_with_options(self)
+  pub fn new_mem(self) -> crate::Result<Bolt> {
+    Bolt::new_mem_with_options(self)
   }
 }
 
@@ -1399,7 +1399,7 @@ impl ScheduledBatch {
     }
   }
 
-  fn run(&mut self, db: &mut DB) {
+  fn run(&mut self, db: &mut Bolt) {
     'retry: loop {
       if self.calls.is_empty() {
         break;
@@ -1450,7 +1450,7 @@ impl InnerBatcher {
     );
     let guard = timer.schedule_with_delay(parent.max_batch_delay, move || {
       let batcher = b.upgrade().unwrap();
-      let mut db = DB {
+      let mut db = Bolt {
         inner: batcher.db.upgrade().unwrap(),
       };
       batcher.take_batch().run(&mut db)
@@ -1487,7 +1487,7 @@ impl Batcher {
     self.inner.get_or_init(move || InnerBatcher::new(self))
   }
 
-  fn batch<F>(self: &Arc<Batcher>, mut db: DB, mut f: F) -> crate::Result<()>
+  fn batch<F>(self: &Arc<Batcher>, mut db: Bolt, mut f: F) -> crate::Result<()>
   where
     F: FnMut(&mut TxRwRef) -> crate::Result<()> + Send + Sync + Clone + 'static,
   {
@@ -1528,7 +1528,7 @@ impl Batcher {
       .timer
       .schedule_with_delay(self.max_batch_delay, move || {
         let batcher = b.upgrade().unwrap();
-        let mut db = DB {
+        let mut db = Bolt {
           inner: batcher.db.upgrade().unwrap(),
         };
         batcher.take_batch().run(&mut db)
@@ -1560,39 +1560,39 @@ pub struct InnerDB {
 unsafe impl Send for InnerDB {}
 unsafe impl Sync for InnerDB {}
 
-/// A BBolt Database
+/// A Bolt Database
 #[derive(Clone)]
-pub struct DB {
+pub struct Bolt {
   inner: Arc<InnerDB>,
 }
 
-impl DB {
+impl Bolt {
   /// Open creates and opens a database at the given path.
   /// If the file does not exist then it will be created automatically.
   pub fn open<T: Into<PathBuf>>(path: T) -> crate::Result<Self> {
-    DB::open_path(path, DBOptions::default())
+    Bolt::open_path(path, BoltOptions::default())
   }
 
   /// Opens a database as read-only at the given path.
   /// If the file does not exist then it will be created automatically.
   pub fn open_ro<T: Into<PathBuf>>(path: T) -> crate::Result<impl DbApi> {
-    DB::open_path(
+    Bolt::open_path(
       path,
-      DBOptions {
+      BoltOptions {
         read_only: true,
         ..Default::default()
       },
     )
   }
 
-  fn open_path<T: Into<PathBuf>>(path: T, db_options: DBOptions) -> crate::Result<Self> {
+  fn open_path<T: Into<PathBuf>>(path: T, db_options: BoltOptions) -> crate::Result<Self> {
     let path = path.into();
 
     if !path.exists() || path.metadata()?.len() == 0 {
       let page_size = db_options
         .page_size()
         .unwrap_or(DEFAULT_PAGE_SIZE.bytes() as usize);
-      DB::init(&path, page_size)?;
+      Bolt::init(&path, page_size)?;
     }
     let read_only = db_options.read_only();
     let mut file = fs::OpenOptions::new()
@@ -1680,19 +1680,19 @@ impl DB {
         max_batch_size: db_options.max_batch_size.unwrap_or(DEFAULT_MAX_BATCH_SIZE),
       }),
     });
-    Ok(DB { inner })
+    Ok(Bolt { inner })
   }
 
   /// Opens an in-memory database
   pub fn new_mem() -> crate::Result<Self> {
-    DB::new_mem_with_options(DBOptions::default())
+    Bolt::new_mem_with_options(BoltOptions::default())
   }
 
-  pub(crate) fn new_mem_with_options(db_options: DBOptions) -> crate::Result<Self> {
+  pub(crate) fn new_mem_with_options(db_options: BoltOptions) -> crate::Result<Self> {
     let page_size = db_options
       .page_size()
       .unwrap_or(DEFAULT_PAGE_SIZE.bytes() as usize);
-    let mut mmap = DB::init_page(page_size);
+    let mut mmap = Bolt::init_page(page_size);
     let file_size = mmap.len() as u64;
     let data_size = if let Some(initial_mmap_size) = db_options.initial_map_size() {
       file_size.max(initial_mmap_size)
@@ -1749,7 +1749,7 @@ impl DB {
       }),
     });
 
-    Ok(DB { inner })
+    Ok(Bolt { inner })
   }
 
   fn init_page(page_size: usize) -> AlignedBytes<alignment::Page> {
@@ -1782,7 +1782,7 @@ impl DB {
   }
 
   fn init(path: &Path, page_size: usize) -> io::Result<usize> {
-    let buffer = DB::init_page(page_size);
+    let buffer = Bolt::init_page(page_size);
     let mut db = fs::OpenOptions::new()
       .write(true)
       .create(true)
@@ -1811,7 +1811,7 @@ impl DB {
 
   pub(crate) fn begin_tx(&self) -> crate::Result<TxImpl> {
     let mut state = self.inner.db_state.lock();
-    DB::require_open(&state)?;
+    Bolt::require_open(&state)?;
     let lock = self.inner.db.read();
     let bump = self.inner.bump_pool.pull();
     let meta = state.current_meta;
@@ -1832,7 +1832,7 @@ impl DB {
     F: Fn() -> Option<RwLockReadGuard<'a, DbShared>>,
   {
     let mut state = self.inner.db_state.lock();
-    DB::require_open(&state)?;
+    Bolt::require_open(&state)?;
     if let Some(lock) = f() {
       let bump = self.inner.bump_pool.pull();
       let meta = state.current_meta;
@@ -1854,7 +1854,7 @@ impl DB {
     let lock = self.inner.db.upgradable_read();
     lock.free_pages();
     let mut state = self.inner.db_state.lock();
-    DB::require_open(&state)?;
+    Bolt::require_open(&state)?;
     let bump = self.inner.bump_pool.pull();
     let mut meta = state.current_meta;
     let txid = meta.txid() + 1;
@@ -1871,7 +1871,7 @@ impl DB {
     if let Some(lock) = f() {
       lock.free_pages();
       let mut state = self.inner.db_state.lock();
-      DB::require_open(&state)?;
+      Bolt::require_open(&state)?;
       let bump = self.inner.bump_pool.pull();
       let mut meta = state.current_meta;
       let txid = meta.txid() + 1;
@@ -1884,22 +1884,7 @@ impl DB {
   }
 }
 
-impl DbApi for DB {
-  fn close(self) {
-    let mut lock = self.inner.db.write();
-    let mut state = self.inner.db_state.lock();
-    if DB::require_open(&state).is_ok() {
-      state.is_open = false;
-      let mut closed_db: Box<dyn DBBackend> = Box::new(ClosedBackend {});
-      mem::swap(&mut closed_db, &mut lock.backend);
-      lock.page_pool.lock().clear();
-      self.inner.bump_pool.clear();
-      if let Some(inner_batcher) = self.inner.batcher.inner.get() {
-        inner_batcher.batch_pool.clear();
-      }
-    }
-  }
-
+impl DbApi for Bolt {
   fn begin(&self) -> crate::Result<impl TxApi> {
     self.begin_tx()
   }
@@ -1932,9 +1917,24 @@ impl DbApi for DB {
   fn stats(&self) -> Arc<DbStats> {
     self.inner.stats.clone()
   }
+
+  fn close(self) {
+    let mut lock = self.inner.db.write();
+    let mut state = self.inner.db_state.lock();
+    if Bolt::require_open(&state).is_ok() {
+      state.is_open = false;
+      let mut closed_db: Box<dyn DBBackend> = Box::new(ClosedBackend {});
+      mem::swap(&mut closed_db, &mut lock.backend);
+      lock.page_pool.lock().clear();
+      self.inner.bump_pool.clear();
+      if let Some(inner_batcher) = self.inner.batcher.inner.get() {
+        inner_batcher.batch_pool.clear();
+      }
+    }
+  }
 }
 
-impl DbRwAPI for DB {
+impl DbRwAPI for Bolt {
   fn begin_rw(&mut self) -> crate::Result<impl TxRwApi> {
     self.begin_rw_tx()
   }

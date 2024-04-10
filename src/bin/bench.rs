@@ -1,6 +1,6 @@
 use anyhow::anyhow;
 use bbolt_rs::{
-  BucketApi, BucketRwApi, CursorApi, DBOptions, DbApi, DbRwAPI, Error, TxApi, TxRwRefApi, DB,
+  BucketApi, BucketRwApi, CursorApi, BoltOptions, DbApi, DbRwAPI, Error, TxApi, TxRwRefApi, Bolt,
 };
 use byteorder::{BigEndian, ByteOrder};
 use clap::{Parser, ValueEnum};
@@ -21,9 +21,9 @@ struct Bench {
   #[arg(short, long, default_value_t = ReadMode::Seq)]
   read_mode: ReadMode,
   #[arg(short, long, default_value_t = 1000)]
-  count: u32,
+  count: u64,
   #[arg(short, long, default_value_t = 0)]
-  batch_size: u32,
+  batch_size: u64,
   #[arg(short, long, default_value_t = 8)]
   key_size: usize,
   #[arg(short, long, default_value_t = 32)]
@@ -76,7 +76,7 @@ impl Display for ReadMode {
 
 #[derive(Debug, Copy, Clone, Default)]
 struct BenchResults {
-  ops: u32,
+  ops: u64,
   duration: Duration,
 }
 
@@ -110,6 +110,11 @@ impl Display for BenchResults {
   }
 }
 
+struct NestedKey {
+  bucket: Rc<[u8]>,
+  key: Box<[u8]>,
+}
+
 static BENCH_BUCKET_NAME: &str = "bench";
 
 fn main() -> bbolt_rs::Result<()> {
@@ -127,85 +132,89 @@ fn main() -> bbolt_rs::Result<()> {
     .suffix(".db")
     .tempfile()?;
 
-  let mut db = DBOptions::default().open(tmp_file.path())?;
-  let mut rng = StdRng::seed_from_u64(42);
-  let write_results = run_writes(&mut db, &bench, &mut rng)?;
-  let read_results = run_reads(&mut db, &bench, &mut rng)?;
+  let mut db = BoltOptions::default().open(tmp_file.path())?;
+  let mut rng = StdRng::from_entropy();
+  let mut write_results = BenchResults::default();
+  let mut n_keys = run_writes(&mut db, &bench, &mut write_results, &mut rng)?;
+  if let Some(keys) = n_keys.as_mut() {
+    keys.shuffle(&mut rng);
+  }
+
+  let mut read_results = BenchResults::default();
+  run_reads(&mut db, &bench, &mut read_results, &n_keys)?;
   println!("# Write\t{}", write_results);
   println!("# Read\t{}", read_results);
   Ok(())
 }
 
-fn run_reads(db: &mut DB, options: &Bench, rng: &mut StdRng) -> bbolt_rs::Result<BenchResults> {
-  
-  let (ops, start) = match (options.read_mode, options.write_mode) {
+fn run_reads(
+  db: &mut Bolt, options: &Bench, read_results: &mut BenchResults, n_keys: &Option<Vec<NestedKey>>,
+) -> bbolt_rs::Result<()> {
+  let start = Instant::now();
+  let ops = match (options.read_mode, options.write_mode) {
     (ReadMode::Seq, WriteMode::RndNest | WriteMode::SeqNest) => {
-      let start = Instant::now();
-      (run_reads_sequential_nested(db, options)?, start)
+      run_reads_sequential_nested(db, options)?
     }
     (ReadMode::Rnd, WriteMode::RndNest | WriteMode::SeqNest) => {
-      let mut keys = collect_nested_keys(db)?;
-      keys.shuffle(rng);
-      let start = Instant::now();
-      (run_reads_random_nested(db, options, &keys)?, start)
+      let keys = n_keys.as_ref().unwrap();
+      run_reads_random_nested(db, options, keys)?
     }
-    (ReadMode::Seq, _) => {
-      let start = Instant::now();
-      (run_reads_sequential(db, options)?, start)
-    },
+    (ReadMode::Seq, _) => run_reads_sequential(db, options)?,
     (ReadMode::Rnd, _) => {
-      let mut keys = collect_keys(db)?;
-      keys.shuffle(rng);
-      let start = Instant::now();
-      (run_reads_random(db, options, &keys)?, start)
+      let keys = n_keys.as_ref().unwrap();
+      run_reads_random(db, options, keys)?
     }
   };
-  Ok(BenchResults {
-    ops,
-    duration: start.elapsed(),
-  })
+
+  read_results.ops = ops;
+  read_results.duration = start.elapsed();
+  Ok(())
 }
 
-fn run_writes(db: &mut DB, options: &Bench, rng: &mut StdRng) -> bbolt_rs::Result<BenchResults> {
+fn run_writes(
+  db: &mut Bolt, options: &Bench, write_results: &mut BenchResults, rng: &mut StdRng,
+) -> bbolt_rs::Result<Option<Vec<NestedKey>>> {
   let start = Instant::now();
-  let ops = match options.write_mode {
+  let n_keys = match options.write_mode {
     WriteMode::Seq => {
       let mut i = 0u32;
-      run_write_with_sources(db, options, || {
+      run_write_with_sources(db, options, move || {
         i += 1;
         i
       })?
     }
-    WriteMode::Rnd => {
-      run_write_with_sources(db, options, || rng.next_u32())?
-    }
+    WriteMode::Rnd => run_write_with_sources(db, options, || rng.next_u32())?,
     WriteMode::SeqNest => {
       let mut i = 0u32;
-      run_write_nested_with_sources(db, options, || {
+      run_write_nested_with_sources(db, options, move || {
         i += 1;
         i
       })?
     }
-    WriteMode::RndNest => {
-      run_write_nested_with_sources(db, options, || rng.next_u32())?
-    }
+    WriteMode::RndNest => run_write_nested_with_sources(db, options, || rng.next_u32())?,
   };
 
-  Ok(BenchResults {
-    ops,
-    duration: start.elapsed(),
-  })
+  write_results.ops = options.count;
+  write_results.duration = start.elapsed();
+  Ok(n_keys)
 }
 
 fn run_write_with_sources<F>(
-  db: &mut DB, options: &Bench, mut key_source: F,
-) -> bbolt_rs::Result<u32>
+  db: &mut Bolt, options: &Bench, mut key_source: F,
+) -> bbolt_rs::Result<Option<Vec<NestedKey>>>
 where
   F: FnMut() -> u32,
 {
+  let mut n_keys = if options.read_mode == ReadMode::Rnd {
+    Some(Vec::with_capacity(options.count as usize))
+  } else {
+    None
+  };
+
   for _ in (0..options.count).step_by(options.batch_size as usize) {
     db.update(|mut tx| {
       let mut b = tx.create_bucket_if_not_exists(BENCH_BUCKET_NAME)?;
+      let bucket = Rc::new([]);
       b.set_fill_percent(options.fill_percent);
       for _ in 0..options.batch_size {
         let mut key = vec![0u8; options.key_size];
@@ -213,24 +222,37 @@ where
         let k = key_source();
         BigEndian::write_u32(&mut key, k);
         b.put(&key, &value)?;
+        if let Some(keys) = n_keys.as_mut() {
+          keys.push(NestedKey {
+            bucket: bucket.clone(),
+            key: key.into(),
+          })
+        }
       }
       Ok(())
     })?
   }
-  Ok(options.count)
+  Ok(n_keys)
 }
 
 fn run_write_nested_with_sources<F>(
-  db: &mut DB, options: &Bench, mut key_source: F,
-) -> bbolt_rs::Result<u32>
+  db: &mut Bolt, options: &Bench, mut key_source: F,
+) -> bbolt_rs::Result<Option<Vec<NestedKey>>>
 where
   F: FnMut() -> u32,
 {
+  let mut n_keys = if options.read_mode == ReadMode::Rnd {
+    Some(Vec::with_capacity(options.count as usize))
+  } else {
+    None
+  };
+
   for i in (0..options.count).step_by(options.batch_size as usize) {
     db.update(|mut tx| {
       let mut top = tx.create_bucket_if_not_exists(BENCH_BUCKET_NAME)?;
       top.set_fill_percent(options.fill_percent);
       let name = key_source().to_be_bytes();
+      let bucket: Rc<[u8]> = Rc::from(name);
       let mut b = top.create_bucket_if_not_exists(&name)?;
       b.set_fill_percent(options.fill_percent);
       for j in 0..options.batch_size {
@@ -239,30 +261,21 @@ where
         let k = key_source();
         BigEndian::write_u32(&mut key, k);
         b.put(&key, &value)?;
+        if let Some(keys) = n_keys.as_mut() {
+          keys.push(NestedKey {
+            bucket: bucket.clone(),
+            key: key.into(),
+          })
+        }
       }
       Ok(())
     })?
   }
-  Ok(options.count)
+  Ok(n_keys)
 }
 
-fn collect_keys(db: &DB) -> bbolt_rs::Result<Vec<Box<[u8]>>> {
-  let results = RefCell::new(Vec::new());
-  db.view(|tx| {
-    let mut r = results.borrow_mut();
-    let mut c = tx.bucket(BENCH_BUCKET_NAME).unwrap().cursor();
-    let mut pos = c.first();
-    while let Some((k, _)) = pos {
-      r.push(k.into());
-      pos = c.next();
-    }
-    Ok(())
-  })?;
-  Ok(results.take())
-}
-
-fn run_reads_sequential(db: &DB, options: &Bench) -> bbolt_rs::Result<u32> {
-  let results = RefCell::new(0u32);
+fn run_reads_sequential(db: &Bolt, options: &Bench) -> bbolt_rs::Result<u64> {
+  let results = RefCell::new(0u64);
   db.view(|tx| {
     let mut result = results.borrow_mut();
     let t = Instant::now();
@@ -294,18 +307,16 @@ fn run_reads_sequential(db: &DB, options: &Bench) -> bbolt_rs::Result<u32> {
   Ok(results.take())
 }
 
-fn run_reads_random(
-  db: &DB, options: &Bench, keys: &[Box<[u8]>],
-) -> bbolt_rs::Result<u32> {
-  let results = RefCell::new(0u32);
+fn run_reads_random(db: &Bolt, options: &Bench, keys: &[NestedKey]) -> bbolt_rs::Result<u64> {
+  let results = RefCell::new(064);
   db.view(|tx| {
     let mut result = results.borrow_mut();
     let t = Instant::now();
     loop {
       let mut count = 0;
       let b = tx.bucket(BENCH_BUCKET_NAME).unwrap();
-      for k in keys.iter() {
-        let v = b.get(k);
+      for entry in keys.iter() {
+        let v = b.get(&entry.key);
         v.ok_or_else(|| anyhow!("invalid value"))?;
         count += 1;
       }
@@ -327,34 +338,14 @@ fn run_reads_random(
   Ok(results.take())
 }
 
-fn collect_nested_keys(db: &DB) -> bbolt_rs::Result<Vec<(Rc<[u8]>, Box<[u8]>)>> {
-  let results = RefCell::new(Vec::new());
-  db.view(|tx| {
-    let mut r = results.borrow_mut();
-    let top = tx.bucket(BENCH_BUCKET_NAME).unwrap();
-    top.for_each_bucket(|name| {
-      let bk: Rc<[u8]> = name.into();
-      let mut c = top.bucket(name).unwrap().cursor();
-      let mut pos = c.first();
-      while let Some((k, _)) = pos {
-        pos = c.next();
-        r.push((bk.clone(), k.into()));
-      }
-      Ok(())
-    })?;
-    Ok(())
-  })?;
-  Ok(results.take())
-}
-
-fn run_reads_sequential_nested(db: &DB, options: &Bench) -> bbolt_rs::Result<u32> {
-  let results = RefCell::new(0u32);
+fn run_reads_sequential_nested(db: &Bolt, options: &Bench) -> bbolt_rs::Result<u64> {
+  let results = RefCell::new(0u64);
   db.view(|tx| {
     let mut result = results.borrow_mut();
     let t = Instant::now();
     loop {
       let top = tx.bucket(BENCH_BUCKET_NAME).unwrap();
-      let mut count = 0;
+      let mut count = 0u64;
       top.for_each_bucket(|name| {
         let mut c = top.bucket(name).unwrap().cursor();
         let mut pos = c.first();
@@ -384,19 +375,17 @@ fn run_reads_sequential_nested(db: &DB, options: &Bench) -> bbolt_rs::Result<u32
   Ok(results.take())
 }
 
-fn run_reads_random_nested(
-  db: &DB, options: &Bench, keys: &[(Rc<[u8]>, Box<[u8]>)],
-) -> bbolt_rs::Result<u32> {
-  let results = RefCell::new(0u32);
+fn run_reads_random_nested(db: &Bolt, options: &Bench, keys: &[NestedKey]) -> bbolt_rs::Result<u64> {
+  let results = RefCell::new(0u64);
   db.view(|tx| {
     let mut result = results.borrow_mut();
     let t = Instant::now();
     loop {
       let top = tx.bucket(BENCH_BUCKET_NAME).unwrap();
-      let mut count = 0;
-      for (bucket_name, key) in keys.iter() {
-        let b = top.bucket(bucket_name).unwrap();
-        let v = b.get(key);
+      let mut count = 0u64;
+      for entry in keys.iter() {
+        let b = top.bucket(&entry.bucket).unwrap();
+        let v = b.get(&entry.key);
         v.ok_or_else(|| anyhow!("invalid value"))?;
         count += 1;
       }

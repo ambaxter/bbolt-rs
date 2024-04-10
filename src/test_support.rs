@@ -1,7 +1,7 @@
 use crate::common::page::CoerciblePage;
 use crate::common::self_owned::SelfOwned;
 use crate::tx::check::{TxCheck, UnsealRwTx, UnsealTx};
-use crate::{DBOptions, DbApi, TxApi, TxRwRefApi, DB};
+use crate::{BoltOptions, DbApi, TxApi, TxRwRefApi, Bolt};
 use aligners::{alignment, AlignedBytes};
 use std::ops::{Deref, DerefMut};
 use tempfile::{Builder, NamedTempFile};
@@ -17,11 +17,11 @@ pub(crate) fn mapped_page<T: CoerciblePage + Sized>(
 
 pub(crate) struct TestDb {
   pub(crate) tmp_file: Option<NamedTempFile>,
-  pub(crate) db: DB,
+  pub(crate) db: Bolt,
 }
 
 impl Deref for TestDb {
-  type Target = DB;
+  type Target = Bolt;
 
   fn deref(&self) -> &Self::Target {
     &self.db
@@ -37,13 +37,13 @@ impl DerefMut for TestDb {
 impl TestDb {
   pub(crate) fn new() -> crate::Result<TestDb> {
     if cfg!(miri) {
-      Self::new_mem(DBOptions::default())
+      Self::new_mem(BoltOptions::default())
     } else {
-      Self::new_tmp(DBOptions::default())
+      Self::new_tmp(BoltOptions::default())
     }
   }
 
-  pub(crate) fn with_options(options: DBOptions) -> crate::Result<TestDb> {
+  pub(crate) fn with_options(options: BoltOptions) -> crate::Result<TestDb> {
     if cfg!(miri) {
       Self::new_mem(options)
     } else {
@@ -51,7 +51,7 @@ impl TestDb {
     }
   }
 
-  pub(crate) fn new_tmp(options: DBOptions) -> crate::Result<TestDb> {
+  pub(crate) fn new_tmp(options: BoltOptions) -> crate::Result<TestDb> {
     let tmp_file = Builder::new()
       .prefix("bbolt-rs-")
       .suffix(".db")
@@ -64,7 +64,7 @@ impl TestDb {
     })
   }
 
-  pub(crate) fn new_mem(options: DBOptions) -> crate::Result<TestDb> {
+  pub(crate) fn new_mem(options: BoltOptions) -> crate::Result<TestDb> {
     let db = options.new_mem()?;
     Ok(TestDb { tmp_file: None, db })
   }
@@ -81,7 +81,7 @@ impl TestDb {
     }
   }
 
-  pub(crate) fn clone_db(&self) -> DB {
+  pub(crate) fn clone_db(&self) -> Bolt {
     self.db.clone()
   }
 

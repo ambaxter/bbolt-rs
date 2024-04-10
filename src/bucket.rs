@@ -33,10 +33,10 @@ where
 {
   /// Root returns the root of the bucket.
   /// ```rust
-  /// use bbolt_rs::{BucketApi, BucketRwApi, DB, DbApi, DbRwAPI, TxApi, TxRwRefApi};
+  /// use bbolt_rs::{BucketApi, BucketRwApi, Bolt, DbApi, DbRwAPI, TxApi, TxRwRefApi};
   ///
   /// fn main() -> bbolt_rs::Result<()> {
-  ///   let mut db = DB::new_mem()?;
+  ///   let mut db = Bolt::new_mem()?;
   ///
   ///   db.update(|mut tx| {
   ///     let mut b = tx.create_bucket_if_not_exists("test")?;
