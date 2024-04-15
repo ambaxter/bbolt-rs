@@ -67,7 +67,7 @@ where
 
   /// Get retrieves the value for a key in the bucket.
   /// Returns None if the key does not exist or if the key is a nested bucket.
-  fn get<T: AsRef<[u8]>>(&self, key: T) -> Option<&'tx [u8]>;
+  fn get<T: AsRef<[u8]>>(&self, key: T) -> Option<&[u8]>;
 
   /// Sequence returns the current integer for the bucket without incrementing it.
   fn sequence(&self) -> u64;
@@ -179,7 +179,7 @@ impl<'tx> BucketApi<'tx> for BucketImpl<'tx> {
     }
   }
 
-  fn get<T: AsRef<[u8]>>(&self, key: T) -> Option<&'tx [u8]> {
+  fn get<T: AsRef<[u8]>>(&self, key: T) -> Option<&[u8]> {
     match self {
       BucketImpl::R(r) => r.api_get(key.as_ref()),
       BucketImpl::RW(rw) => rw.api_get(key.as_ref()),
@@ -244,7 +244,7 @@ impl<'tx> BucketApi<'tx> for BucketRwImpl<'tx> {
     self.b.api_bucket(name.as_ref()).map(BucketImpl::from)
   }
 
-  fn get<T: AsRef<[u8]>>(&self, key: T) -> Option<&'tx [u8]> {
+  fn get<T: AsRef<[u8]>>(&self, key: T) -> Option<&[u8]> {
     self.b.api_get(key.as_ref())
   }
 

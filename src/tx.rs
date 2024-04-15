@@ -1931,7 +1931,8 @@ mod test {
     let open_read_tx = || db.begin_tx().unwrap();
 
     let check_with_read_tx = |tx: &TxImpl, key, want_value| {
-      let value = tx.bucket(bucket).unwrap().get(key);
+      let bucket = tx.bucket(bucket).unwrap();
+      let value = bucket.get(key);
       assert_eq!(want_value, value);
     };
 
