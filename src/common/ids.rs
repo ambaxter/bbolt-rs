@@ -80,7 +80,17 @@ id!(
   PgId
 );
 
+/// Create a PgId
+pub(crate) const fn pd(id: u64) -> PgId {
+  PgId(id)
+}
+
 id!(
   /// The Transaction ID. Monotonic and incremented every commit
   TxId
 );
+
+/// Create a TxId
+pub(crate) const fn td(id: u64) -> TxId {
+  TxId(id)
+}

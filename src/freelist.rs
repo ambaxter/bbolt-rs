@@ -1,9 +1,3 @@
-use crate::common::page::PageHeader;
-use crate::common::page::{CoerciblePage, FREE_LIST_PAGE_FLAG, PAGE_HEADER_SIZE};
-use crate::common::utility::is_sorted;
-use crate::common::{PgId, TxId};
-use bytemuck::Contiguous;
-use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Formatter;
 use std::iter::{repeat, zip};
@@ -11,6 +5,15 @@ use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::slice::{from_raw_parts, from_raw_parts_mut};
 use std::{fmt, mem};
+
+use bytemuck::Contiguous;
+use itertools::Itertools;
+
+use crate::common::ids::td;
+use crate::common::page::PageHeader;
+use crate::common::page::{CoerciblePage, FREE_LIST_PAGE_FLAG, PAGE_HEADER_SIZE};
+use crate::common::utility::is_sorted;
+use crate::common::{PgId, TxId};
 
 pub struct MappedFreeListPage {
   bytes: *mut u8,
@@ -413,7 +416,7 @@ impl Freelist {
       for (i, &pgid) in txp.ids.iter().enumerate() {
         self.cache.remove(&pgid);
         if let Some(&tx) = txp.alloc_tx.get(i) {
-          if tx == TxId(0) {
+          if tx == td(0) {
             continue;
           }
           if tx != txid {
@@ -504,11 +507,13 @@ impl Freelist {
       self.add_span(start, size);
     }
   }
-  
+
   pub(crate) fn reload(&mut self, page: &MappedFreeListPage) {
     self.read(page);
-    let pcache: HashSet<PgId> = self.pending.iter()
-      .flat_map(|(tx,pending)| pending.ids.iter().copied())
+    let pcache: HashSet<PgId> = self
+      .pending
+      .iter()
+      .flat_map(|(tx, pending)| pending.ids.iter().copied())
       .collect();
 
     let mut a = Vec::new();
@@ -533,25 +538,20 @@ impl Freelist {
 
 #[cfg(test)]
 mod tests {
+  use std::collections::HashSet;
+  use std::default::Default;
+
+  use itertools::Itertools;
+
+  use crate::common::ids::{pd, td};
   use crate::common::page::PageHeader;
   use crate::common::{PgId, TxId};
   use crate::freelist::{Freelist, MappedFreeListPage, TxPending};
   use crate::test_support::mapped_page;
-  use itertools::Itertools;
-  use std::collections::HashSet;
-  use std::default::Default;
-
-  const fn pg(id: u64) -> PgId {
-    PgId(id)
-  }
-
-  const fn tx(id: u64) -> TxId {
-    TxId(id)
-  }
 
   fn hashset(ids: &[u64]) -> HashSet<PgId> {
     let mut set = HashSet::new();
-    set.extend(ids.iter().map(|i| pg(*i)));
+    set.extend(ids.iter().map(|i| pd(*i)));
     set
   }
 
@@ -560,11 +560,11 @@ mod tests {
   fn freelist_free() {
     let mut f = Freelist::new();
     let p = PageHeader {
-      id: pg(12),
+      id: pd(12),
       ..Default::default()
     };
-    f.free(tx(100), &p);
-    assert_eq!(&[12], &f.pending.get(&tx(100)).unwrap().ids.as_slice())
+    f.free(td(100), &p);
+    assert_eq!(&[12], &f.pending.get(&td(100)).unwrap().ids.as_slice())
   }
 
   #[test]
@@ -572,14 +572,14 @@ mod tests {
   fn freelist_free_overflow() {
     let mut f = Freelist::new();
     let p = PageHeader {
-      id: pg(12),
+      id: pd(12),
       overflow: 3,
       ..Default::default()
     };
-    f.free(tx(100), &p);
+    f.free(td(100), &p);
     assert_eq!(
       &[12, 13, 14, 15],
-      &f.pending.get(&tx(100)).unwrap().ids.as_slice()
+      &f.pending.get(&td(100)).unwrap().ids.as_slice()
     )
   }
 
@@ -588,31 +588,31 @@ mod tests {
   fn freelist_release() {
     let mut f = Freelist::new();
     f.free(
-      tx(100),
+      td(100),
       &PageHeader {
-        id: pg(12),
+        id: pd(12),
         overflow: 1,
         ..Default::default()
       },
     );
     f.free(
-      tx(100),
+      td(100),
       &PageHeader {
-        id: pg(9),
+        id: pd(9),
         ..Default::default()
       },
     );
     f.free(
-      tx(102),
+      td(102),
       &PageHeader {
-        id: pg(39),
+        id: pd(39),
         ..Default::default()
       },
     );
-    f.release(tx(100));
-    f.release(tx(101));
+    f.release(td(100));
+    f.release(td(101));
     assert_eq!(&[9, 12, 13], f.free_page_ids().as_slice());
-    f.release(tx(102));
+    f.release(td(102));
     assert_eq!(&[9, 12, 13, 39], f.free_page_ids().as_slice());
   }
 
@@ -665,13 +665,13 @@ mod tests {
         title: "Single pending in range",
         pages_in: vec![TPage::new(3, 1, 100, 200)],
         release_ranges: vec![TRange::new(1, 300)],
-        want_free: vec![pg(3)],
+        want_free: vec![pd(3)],
       },
       ReleaseRangeTest {
         title: "Single pending with minimum end range",
         pages_in: vec![TPage::new(3, 1, 100, 200)],
         release_ranges: vec![TRange::new(1, 200)],
-        want_free: vec![pg(3)],
+        want_free: vec![pd(3)],
       },
       ReleaseRangeTest {
         title: "Single pending outsize minimum end range",
@@ -683,13 +683,13 @@ mod tests {
         title: "Single pending with minimum begin range",
         pages_in: vec![TPage::new(3, 1, 100, 200)],
         release_ranges: vec![TRange::new(100, 200)],
-        want_free: vec![pg(3)],
+        want_free: vec![pd(3)],
       },
       ReleaseRangeTest {
         title: "Single pending in minimum range",
         pages_in: vec![TPage::new(3, 1, 199, 200)],
         release_ranges: vec![TRange::new(199, 200)],
-        want_free: vec![pg(3)],
+        want_free: vec![pd(3)],
       },
       ReleaseRangeTest {
         title: "Single pending and read transaction at 199",
@@ -728,7 +728,7 @@ mod tests {
           TPage::new(9, 2, 175, 200),
         ],
         release_ranges: vec![TRange::new(50, 149), TRange::new(151, 300)],
-        want_free: vec![pg(4), pg(9), pg(10)],
+        want_free: vec![pd(4), pd(9), pd(10)],
       },
     ];
 
@@ -738,7 +738,7 @@ mod tests {
         .pages_in
         .iter()
         .flat_map(|p| u64::from(p.id)..(u64::from(p.id) + p.n))
-        .map(pg)
+        .map(pd)
         .collect();
       f.read_ids(&ids);
 
@@ -770,20 +770,20 @@ mod tests {
       &[3, 4, 5, 6, 7, 9, 12, 13, 18]
         .iter()
         .cloned()
-        .map(pg)
+        .map(pd)
         .collect_vec(),
     );
 
-    f.allocate(tx(1), 3);
+    f.allocate(td(1), 3);
     assert_eq!(6, f.free_count());
 
-    f.allocate(tx(1), 2);
+    f.allocate(td(1), 2);
     assert_eq!(4, f.free_count());
 
-    f.allocate(tx(1), 1);
+    f.allocate(td(1), 1);
     assert_eq!(3, f.free_count());
 
-    f.allocate(tx(1), 0);
+    f.allocate(td(1), 0);
     assert_eq!(3, f.free_count());
   }
 
@@ -793,7 +793,7 @@ mod tests {
     mapped_page.set_free_list();
     mapped_page
       .page_ids_mut(2)
-      .copy_from_slice(&[pg(23), pg(50)]);
+      .copy_from_slice(&[pd(23), pd(50)]);
     let mut f = Freelist::new();
     f.read(&mapped_page);
     assert_eq!(&[23, 50], f.free_page_ids().as_slice());
@@ -803,17 +803,17 @@ mod tests {
   fn freelist_write() {
     let mut mapped_page = mapped_page::<MappedFreeListPage>(4096);
     let mut f = Freelist::new();
-    f.read_ids(&[pg(12), pg(39)]);
+    f.read_ids(&[pd(12), pd(39)]);
     f.pending
-      .entry(tx(100))
+      .entry(td(100))
       .or_insert_with(TxPending::new)
       .ids
-      .extend_from_slice(&[pg(28), pg(11)]);
+      .extend_from_slice(&[pd(28), pd(11)]);
     f.pending
-      .entry(tx(101))
+      .entry(td(101))
       .or_insert_with(TxPending::new)
       .ids
-      .extend_from_slice(&[pg(3)]);
+      .extend_from_slice(&[pd(3)]);
 
     f.write(&mut mapped_page);
 
@@ -828,7 +828,7 @@ mod tests {
     let exp = [3, 4, 5, 6, 7, 9, 12, 13, 18]
       .iter()
       .cloned()
-      .map(pg)
+      .map(pd)
       .collect_vec();
     f.read_ids(&exp);
 

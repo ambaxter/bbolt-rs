@@ -1065,7 +1065,9 @@ impl<'tx> Drop for TxRwImpl<'tx> {
     let is_physical_rollback = cell.r.is_physical_rollback;
     let tx_id = cell.r.meta.txid();
     let stats = cell.r.stats.take().unwrap();
-    Pin::as_ref(&self.db).guard().remove_rw_tx(is_rollback, is_physical_rollback, tx_id, stats);
+    Pin::as_ref(&self.db)
+      .guard()
+      .remove_rw_tx(is_rollback, is_physical_rollback, tx_id, stats);
   }
 }
 
@@ -1603,8 +1605,8 @@ mod test {
   use crate::tx::check::TxCheck;
   use crate::tx::{TxRwApi, TxStats};
   use crate::{
-    BucketApi, BucketRwApi, CursorApi, BoltOptions, DbApi, DbRwAPI, Error, TxApi, TxImpl, TxRwRefApi,
-    Bolt,
+    Bolt, BoltOptions, BucketApi, BucketRwApi, CursorApi, DbApi, DbRwAPI, Error, TxApi, TxImpl,
+    TxRwRefApi,
   };
   use anyhow::anyhow;
   use std::time::Duration;

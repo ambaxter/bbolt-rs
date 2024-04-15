@@ -1,6 +1,6 @@
 use anyhow::anyhow;
 use bbolt_rs::{
-  BucketApi, BucketRwApi, CursorApi, BoltOptions, DbApi, DbRwAPI, Error, TxApi, TxRwRefApi, Bolt,
+  Bolt, BoltOptions, BucketApi, BucketRwApi, CursorApi, DbApi, DbRwAPI, Error, TxApi, TxRwRefApi,
 };
 use byteorder::{BigEndian, ByteOrder};
 use clap::{Parser, ValueEnum};
@@ -375,7 +375,9 @@ fn run_reads_sequential_nested(db: &Bolt, options: &Bench) -> bbolt_rs::Result<u
   Ok(results.take())
 }
 
-fn run_reads_random_nested(db: &Bolt, options: &Bench, keys: &[NestedKey]) -> bbolt_rs::Result<u64> {
+fn run_reads_random_nested(
+  db: &Bolt, options: &Bench, keys: &[NestedKey],
+) -> bbolt_rs::Result<u64> {
   let results = RefCell::new(0u64);
   db.view(|tx| {
     let mut result = results.borrow_mut();

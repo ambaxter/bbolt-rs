@@ -1,7 +1,7 @@
 use crate::common::page::CoerciblePage;
 use crate::common::self_owned::SelfOwned;
 use crate::tx::check::{TxCheck, UnsealRwTx, UnsealTx};
-use crate::{BoltOptions, DbApi, TxApi, TxRwRefApi, Bolt};
+use crate::{Bolt, BoltOptions, DbApi, TxApi, TxRwRefApi};
 use aligners::{alignment, AlignedBytes};
 use std::ops::{Deref, DerefMut};
 use tempfile::{Builder, NamedTempFile};

@@ -13,6 +13,6 @@ pub use bucket::{BucketApi, BucketImpl, BucketRwApi, BucketRwImpl};
 pub use common::errors::{Error, Result};
 pub use common::ids::{PgId, TxId};
 pub use cursor::{CursorApi, CursorImpl, CursorRwApi, CursorRwImpl};
-pub use db::{BoltOptions, BoltOptionsBuilder, DbApi, DbRwAPI, Bolt};
+pub use db::{Bolt, BoltOptions, BoltOptionsBuilder, DbApi, DbRwAPI};
 pub use tx::check::TxCheck;
 pub use tx::{TxApi, TxImpl, TxRef, TxRwApi, TxRwImpl, TxRwRef, TxRwRefApi};
