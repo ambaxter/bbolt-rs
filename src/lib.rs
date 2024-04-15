@@ -11,7 +11,7 @@ mod tx;
 
 pub use bucket::{BucketApi, BucketImpl, BucketRwApi, BucketRwImpl};
 pub use common::errors::{Error, Result};
-pub use common::ids::PgId;
+pub use common::ids::{PgId, TxId};
 pub use cursor::{CursorApi, CursorImpl, CursorRwApi, CursorRwImpl};
 pub use db::{BoltOptions, BoltOptionsBuilder, DbApi, DbRwAPI, Bolt};
 pub use tx::check::TxCheck;
