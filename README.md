@@ -43,6 +43,8 @@ Currently not supported:
 - [ ] Logging capabilities
 - [ ] Replace NodeW.inodes with BTreeMap because woof - it does not scale. (Note: Shared CodSlice key with RefCell)
 - [ ] blag post
+- [ ] Power failure testing
+- [ ] Write failure testing (especially freelist reloading)
 
 ### Open Questions
 - [ ] Why do we need so much memory on large commits? Almost 3x the Go version

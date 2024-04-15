@@ -413,6 +413,9 @@ impl Freelist {
       for (i, &pgid) in txp.ids.iter().enumerate() {
         self.cache.remove(&pgid);
         if let Some(&tx) = txp.alloc_tx.get(i) {
+          if tx == TxId(0) {
+            continue;
+          }
           if tx != txid {
             // Pending free aborted; restore page back to alloc list.
             self.allocs.insert(pgid, tx);
@@ -501,10 +504,20 @@ impl Freelist {
       self.add_span(start, size);
     }
   }
+  
+  pub(crate) fn reload(&mut self, page: &MappedFreeListPage) {
+    self.read(page);
+    let pcache: HashSet<PgId> = self.pending.iter()
+      .flat_map(|(tx,pending)| pending.ids.iter().copied())
+      .collect();
 
-  //TODO: reload
-  pub(crate) fn reload(&mut self, header: &PageHeader) {
-    todo!()
+    let mut a = Vec::new();
+    for id in self.free_page_ids() {
+      if !pcache.contains(&id) {
+        a.push(id);
+      }
+    }
+    self.read_ids(&a);
   }
 
   /// size returns the size of the page after serialization.

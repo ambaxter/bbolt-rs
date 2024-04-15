@@ -928,7 +928,7 @@ pub(crate) trait DbIApi<'tx>: 'tx {
   fn fsync(&self) -> crate::Result<()>;
   fn repool_allocated(&self, page: AlignedBytes<alignment::Page>);
 
-  fn remove_rw_tx(&self, tx_stats: Arc<TxStats>);
+  fn remove_rw_tx(&self, is_rollback: bool, is_physical_rollback: bool, rem_tx: TxId, tx_stats: Arc<TxStats>);
 
   fn grow(&self, size: u64) -> crate::Result<()>;
 }
@@ -1021,10 +1021,10 @@ impl<'tx> DbIApi<'tx> for LockGuard<'tx, DbShared> {
     }
   }
 
-  fn remove_rw_tx(&self, tx_stats: Arc<TxStats>) {
+  fn remove_rw_tx(&self,  is_rollback: bool, is_physical_rollback: bool, rem_tx: TxId, tx_stats: Arc<TxStats>) {
     match self {
-      LockGuard::R(guard) => guard.remove_rw_tx(tx_stats),
-      LockGuard::U(guard) => guard.borrow().remove_rw_tx(tx_stats),
+      LockGuard::R(guard) => guard.remove_rw_tx(is_rollback, is_physical_rollback, rem_tx, tx_stats),
+      LockGuard::U(guard) => guard.borrow().remove_rw_tx(is_rollback, is_physical_rollback, rem_tx, tx_stats),
     }
   }
 
@@ -1178,11 +1178,21 @@ impl<'tx> DbIApi<'tx> for DbShared {
     self.page_pool.lock().push(page);
   }
 
-  fn remove_rw_tx(&self, tx_stats: Arc<TxStats>) {
+  fn remove_rw_tx(&self,  is_rollback: bool, is_physical_rollback: bool, rem_tx: TxId, tx_stats: Arc<TxStats>) {
     let mut state = self.db_state.lock();
 
     let page_size = self.backend.page_size();
-    let freelist = self.backend.freelist();
+    let mut freelist = self.backend.freelist();
+    if is_rollback {
+      freelist.rollback(rem_tx);
+      if is_physical_rollback {
+        let freelist_page_id = self.backend.meta().free_list();
+        let freelist_page_ref = self.backend.page(freelist_page_id);
+        let freelist_page = MappedFreeListPage::coerce_ref(&freelist_page_ref).unwrap();
+        freelist.reload(freelist_page);
+      }
+    }
+
     let free_list_free_n = freelist.free_count();
     let free_list_pending_n = freelist.pending_count();
     let free_list_alloc = freelist.size();

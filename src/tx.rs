@@ -556,6 +556,13 @@ pub(crate) trait TxRwIApi<'tx>: TxIApi<'tx> + TxICheck<'tx> {
 
   /// See [TxRwRefApi::on_commit]
   fn api_on_commit(self, f: Box<dyn FnOnce() + 'tx>);
+
+  fn physical_rollback(self) -> crate::Result<()> {
+    let mut r = self.split_r_mut();
+    r.is_rollback = true;
+    r.is_physical_rollback = true;
+    Ok(())
+  }
 }
 
 pub struct TxR<'tx> {
@@ -565,6 +572,7 @@ pub struct TxR<'tx> {
   pub(crate) stats: Option<Arc<TxStats>>,
   pub(crate) meta: Meta,
   is_rollback: bool,
+  is_physical_rollback: bool,
   marker: PhantomData<&'tx u8>,
 }
 
@@ -822,6 +830,7 @@ impl<'tx> TxImpl<'tx> {
           meta,
           stats: Some(Default::default()),
           is_rollback: false,
+          is_physical_rollback: false,
           marker: Default::default(),
         };
 
@@ -985,6 +994,7 @@ impl<'tx> TxRwImpl<'tx> {
           meta,
           stats: Some(Default::default()),
           is_rollback: false,
+          is_physical_rollback: false,
           marker: Default::default(),
         };
         let tx_w = TxW {
@@ -1050,8 +1060,12 @@ impl<'tx> TxRwImpl<'tx> {
 
 impl<'tx> Drop for TxRwImpl<'tx> {
   fn drop(&mut self) {
-    let stats = self.tx.cell.borrow_mut().r.stats.take().unwrap();
-    Pin::as_ref(&self.db).guard().remove_rw_tx(stats);
+    let mut cell = self.tx.cell.borrow_mut();
+    let is_rollback = cell.r.is_rollback;
+    let is_physical_rollback = cell.r.is_physical_rollback;
+    let tx_id = cell.r.meta.txid();
+    let stats = cell.r.stats.take().unwrap();
+    Pin::as_ref(&self.db).guard().remove_rw_tx(is_rollback, is_physical_rollback, tx_id, stats);
   }
 }
 
@@ -1150,7 +1164,7 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
         tx_stats.inc_spill_time(start_time.elapsed());
       }
       Err(e) => {
-        let _ = self.rollback();
+        let _ = self.tx.physical_rollback();
         return Err(e);
       }
     }
@@ -1169,7 +1183,7 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
     match self.commit_freelist() {
       Ok(_) => {}
       Err(e) => {
-        let _ = self.rollback();
+        let _ = self.tx.physical_rollback();
         return Err(e);
       }
     }
@@ -1191,7 +1205,7 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
     match self.tx.write() {
       Ok(_) => {}
       Err(e) => {
-        let _ = self.tx.rollback();
+        let _ = self.tx.physical_rollback();
         return Err(e);
       }
     };
@@ -1209,7 +1223,7 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
         tx_stats.inc_write_time(start_time.elapsed());
       }
       Err(e) => {
-        let _ = self.rollback();
+        let _ = self.tx.physical_rollback();
         return Err(e);
       }
     }
@@ -1890,7 +1904,7 @@ mod test {
     let b = tx.bucket("mybucket").unwrap();
     assert_eq!(None, b.get("k"));
     tx.rollback()?;
-    todo!("noSyncFreelist");
+    //todo!("noSyncFreelist");
     Ok(())
   }
 
