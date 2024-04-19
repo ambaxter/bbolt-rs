@@ -35,7 +35,7 @@ Currently not supported:
 - [x] All stats 
 - [x] db batch
 - [x] main bench
-- [ ] clippy again
+- [x] clippy again
 
 
 ### General
@@ -80,13 +80,6 @@ Currently not supported:
 ### src/tx.rs
 - [ ] Copy file
 - [ ] test_tx_check_read_only
-- [ ] test_tx_commit_err_tx_closed
-- [ ] test_tx_rollback_err_tx_closed
-- [ ] test_tx_commit_err_tx_not_writable
-- [ ] test_tx_create_bucket_err_tx_not_writable
-- [ ] test_tx_create_bucket_err_tx_closed
-- [ ] test_tx_delete_bucket_err_tx_closed
-- [ ] test_tx_delete_bucket_read_only
 - [ ] test_tx_copy_file
 - [ ] test_tx_copy_file_error_meta
 - [ ] test_tx_copy_file_error_normal
@@ -161,11 +154,6 @@ Currently not supported:
 - [ ] example_cursor_reverse
 
 ### src/bucket.rs
-- [ ] test_bucket_delete_read_only
-- [ ] test_bucket_delete_closed
-- [ ] test_bucket_next_sequence_read_only
-- [ ] test_bucket_next_sequence_closed
-- [ ] test_bucket_for_each_closed
 - [ ] test_bucket_put_single
 - [ ] test_bucket_put_multiple
 - [ ] test_bucket_delete_quick

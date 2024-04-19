@@ -513,7 +513,7 @@ impl Freelist {
     let pcache: HashSet<PgId> = self
       .pending
       .iter()
-      .flat_map(|(tx, pending)| pending.ids.iter().copied())
+      .flat_map(|(_, pending)| pending.ids.iter().copied())
       .collect();
 
     let mut a = Vec::new();

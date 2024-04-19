@@ -15,6 +15,7 @@ use std::{fmt, mem};
 pub struct LCell<'a, T: ?Sized>(&'a RefCell<T>);
 
 impl<'a, T> Clone for LCell<'a, T> {
+  #[inline]
   fn clone(&self) -> Self {
     *self
   }
@@ -32,6 +33,7 @@ impl<'a, T> LCell<'a, T> {
 impl<'a, T> Deref for LCell<'a, T> {
   type Target = RefCell<T>;
 
+  #[inline]
   fn deref(&self) -> &Self::Target {
     self.0
   }
@@ -41,6 +43,7 @@ impl<'a, T> PartialEq for LCell<'a, T>
 where
   T: PartialEq,
 {
+  #[inline]
   fn eq(&self, other: &Self) -> bool {
     self.deref() == other.deref()
   }
@@ -55,6 +58,7 @@ pub struct BCell<'a, T: Sized, B: Sized>(
 );
 
 impl<'a, T, B> Clone for BCell<'a, T, B> {
+  #[inline]
   fn clone(&self) -> Self {
     *self
   }
@@ -68,6 +72,7 @@ impl<'a, T, B: Copy> BCell<'a, T, B> {
     BCell(a.alloc((RefCell::new(t), b)), PhantomData)
   }
 
+  #[inline]
   pub fn bound(&self) -> B {
     unsafe { &*self.0 }.1
   }
@@ -76,6 +81,7 @@ impl<'a, T, B: Copy> BCell<'a, T, B> {
 impl<'a, T, B> Deref for BCell<'a, T, B> {
   type Target = RefCell<T>;
 
+  #[inline]
   fn deref(&self) -> &Self::Target {
     &unsafe { &*self.0 }.0
   }
@@ -85,6 +91,7 @@ impl<'a, T, B> PartialEq for BCell<'a, T, B>
 where
   T: PartialEq,
 {
+  #[inline]
   fn eq(&self, other: &Self) -> bool {
     self.deref() == other.deref()
   }
@@ -103,21 +110,12 @@ impl<'tx, T: Pod> CodSlice<'tx, T>
 where
   T: Clone,
 {
-  pub fn default_in(_bump: &'tx Bump) -> CodSlice<'tx, T> {
-    CodSlice::Owned(&[])
-  }
-
   #[inline]
   pub fn is_mapped(&self) -> bool {
     match self {
       CodSlice::Owned(_) => false,
       CodSlice::Mapped(_) => true,
     }
-  }
-
-  #[inline]
-  pub fn is_owned(&self) -> bool {
-    !self.is_mapped()
   }
 
   pub fn own_in(&mut self, bump: &'tx Bump) {
@@ -170,6 +168,7 @@ impl<'tx, T: Pod> PartialOrd for CodSlice<'tx, T>
 where
   T: PartialOrd,
 {
+  #[inline]
   fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
     self.deref().partial_cmp(other.deref())
   }
@@ -179,6 +178,7 @@ impl<'tx, T: Pod> Ord for CodSlice<'tx, T>
 where
   T: Ord,
 {
+  #[inline]
   fn cmp(&self, other: &Self) -> Ordering {
     self.deref().cmp(other.deref())
   }
@@ -203,14 +203,6 @@ pub struct RWSlice<'tx, T: Pod> {
 }
 
 impl<'tx, T: Pod> RWSlice<'tx, T> {
-  pub fn new(ptr: *mut T, size: u32) -> RWSlice<'tx, T> {
-    RWSlice {
-      ptr,
-      size,
-      p: PhantomData,
-    }
-  }
-
   pub fn new_with_offset(ptr: *mut T, offset: usize, size: u32) -> RWSlice<'tx, T> {
     RWSlice {
       ptr: unsafe { ptr.add(offset) },
@@ -227,12 +219,14 @@ impl<'tx, T: Pod> RWSlice<'tx, T> {
 impl<'tx, T: Pod> Deref for RWSlice<'tx, T> {
   type Target = [T];
 
+  #[inline]
   fn deref(&self) -> &'tx Self::Target {
     unsafe { from_raw_parts(self.ptr, self.size as usize) }
   }
 }
 
 impl<'tx, T: Pod> DerefMut for RWSlice<'tx, T> {
+  #[inline]
   fn deref_mut(&mut self) -> &'tx mut Self::Target {
     unsafe { from_raw_parts_mut(self.ptr, self.size as usize) }
   }
@@ -310,24 +304,28 @@ impl<'a, T> From<BVec<'a, T>> for SplitArray<'a, T> {
 impl<'a, T> Deref for SplitArray<'a, T> {
   type Target = [T];
 
+  #[inline]
   fn deref(&self) -> &Self::Target {
     unsafe { from_raw_parts(self.ptr.as_ptr(), self.len) }
   }
 }
 
 impl<'a, T> DerefMut for SplitArray<'a, T> {
+  #[inline]
   fn deref_mut(&mut self) -> &mut Self::Target {
     unsafe { from_raw_parts_mut(self.ptr.as_ptr(), self.len) }
   }
 }
 
 impl<'a, T> AsRef<[T]> for SplitArray<'a, T> {
+  #[inline]
   fn as_ref(&self) -> &[T] {
     self.deref()
   }
 }
 
 impl<'a, T> AsMut<[T]> for SplitArray<'a, T> {
+  #[inline]
   fn as_mut(&mut self) -> &mut [T] {
     self.deref_mut()
   }
@@ -357,6 +355,7 @@ impl<'a, T> VecOrSplit<'a, T> {
 impl<'a, T> Deref for VecOrSplit<'a, T> {
   type Target = [T];
 
+  #[inline]
   fn deref(&self) -> &Self::Target {
     match self {
       VecOrSplit::Vec(v) => v,
@@ -366,6 +365,7 @@ impl<'a, T> Deref for VecOrSplit<'a, T> {
 }
 
 impl<'a, T> DerefMut for VecOrSplit<'a, T> {
+  #[inline]
   fn deref_mut(&mut self) -> &mut Self::Target {
     match self {
       VecOrSplit::Vec(v) => v,
@@ -375,12 +375,14 @@ impl<'a, T> DerefMut for VecOrSplit<'a, T> {
 }
 
 impl<'a, T> AsRef<[T]> for VecOrSplit<'a, T> {
+  #[inline]
   fn as_ref(&self) -> &[T] {
     self.deref()
   }
 }
 
 impl<'a, T> AsMut<[T]> for VecOrSplit<'a, T> {
+  #[inline]
   fn as_mut(&mut self) -> &mut [T] {
     self.deref_mut()
   }

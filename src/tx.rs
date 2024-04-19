@@ -380,6 +380,7 @@ pub(crate) enum AnyPage<'a, 'tx: 'a> {
 impl<'a, 'tx: 'a> Deref for AnyPage<'tx, 'a> {
   type Target = RefPage<'a>;
 
+  #[inline]
   fn deref(&self) -> &Self::Target {
     match self {
       AnyPage::Ref(r) => r,
@@ -388,13 +389,38 @@ impl<'a, 'tx: 'a> Deref for AnyPage<'tx, 'a> {
   }
 }
 
+#[derive(Copy, Clone, Default, PartialOrd, Ord, PartialEq, Eq)]
+pub(crate) enum TxClosingState {
+  #[default]
+  Rollback,
+  PhysicalRollback,
+  Commit,
+}
+
+impl TxClosingState {
+  #[inline]
+  pub(crate) fn is_rollback(&self) -> bool {
+    matches!(
+      self,
+      TxClosingState::Rollback | TxClosingState::PhysicalRollback
+    )
+  }
+
+  #[inline]
+  pub(crate) fn is_physical_rollback(&self) -> bool {
+    matches!(self, TxClosingState::PhysicalRollback)
+  }
+}
+
 pub(crate) trait TxIApi<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
   type BucketType: BucketIApi<'tx, Self>;
 
+  #[inline]
   fn bump(self) -> &'tx Bump {
     self.split_r().b
   }
 
+  #[inline]
   fn page_size(self) -> usize {
     self.split_r().page_size
   }
@@ -424,11 +450,13 @@ pub(crate) trait TxIApi<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
   }
 
   /// See [TxApi::id]
+  #[inline]
   fn api_id(self) -> TxId {
     self.split_r().meta.txid()
   }
 
   /// See [TxApi::size]
+  #[inline]
   fn api_size(self) -> u64 {
     let r = self.split_r();
     r.meta.pgid().0 * r.meta.page_size() as u64
@@ -445,6 +473,7 @@ pub(crate) trait TxIApi<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
     self.split_r().stats.as_ref().unwrap().clone()
   }
 
+  #[inline]
   fn root_bucket(self) -> Self::BucketType {
     self.split_bound()
   }
@@ -493,7 +522,9 @@ pub(crate) trait TxIApi<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
   }
 
   fn rollback(self) -> crate::Result<()> {
-    self.split_r_mut().is_rollback = true;
+    if let Some(mut w) = self.split_ow_mut() {
+      w.tx_closing_state = TxClosingState::Rollback;
+    }
     Ok(())
   }
 
@@ -558,9 +589,8 @@ pub(crate) trait TxRwIApi<'tx>: TxIApi<'tx> + TxICheck<'tx> {
   fn api_on_commit(self, f: Box<dyn FnOnce() + 'tx>);
 
   fn physical_rollback(self) -> crate::Result<()> {
-    let mut r = self.split_r_mut();
-    r.is_rollback = true;
-    r.is_physical_rollback = true;
+    let mut w = self.split_ow_mut().unwrap();
+    w.tx_closing_state = TxClosingState::PhysicalRollback;
     Ok(())
   }
 }
@@ -571,8 +601,6 @@ pub struct TxR<'tx> {
   db: &'tx LockGuard<'tx, DbShared>,
   pub(crate) stats: Option<Arc<TxStats>>,
   pub(crate) meta: Meta,
-  is_rollback: bool,
-  is_physical_rollback: bool,
   marker: PhantomData<&'tx u8>,
 }
 
@@ -580,6 +608,7 @@ pub struct TxW<'tx> {
   pages: HashMap<'tx, PgId, SelfOwned<AlignedBytes<alignment::Page>, MutPage<'tx>>>,
   commit_handlers: BVec<'tx, Box<dyn FnOnce() + 'tx>>,
   no_sync: bool,
+  tx_closing_state: TxClosingState,
   marker: PhantomData<&'tx u8>,
 }
 
@@ -594,26 +623,32 @@ pub struct TxCell<'tx> {
 }
 
 impl<'tx> SplitRef<TxR<'tx>, BucketCell<'tx>, TxW<'tx>> for TxCell<'tx> {
+  #[inline]
   fn split_r(&self) -> Ref<TxR<'tx>> {
     self.cell.borrow()
   }
 
+  #[inline]
   fn split_ref(&self) -> (Ref<TxR<'tx>>, Option<Ref<TxW<'tx>>>) {
     (self.cell.borrow(), None)
   }
 
+  #[inline]
   fn split_ow(&self) -> Option<Ref<TxW<'tx>>> {
     None
   }
 
+  #[inline]
   fn split_bound(&self) -> BucketCell<'tx> {
     self.cell.bound()
   }
 
+  #[inline]
   fn split_r_mut(&self) -> RefMut<TxR<'tx>> {
     self.cell.borrow_mut()
   }
 
+  #[inline]
   fn split_ow_mut(&self) -> Option<RefMut<TxW<'tx>>> {
     None
   }
@@ -642,6 +677,7 @@ impl<'tx> SplitRef<TxR<'tx>, BucketRwCell<'tx>, TxW<'tx>> for TxRwCell<'tx> {
     Some(Ref::map(self.cell.borrow(), |c| &c.w))
   }
 
+  #[inline]
   fn split_bound(&self) -> BucketRwCell<'tx> {
     self.cell.bound()
   }
@@ -829,8 +865,6 @@ impl<'tx> TxImpl<'tx> {
           db,
           meta,
           stats: Some(Default::default()),
-          is_rollback: false,
-          is_physical_rollback: false,
           marker: Default::default(),
         };
 
@@ -873,14 +907,17 @@ impl<'tx> Drop for TxImpl<'tx> {
 }
 
 impl<'tx> TxApi<'tx> for TxImpl<'tx> {
+  #[inline]
   fn id(&self) -> TxId {
     self.tx.api_id()
   }
 
+  #[inline]
   fn size(&self) -> u64 {
     self.tx.api_size()
   }
 
+  #[inline]
   fn writeable(&self) -> bool {
     false
   }
@@ -917,14 +954,17 @@ pub struct TxRef<'tx> {
 }
 
 impl<'tx> TxApi<'tx> for TxRef<'tx> {
+  #[inline]
   fn id(&self) -> TxId {
     self.tx.api_id()
   }
 
+  #[inline]
   fn size(&self) -> u64 {
     self.tx.api_size()
   }
 
+  #[inline]
   fn writeable(&self) -> bool {
     false
   }
@@ -993,14 +1033,13 @@ impl<'tx> TxRwImpl<'tx> {
           db,
           meta,
           stats: Some(Default::default()),
-          is_rollback: false,
-          is_physical_rollback: false,
           marker: Default::default(),
         };
         let tx_w = TxW {
           pages: HashMap::with_capacity_in(0, bump),
           commit_handlers: BVec::with_capacity_in(0, bump),
           no_sync,
+          tx_closing_state: TxClosingState::Rollback,
           marker: Default::default(),
         };
 
@@ -1061,17 +1100,17 @@ impl<'tx> TxRwImpl<'tx> {
 impl<'tx> Drop for TxRwImpl<'tx> {
   fn drop(&mut self) {
     let mut cell = self.tx.cell.borrow_mut();
-    let is_rollback = cell.r.is_rollback;
-    let is_physical_rollback = cell.r.is_physical_rollback;
+    let tx_closing_state = cell.w.tx_closing_state;
     let tx_id = cell.r.meta.txid();
     let stats = cell.r.stats.take().unwrap();
     Pin::as_ref(&self.db)
       .guard()
-      .remove_rw_tx(is_rollback, is_physical_rollback, tx_id, stats);
+      .remove_rw_tx(tx_closing_state, tx_id, stats);
   }
 }
 
 impl<'tx> TxApi<'tx> for TxRwImpl<'tx> {
+  #[inline]
   fn id(&self) -> TxId {
     self.tx.api_id()
   }
@@ -1080,6 +1119,7 @@ impl<'tx> TxApi<'tx> for TxRwImpl<'tx> {
     self.tx.api_size()
   }
 
+  #[inline]
   fn writeable(&self) -> bool {
     true
   }
@@ -1147,9 +1187,7 @@ impl<'tx> TxRwRefApi<'tx> for TxRwImpl<'tx> {
 
 impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
   fn commit(mut self) -> crate::Result<()> {
-    if self.tx.split_r().is_rollback {
-      return Ok(());
-    }
+    self.tx.split_ow_mut().unwrap().tx_closing_state = TxClosingState::Commit;
 
     let tx_stats = self.tx.split_r().stats.as_ref().cloned().unwrap();
     let bump = self.tx.bump();
@@ -1245,6 +1283,7 @@ pub struct TxRwRef<'tx> {
 }
 
 impl<'tx> TxApi<'tx> for TxRwRef<'tx> {
+  #[inline]
   fn id(&self) -> TxId {
     self.tx.api_id()
   }
@@ -1253,6 +1292,7 @@ impl<'tx> TxApi<'tx> for TxRwRef<'tx> {
     self.tx.api_size()
   }
 
+  #[inline]
   fn writeable(&self) -> bool {
     true
   }
@@ -1335,36 +1375,42 @@ pub(crate) mod check {
   }
 
   impl<'tx> UnsealTx<'tx> for TxImpl<'tx> {
+    #[inline]
     fn unseal(&self) -> impl TxIApi<'tx> + TxICheck<'tx> {
       TxCell { cell: self.tx.cell }
     }
   }
 
   impl<'tx> UnsealTx<'tx> for TxRef<'tx> {
+    #[inline]
     fn unseal(&self) -> impl TxIApi<'tx> + TxICheck<'tx> {
       TxCell { cell: self.tx.cell }
     }
   }
 
   impl<'tx> UnsealTx<'tx> for TxRwImpl<'tx> {
+    #[inline]
     fn unseal(&self) -> impl TxIApi<'tx> + TxICheck<'tx> {
       TxRwCell { cell: self.tx.cell }
     }
   }
 
   impl<'tx> UnsealTx<'tx> for TxRwRef<'tx> {
+    #[inline]
     fn unseal(&self) -> impl TxIApi<'tx> + TxICheck<'tx> {
       self.tx
     }
   }
 
   impl<'tx> UnsealRwTx<'tx> for TxRwImpl<'tx> {
+    #[inline]
     fn unseal_rw(&self) -> impl TxRwIApi<'tx> {
       TxRwCell { cell: self.tx.cell }
     }
   }
 
   impl<'tx> UnsealRwTx<'tx> for TxRwRef<'tx> {
+    #[inline]
     fn unseal_rw(&self) -> impl TxRwIApi<'tx> {
       self.tx
     }
@@ -1633,24 +1679,6 @@ mod test {
   }
 
   #[test]
-  #[ignore]
-  fn test_tx_commit_err_tx_closed() {
-    todo!("not possible")
-  }
-
-  #[test]
-  #[ignore]
-  fn test_tx_rollback_err_tx_closed() {
-    todo!("not possible")
-  }
-
-  #[test]
-  #[ignore]
-  fn test_tx_commit_err_tx_not_writable() {
-    todo!("not possible")
-  }
-
-  #[test]
   fn test_tx_cursor() -> crate::Result<()> {
     let mut db = TestDb::new()?;
     db.update(|mut tx| {
@@ -1662,18 +1690,6 @@ mod test {
       Ok(())
     })?;
     Ok(())
-  }
-
-  #[test]
-  #[ignore]
-  fn test_tx_create_bucket_err_tx_not_writable() {
-    todo!("not possible")
-  }
-
-  #[test]
-  #[ignore]
-  fn test_tx_create_bucket_err_tx_closed() {
-    todo!("not possible")
   }
 
   #[test]
@@ -1784,18 +1800,6 @@ mod test {
       Ok(())
     })?;
     Ok(())
-  }
-
-  #[test]
-  #[ignore]
-  fn test_tx_delete_bucket_err_tx_closed() {
-    todo!("not possible")
-  }
-
-  #[test]
-  #[ignore]
-  fn test_tx_delete_bucket_read_only() {
-    todo!("not possible")
   }
 
   #[test]

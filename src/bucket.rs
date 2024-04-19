@@ -263,7 +263,7 @@ impl<'tx> BucketApi<'tx> for BucketRwImpl<'tx> {
   }
 
   fn stats(&self) -> BucketStats {
-    todo!()
+    self.b.api_stats()
   }
 }
 
@@ -1482,18 +1482,6 @@ mod tests {
   }
 
   #[test]
-  #[ignore]
-  fn test_bucket_put_closed() -> crate::Result<()> {
-    todo!("not necessary. Bucket can't exist after tx closed")
-  }
-
-  #[test]
-  #[ignore]
-  fn test_bucket_put_read_only() -> crate::Result<()> {
-    todo!("needs read-only access")
-  }
-
-  #[test]
   fn test_bucket_delete() -> crate::Result<()> {
     let mut db = TestDb::new()?;
     db.update(|mut tx| {
@@ -1655,18 +1643,6 @@ mod tests {
       Ok(())
     })?;
     Ok(())
-  }
-
-  #[test]
-  #[ignore]
-  fn test_bucket_delete_read_only() -> crate::Result<()> {
-    todo!("read-only")
-  }
-
-  #[test]
-  #[ignore]
-  fn test_bucket_delete_closed() -> crate::Result<()> {
-    todo!("not possible")
   }
 
   #[test]
@@ -1839,18 +1815,6 @@ mod tests {
     Ok(())
   }
 
-  #[test]
-  #[ignore]
-  fn test_bucket_next_sequence_read_only() -> crate::Result<()> {
-    todo!("read-only")
-  }
-
-  #[test]
-  #[ignore]
-  fn test_bucket_next_sequence_closed() -> crate::Result<()> {
-    todo!("not-possible")
-  }
-
   fn for_each_collect_kv<'tx, B: BucketApi<'tx>>(
     b: B,
   ) -> crate::Result<Vec<(&'tx [u8], Option<&'tx [u8]>)>> {
@@ -1992,12 +1956,6 @@ mod tests {
     let e = result.map_err(|e| e.to_string()).err().unwrap();
     assert_eq!("marker", e);
     Ok(())
-  }
-
-  #[test]
-  #[ignore]
-  fn test_bucket_for_each_closed() -> crate::Result<()> {
-    todo!("not possible")
   }
 
   #[test]

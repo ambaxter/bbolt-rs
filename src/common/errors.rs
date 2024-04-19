@@ -30,22 +30,6 @@ pub enum Error {
   /// on the data file after the timeout passed to Open().
   #[error("timeout")]
   Timeout,
-  // These errors can occur when beginning or committing a Tx.
-  /// TxNotWritable is returned when performing a write operation on a
-  /// read-only transaction.
-  /// TODO: Can this even happen anymore?
-  #[error("tx not writable")]
-  TxNotWritable,
-  /// TxClosed is returned when committing or rolling back a transaction
-  /// that has already been committed or rolled back.
-  /// TODO: Can this even happen anymore?
-  #[error("tx closed")]
-  TxClosed,
-  /// DatabaseReadOnly is returned when a mutating transaction is started on a
-  /// read-only database.
-  /// TODO: Can this even happen anymore?
-  #[error("database is in read-only mode")]
-  DatabaseReadOnly,
   /// FreePagesNotLoaded is returned when a readonly transaction without
   /// preloading the free pages is trying to access the free pages.
   #[error("free pages are not pre-loaded")]
@@ -102,9 +86,6 @@ impl PartialEq for Error {
         | (Error::VersionMismatch, Error::VersionMismatch)
         | (Error::ChecksumMismatch, Error::ChecksumMismatch)
         | (Error::Timeout, Error::Timeout)
-        | (Error::TxNotWritable, Error::TxNotWritable)
-        | (Error::TxClosed, Error::TxClosed)
-        | (Error::DatabaseReadOnly, Error::DatabaseReadOnly)
         | (Error::FreePagesNotLoaded, Error::FreePagesNotLoaded)
         | (Error::BucketNotFound, Error::BucketNotFound)
         | (Error::BucketExists, Error::BucketExists)

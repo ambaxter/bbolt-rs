@@ -635,17 +635,6 @@ mod tests {
     BucketApi, BucketRwApi, CursorApi, CursorRwApi, DbApi, DbRwAPI, Error, TxApi, TxRwRefApi,
   };
 
-  #[test]
-  #[ignore]
-  fn test_cursor_bucket() -> crate::Result<()> {
-    let mut db = TestDb::new()?;
-    db.update(|mut tx| {
-      tx.create_bucket(b"widgets")?;
-      Ok(())
-    })?;
-    todo!("Do we really want the api to return the bucket?")
-  }
-
   /// Ensure that a Tx cursor can seek to the appropriate keys.
   #[test]
   fn test_cursor_seek() -> crate::Result<()> {

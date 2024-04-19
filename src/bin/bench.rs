@@ -247,7 +247,7 @@ where
     None
   };
 
-  for i in (0..options.count).step_by(options.batch_size as usize) {
+  for _ in (0..options.count).step_by(options.batch_size as usize) {
     db.update(|mut tx| {
       let mut top = tx.create_bucket_if_not_exists(BENCH_BUCKET_NAME)?;
       top.set_fill_percent(options.fill_percent);
@@ -255,7 +255,7 @@ where
       let bucket: Rc<[u8]> = Rc::from(name);
       let mut b = top.create_bucket_if_not_exists(&name)?;
       b.set_fill_percent(options.fill_percent);
-      for j in 0..options.batch_size {
+      for _ in 0..options.batch_size {
         let mut key = vec![0u8; options.key_size];
         let value = vec![0u8; options.value_size];
         let k = key_source();
@@ -308,7 +308,7 @@ fn run_reads_sequential(db: &Bolt, options: &Bench) -> bbolt_rs::Result<u64> {
 }
 
 fn run_reads_random(db: &Bolt, options: &Bench, keys: &[NestedKey]) -> bbolt_rs::Result<u64> {
-  let results = RefCell::new(064);
+  let results = RefCell::new(0u64);
   db.view(|tx| {
     let mut result = results.borrow_mut();
     let t = Instant::now();

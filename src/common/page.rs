@@ -208,11 +208,6 @@ impl PageHeader {
     self.flags = FREE_LIST_PAGE_FLAG;
   }
 
-  #[inline]
-  pub fn set_undefined(&mut self) {
-    self.flags = 0;
-  }
-
   pub fn fast_check(&self, id: PgId) {
     assert_eq!(
       self.id, id,
@@ -248,11 +243,6 @@ impl PageHeader {
   #[inline]
   pub fn is_free_list(&self) -> bool {
     self.flags & FREE_LIST_PAGE_FLAG != 0
-  }
-
-  #[inline]
-  pub fn is_undefined(&self) -> bool {
-    self.flags == 0
   }
 
   /// page_type returns a human readable page type string used for debugging.
