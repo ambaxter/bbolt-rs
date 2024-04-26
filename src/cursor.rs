@@ -1102,15 +1102,4 @@ mod tests {
     todo!()
   }
 
-  #[test]
-  #[ignore]
-  fn example_cursor() {
-    todo!()
-  }
-
-  #[test]
-  #[ignore]
-  fn example_cursor_reverse() {
-    todo!()
-  }
 }

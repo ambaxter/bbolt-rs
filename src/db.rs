@@ -2317,24 +2317,6 @@ mod test {
 
   #[test]
   #[ignore]
-  fn example_db_update() {
-    todo!()
-  }
-
-  #[test]
-  #[ignore]
-  fn example_db_view() {
-    todo!()
-  }
-
-  #[test]
-  #[ignore]
-  fn example_db_begin() {
-    todo!()
-  }
-
-  #[test]
-  #[ignore]
   fn benchmark_dbbatch_automatic() {
     todo!()
   }

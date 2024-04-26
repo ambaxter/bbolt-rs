@@ -2302,12 +2302,6 @@ mod test {
 
   #[test]
   #[ignore]
-  fn example_tx_rollback() {
-    todo!()
-  }
-
-  #[test]
-  #[ignore]
   fn example_tx_copy_file() {
     todo!()
   }

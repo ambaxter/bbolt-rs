@@ -2751,22 +2751,4 @@ mod tests {
   fn test_bucket_delete_quick() -> crate::Result<()> {
     todo!("quick-check")
   }
-
-  #[test]
-  #[ignore]
-  fn example_bucket_put() -> crate::Result<()> {
-    todo!()
-  }
-
-  #[test]
-  #[ignore]
-  fn example_bucket_delete() -> crate::Result<()> {
-    todo!()
-  }
-
-  #[test]
-  #[ignore]
-  fn example_bucket_for_each() -> crate::Result<()> {
-    todo!()
-  }
 }
