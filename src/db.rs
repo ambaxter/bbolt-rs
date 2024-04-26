@@ -323,10 +323,12 @@ pub struct DbStats {
 }
 
 impl DbStats {
+  /// global, ongoing stats.
   pub fn tx_stats(&self) -> &TxStats {
     &self.tx_stats
   }
 
+  /// total number of free pages on the freelist
   pub fn free_page_n(&self) -> i64 {
     self.free_page_n.load(Ordering::Acquire)
   }
@@ -335,6 +337,7 @@ impl DbStats {
     self.free_page_n.fetch_add(delta, Ordering::AcqRel);
   }
 
+  /// total number of pending pages on the freelist
   pub fn pending_page_n(&self) -> i64 {
     self.pending_page_n.load(Ordering::Acquire)
   }
@@ -343,6 +346,7 @@ impl DbStats {
     self.pending_page_n.fetch_add(delta, Ordering::AcqRel);
   }
 
+  /// total bytes allocated in free pages
   pub fn free_alloc(&self) -> i64 {
     self.free_alloc.load(Ordering::Acquire)
   }
@@ -351,6 +355,7 @@ impl DbStats {
     self.free_alloc.fetch_add(delta, Ordering::AcqRel);
   }
 
+  /// total bytes used by the freelist
   pub fn free_list_in_use(&self) -> i64 {
     self.free_list_in_use.load(Ordering::Acquire)
   }
@@ -359,6 +364,7 @@ impl DbStats {
     self.free_list_in_use.fetch_add(delta, Ordering::AcqRel);
   }
 
+  /// total number of started read transactions
   pub fn tx_n(&self) -> i64 {
     self.tx_n.load(Ordering::Acquire)
   }
@@ -367,11 +373,12 @@ impl DbStats {
     self.tx_n.fetch_add(delta, Ordering::AcqRel);
   }
 
+  /// number of currently open read transactions
   pub fn open_tx_n(&self) -> i64 {
     self.open_tx_n.load(Ordering::Acquire)
   }
 
-  pub fn sub(&self, rhs: &DbStats) -> DbStats {
+  pub(crate) fn sub(&self, rhs: &DbStats) -> DbStats {
     let diff = self.clone();
     diff.inc_tx_n(-rhs.tx_n());
     diff.tx_stats.sub_assign(&rhs.tx_stats);

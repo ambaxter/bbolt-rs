@@ -491,6 +491,7 @@ pub struct TxStats {
 }
 
 impl TxStats {
+  /// total bytes allocated
   pub fn page_alloc(&self) -> i64 {
     self.page_alloc.load(Ordering::Acquire)
   }
@@ -499,6 +500,7 @@ impl TxStats {
     self.page_alloc.fetch_add(delta, Ordering::AcqRel);
   }
 
+  /// number of page allocations
   pub fn page_count(&self) -> i64 {
     self.page_count.load(Ordering::Acquire)
   }
@@ -507,6 +509,7 @@ impl TxStats {
     self.page_count.fetch_add(delta, Ordering::AcqRel);
   }
 
+  /// number of cursors created
   pub fn cursor_count(&self) -> i64 {
     self.cursor_count.load(Ordering::Acquire)
   }
@@ -515,6 +518,7 @@ impl TxStats {
     self.cursor_count.fetch_add(delta, Ordering::AcqRel);
   }
 
+  /// number of node allocations
   pub fn node_count(&self) -> i64 {
     self.node_count.load(Ordering::Acquire)
   }
@@ -523,6 +527,7 @@ impl TxStats {
     self.node_count.fetch_add(delta, Ordering::AcqRel);
   }
 
+  /// number of node dereferences
   pub fn node_deref(&self) -> i64 {
     self.node_deref.load(Ordering::Acquire)
   }
@@ -531,6 +536,7 @@ impl TxStats {
     self.node_deref.fetch_add(delta, Ordering::AcqRel);
   }
 
+  /// number of node rebalances
   pub fn rebalance(&self) -> i64 {
     self.rebalance.load(Ordering::Acquire)
   }
@@ -539,6 +545,7 @@ impl TxStats {
     self.rebalance.fetch_add(delta, Ordering::AcqRel);
   }
 
+  /// total time spent rebalancing
   pub fn rebalance_time(&self) -> Duration {
     *self.rebalance_time.lock()
   }
@@ -547,6 +554,7 @@ impl TxStats {
     *self.rebalance_time.lock() += delta;
   }
 
+  /// number of nodes split
   pub fn split(&self) -> i64 {
     self.split.load(Ordering::Acquire)
   }
@@ -555,6 +563,7 @@ impl TxStats {
     self.split.fetch_add(delta, Ordering::AcqRel);
   }
 
+  /// number of nodes spilled
   pub fn spill(&self) -> i64 {
     self.spill.load(Ordering::Acquire)
   }
@@ -563,6 +572,7 @@ impl TxStats {
     self.spill.fetch_add(delta, Ordering::AcqRel);
   }
 
+  /// total time spent spilling
   pub fn spill_time(&self) -> Duration {
     *self.spill_time.lock()
   }
@@ -571,6 +581,7 @@ impl TxStats {
     *self.spill_time.lock() += delta;
   }
 
+  /// number of writes performed
   pub fn write(&self) -> i64 {
     self.write.load(Ordering::Acquire)
   }
@@ -579,6 +590,7 @@ impl TxStats {
     self.write.fetch_add(delta, Ordering::AcqRel);
   }
 
+  /// total time spent writing to disk
   pub fn write_time(&self) -> Duration {
     *self.write_time.lock()
   }
