@@ -826,11 +826,7 @@ mod test {
     let parent_children = &binding.cell.borrow().children;
     assert_eq!(2, parent_children.len());
     assert_eq!(2, split_nodes[0].cell.borrow().inodes.len());
-    let node0 = split_nodes[0].cell.borrow();
-    let inodes0 = node0.inodes.deref();
     assert_eq!(3, split_nodes[1].cell.borrow().inodes.len());
-    let node1 = split_nodes[1].cell.borrow();
-    let inodes1 = node1.inodes.deref();
     Ok(())
   }
 
@@ -843,7 +839,7 @@ mod test {
     let n = root_bucket.materialize_root();
     n.put(b"00000001", b"00000001", b"0123456701234567", ZERO_PGID, 0);
     n.put(b"00000002", b"00000002", b"0123456701234567", ZERO_PGID, 0);
-    let split_nodes = n.split(20).collect_vec();
+    let _split_nodes = n.split(20).collect_vec();
     assert!(n.cell.borrow().parent.is_none(), "expected none parent");
     Ok(())
   }
@@ -860,7 +856,7 @@ mod test {
     n.put(b"00000003", b"00000003", b"0123456701234567", ZERO_PGID, 0);
     n.put(b"00000004", b"00000004", b"0123456701234567", ZERO_PGID, 0);
     n.put(b"00000005", b"00000005", b"0123456701234567", ZERO_PGID, 0);
-    let split_nodes = n.split(4096).collect_vec();
+    let _split_nodes = n.split(4096).collect_vec();
     assert!(n.cell.borrow().parent.is_none(), "expected none parent");
     Ok(())
   }

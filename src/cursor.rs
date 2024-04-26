@@ -11,34 +11,205 @@ use std::marker::PhantomData;
 
 /// Read-only Cursor API
 pub trait CursorApi<'tx> {
-  /// First moves the cursor to the first item in the bucket and returns its key and value.
+  /// Moves the cursor to the first item in the bucket and returns its key and value.
+  ///
   /// If the bucket is empty then None is returned.
+  ///
+  /// ```rust
+  /// use bbolt_rs::*;
+  ///
+  /// fn main() -> Result<()> {
+  ///   let mut db = Bolt::new_mem()?;
+  ///
+  ///   db.update(|mut tx| {
+  ///     let mut b = tx.create_bucket_if_not_exists("test")?;
+  ///     b.put("key1", "value1")?;
+  ///     b.put("key2", "value2")?;
+  ///     b.put("key3", "value3")?;
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   db.view(|tx| {
+  ///     let b = tx.bucket("test").unwrap();
+  ///     let mut c = b.cursor();
+  ///     let first = c.first();
+  ///     assert_eq!(Some((b"key1".as_slice(), Some(b"value1".as_slice()))), first);
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   Ok(())
+  /// }
+  /// ```
   fn first(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)>;
 
-  /// Last moves the cursor to the last item in the bucket and returns its key and value.
+  /// Moves the cursor to the last item in the bucket and returns its key and value.
+  ///
   /// If the bucket is empty then None is returned.
+  ///
+  /// ```rust
+  /// use bbolt_rs::*;
+  ///
+  /// fn main() -> Result<()> {
+  ///   let mut db = Bolt::new_mem()?;
+  ///
+  ///   db.update(|mut tx| {
+  ///     let mut b = tx.create_bucket_if_not_exists("test")?;
+  ///     b.put("key1", "value1")?;
+  ///     b.put("key2", "value2")?;
+  ///     b.put("key3", "value3")?;
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   db.view(|tx| {
+  ///     let b = tx.bucket("test").unwrap();
+  ///     let mut c = b.cursor();
+  ///     let last = c.last();
+  ///     assert_eq!(Some((b"key3".as_slice(), Some(b"value3".as_slice()))), last);
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   Ok(())
+  /// }
+  /// ```
   fn last(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)>;
 
-  /// Next moves the cursor to the next item in the bucket and returns its key and value.
+  /// Moves the cursor to the next item in the bucket and returns its key and value.
+  ///
   /// If the cursor is at the end of the bucket then None is returned.
+  ///
+  /// ```rust
+  /// use bbolt_rs::*;
+  ///
+  /// fn main() -> Result<()> {
+  ///   let mut db = Bolt::new_mem()?;
+  ///
+  ///   db.update(|mut tx| {
+  ///     let mut b = tx.create_bucket_if_not_exists("test")?;
+  ///     b.put("key1", "value1")?;
+  ///     b.put("key2", "value2")?;
+  ///     b.put("key3", "value3")?;
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   db.view(|tx| {
+  ///     let b = tx.bucket("test").unwrap();
+  ///     let mut c = b.cursor();
+  ///     c.first();
+  ///     let next = c.next();
+  ///     assert_eq!(Some((b"key2".as_slice(), Some(b"value2".as_slice()))), next);
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   Ok(())
+  /// }
+  /// ```
   fn next(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)>;
 
-  /// Prev moves the cursor to the previous item in the bucket and returns its key and value.
+  /// Moves the cursor to the previous item in the bucket and returns its key and value.
   /// If the cursor is at the beginning of the bucket then None is returned.
+  ///
+  /// ```rust
+  /// use bbolt_rs::*;
+  ///
+  /// fn main() -> Result<()> {
+  ///   let mut db = Bolt::new_mem()?;
+  ///
+  ///   db.update(|mut tx| {
+  ///     let mut b = tx.create_bucket_if_not_exists("test")?;
+  ///     b.put("key1", "value1")?;
+  ///     b.put("key2", "value2")?;
+  ///     b.put("key3", "value3")?;
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   db.view(|tx| {
+  ///     let b = tx.bucket("test").unwrap();
+  ///     let mut c = b.cursor();
+  ///     c.last();
+  ///     let prev = c.prev();
+  ///     assert_eq!(Some((b"key2".as_slice(), Some(b"value2".as_slice()))), prev);
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   Ok(())
+  /// }
+  /// ```
   fn prev(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)>;
 
-  /// Seek moves the cursor to a given key using a b-tree search and returns it.
+  /// Moves the cursor to a given key using a b-tree search and returns it.
+  ///
   /// If the key does not exist then the next key is used. If no keys
   /// follow, None is returned.
+  ///
+  /// ```rust
+  /// use bbolt_rs::*;
+  ///
+  /// fn main() -> Result<()> {
+  ///   let mut db = Bolt::new_mem()?;
+  ///
+  ///   db.update(|mut tx| {
+  ///     let mut b = tx.create_bucket_if_not_exists("test")?;
+  ///     b.put("key1", "value1")?;
+  ///     b.put("key2", "value2")?;
+  ///     b.put("key3", "value3")?;
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   db.view(|tx| {
+  ///     let b = tx.bucket("test").unwrap();
+  ///     let mut c = b.cursor();
+  ///     let seek = c.seek("key2");
+  ///     assert_eq!(Some((b"key2".as_slice(), Some(b"value2".as_slice()))), seek);
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   Ok(())
+  /// }
+  /// ```
   fn seek<T: AsRef<[u8]>>(&mut self, seek: T) -> Option<(&'tx [u8], Option<&'tx [u8]>)>;
 }
 
 /// RW Bucket API
 pub trait CursorRwApi<'tx>: CursorApi<'tx> {
-  /// Delete removes the current key/value under the cursor from the bucket.
+  /// Removes the current key/value under the cursor from the bucket.
+  ///
+  /// ```rust
+  /// use bbolt_rs::*;
+  ///
+  /// fn main() -> Result<()> {
+  ///   let mut db = Bolt::new_mem()?;
+  ///
+  ///   db.update(|mut tx| {
+  ///     let mut b = tx.create_bucket_if_not_exists("test")?;
+  ///     b.put("key1", "value1")?;
+  ///     b.put("key2", "value2")?;
+  ///     b.put("key3", "value3")?;
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   db.update(|mut tx| {
+  ///     let mut b = tx.bucket_mut("test").unwrap();
+  ///     let mut c = b.cursor_mut();
+  ///     c.seek("key2");
+  ///     c.delete()?;
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   db.view(|tx| {
+  ///     let b = tx.bucket("test").unwrap();
+  ///     let mut c = b.cursor();
+  ///     let seek = c.seek("key2");
+  ///     assert_eq!(Some((b"key3".as_slice(), Some(b"value3".as_slice()))), seek);
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   Ok(())
+  /// }
+  /// ```
   fn delete(&mut self) -> crate::Result<()>;
 }
 
+// TODO: We need a better way to do this. InnerCursor shouldn't be leaked
 pub enum CursorImpl<'tx> {
   R(InnerCursor<'tx, TxCell<'tx>, BucketCell<'tx>>),
   RW(InnerCursor<'tx, TxRwCell<'tx>, BucketRwCell<'tx>>),
@@ -806,7 +977,7 @@ mod tests {
       assert_eq!(None, c.next());
       assert_eq!(None, c.next());
     }
-    tx.rollback()
+    Ok(())
   }
 
   #[test]
@@ -829,7 +1000,7 @@ mod tests {
       assert_eq!(None, c.prev());
       assert_eq!(None, c.prev());
     }
-    tx.rollback()
+    Ok(())
   }
 
   #[test]
@@ -850,7 +1021,7 @@ mod tests {
       assert_eq!(Some((b"bar".as_slice(), Some([].as_slice()))), c.first());
       assert_eq!(Some((b"foo".as_slice(), Some([].as_slice()))), c.next());
     }
-    tx.rollback()
+    Ok(())
   }
 
   #[test]

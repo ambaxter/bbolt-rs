@@ -19,6 +19,7 @@ use crate::{CursorRwApi, Error};
 use bumpalo::Bump;
 use bytemuck::{Pod, Zeroable};
 use either::Either;
+use getset::CopyGetters;
 use std::alloc::Layout;
 use std::marker::PhantomData;
 use std::ops::{AddAssign, Deref};
@@ -31,11 +32,12 @@ pub trait BucketApi<'tx>
 where
   Self: Sized,
 {
-  /// Root returns the root of the bucket.
-  /// ```rust
-  /// use bbolt_rs::{BucketApi, BucketRwApi, Bolt, DbApi, DbRwAPI, TxApi, TxRwRefApi};
+  /// Returns the bucket's root page id.
   ///
-  /// fn main() -> bbolt_rs::Result<()> {
+  /// ```rust
+  /// use bbolt_rs::*;
+  ///
+  /// fn main() -> Result<()> {
   ///   let mut db = Bolt::new_mem()?;
   ///
   ///   db.update(|mut tx| {
@@ -44,92 +46,552 @@ where
   ///     Ok(())
   ///   })?;
   ///
-  ///   let tx = db.begin()?;
-  ///   let b = tx.bucket("test").unwrap();
-  ///   let page_id = b.root();
-  ///   let page_info = tx.page(page_id)?.unwrap();
-  ///   println!("{:?}", page_info);
+  ///   db.view(|tx| {
+  ///     let b = tx.bucket("test").unwrap();
+  ///     let page_id = b.root();
+  ///     let page_info = tx.page(page_id)?.unwrap();
+  ///     println!("{:?}", page_info);
+  ///     Ok(())
+  ///   })?;
   ///
   ///   Ok(())
   /// }
   /// ```
   fn root(&self) -> PgId;
 
-  /// Writable returns whether the bucket is writable.
-  fn is_writeable(&self) -> bool;
+  /// Returns whether the bucket is writable.
+  ///
+  /// ```rust
+  /// use bbolt_rs::*;
+  ///
+  /// fn main() -> Result<()> {
+  ///   let mut db = Bolt::new_mem()?;
+  ///
+  ///   db.update(|mut tx| {
+  ///     let b = tx.create_bucket_if_not_exists("test")?;
+  ///     assert_eq!(true, b.writable());
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   db.view(|tx| {
+  ///     let b = tx.bucket("test").unwrap();
+  ///     assert_eq!(false, b.writable());
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   Ok(())
+  /// }
+  /// ```
+  fn writable(&self) -> bool;
 
-  /// Cursor creates a cursor associated with the bucket.
+  /// Creates a cursor associated with the bucket.
+  ///
+  /// ```rust
+  /// use bbolt_rs::*;
+  ///
+  /// fn main() -> Result<()> {
+  ///   let mut db = Bolt::new_mem()?;
+  ///
+  ///   db.update(|mut tx| {
+  ///     let mut b = tx.create_bucket_if_not_exists("test")?;
+  ///     b.put("key", "value")?;
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   db.view(|tx| {
+  ///     let b = tx.bucket("test").unwrap();
+  ///     let mut c = b.cursor();
+  ///     let first = c.first();
+  ///     assert_eq!(Some((b"key".as_slice(), Some(b"value".as_slice()))), first);
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   Ok(())
+  /// }
+  /// ```
   fn cursor(&self) -> CursorImpl<'tx>;
 
-  /// Bucket retrieves a nested bucket by name.
+  /// Retrieves a nested bucket by name.
+  ///
   /// Returns None if the bucket does not exist.
+  ///
+  /// ```rust
+  /// use bbolt_rs::*;
+  ///
+  /// fn main() -> Result<()> {
+  ///   let mut db = Bolt::new_mem()?;
+  ///
+  ///   db.update(|mut tx| {
+  ///     let mut b = tx.create_bucket_if_not_exists("test")?;
+  ///     let mut sub = b.create_bucket_if_not_exists("sub")?;
+  ///     sub.put("key", "value")?;
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   db.view(|tx| {
+  ///     let b = tx.bucket("test").unwrap();
+  ///     assert_eq!(true, b.bucket("sub").is_some());
+  ///     assert_eq!(false, b.bucket("no bucket").is_some());
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   Ok(())
+  /// }
+  /// ```
   fn bucket<T: AsRef<[u8]>>(&self, name: T) -> Option<BucketImpl<'tx>>;
 
-  /// Get retrieves the value for a key in the bucket.
+  /// Retrieves the value for a key in the bucket.
+  ///
   /// Returns None if the key does not exist or if the key is a nested bucket.
+  ///
+  /// ```rust
+  /// use bbolt_rs::*;
+  ///
+  /// fn main() -> Result<()> {
+  ///   let mut db = Bolt::new_mem()?;
+  ///
+  ///   db.update(|mut tx| {
+  ///     let mut b = tx.create_bucket_if_not_exists("test")?;
+  ///     b.put("key", "value")?;
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   db.view(|tx| {
+  ///     let b = tx.bucket("test").unwrap();
+  ///     let get = b.get("key");
+  ///     assert_eq!(Some(b"value".as_slice()), get);
+  ///     let get = b.get("no value");
+  ///     assert_eq!(None, get);
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   Ok(())
+  /// }
+  /// ```
   fn get<T: AsRef<[u8]>>(&self, key: T) -> Option<&[u8]>;
 
-  /// Sequence returns the current integer for the bucket without incrementing it.
+  /// Returns the current integer for the bucket without incrementing it.
+  ///
+  /// ```rust
+  /// use bbolt_rs::*;
+  ///
+  /// fn main() -> Result<()> {
+  ///   let mut db = Bolt::new_mem()?;
+  ///
+  ///   db.update(|mut tx| {
+  ///     let mut b = tx.create_bucket_if_not_exists("test")?;
+  ///     b.put("key", "value")?;
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   db.view(|tx| {
+  ///     let b = tx.bucket("test").unwrap();
+  ///     let seq = b.sequence();
+  ///     assert_eq!(0, seq);
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   Ok(())
+  /// }
+  /// ```
   fn sequence(&self) -> u64;
 
-  /// ForEach executes a function for each key/value pair in a bucket.
-  /// Because ForEach uses a Cursor, the iteration over keys is in lexicographical order.
+  /// Executes a function for each key/value pair in a bucket.
+  /// Because this uses a [`crate::CursorApi`], the iteration over keys is in lexicographical order.
+  ///
   /// If the provided function returns an error then the iteration is stopped and
-  /// the error is returned to the caller. The provided function must not modify
-  /// the bucket; this will result in undefined behavior.
+  /// the error is returned to the caller.
+  ///
+  /// ```rust
+  /// use bbolt_rs::*;
+  ///
+  /// fn main() -> Result<()> {
+  ///   let mut db = Bolt::new_mem()?;
+  ///
+  ///   db.update(|mut tx| {
+  ///     let mut b = tx.create_bucket_if_not_exists("test")?;
+  ///     b.put("key1", "value1")?;
+  ///     b.put("key2", "value2")?;
+  ///     b.put("key3", "value3")?;
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   db.view(|tx| {
+  ///     let b = tx.bucket("test").unwrap();
+  ///     b.for_each(|k,v| {
+  ///      println!("{:?}, {:?}", k, v);
+  ///      Ok(())
+  ///     })?;
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   Ok(())
+  /// }
+  /// ```
   fn for_each<F: FnMut(&'tx [u8], Option<&'tx [u8]>) -> crate::Result<()>>(
     &self, f: F,
   ) -> crate::Result<()>;
 
-  /// ForEach executes a function for each bucket in a bucket.
-  /// Because ForEach uses a Cursor, the iteration over keys is in lexicographical order.
+  /// Executes a function for each bucket in a bucket.
+  /// Because this function uses a [`crate::CursorApi`], the iteration over keys is in lexicographical order.
+  ///
   /// If the provided function returns an error then the iteration is stopped and
-  /// the error is returned to the caller. The provided function must not modify
-  /// the bucket; this will result in undefined behavior.
+  /// the error is returned to the caller.
+  ///
+  /// ```rust
+  /// use bbolt_rs::*;
+  ///
+  /// fn main() -> Result<()> {
+  ///   let mut db = Bolt::new_mem()?;
+  ///
+  ///   db.update(|mut tx| {
+  ///     let mut b = tx.create_bucket_if_not_exists("test")?;
+  ///     let _ = b.create_bucket_if_not_exists("sub1")?;
+  ///     let _ = b.create_bucket_if_not_exists("sub2")?;
+  ///     let _ = b.create_bucket_if_not_exists("sub3")?;
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   db.view(|tx| {
+  ///     let b = tx.bucket("test").unwrap();
+  ///     b.for_each_bucket(|k| {
+  ///      println!("{:?}", k);
+  ///      Ok(())
+  ///     })?;
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   Ok(())
+  /// }
+  /// ```
   fn for_each_bucket<F: FnMut(&'tx [u8]) -> crate::Result<()>>(&self, f: F) -> crate::Result<()>;
 
-  /// Stats returns stats on a bucket.
+  /// Returns stats on a bucket.
+  ///
+  /// ```rust
+  /// use bbolt_rs::*;
+  ///
+  /// fn main() -> Result<()> {
+  ///   let mut db = Bolt::new_mem()?;
+  ///
+  ///   db.update(|mut tx| {
+  ///     let mut b = tx.create_bucket_if_not_exists("test")?;
+  ///     b.put("key1", "value1")?;
+  ///     b.put("key2", "value2")?;
+  ///     b.put("key3", "value3")?;
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   db.view(|tx| {
+  ///     let b = tx.bucket("test").unwrap();
+  ///     let stats = b.stats();
+  ///     assert_eq!(3, stats.key_n());
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   Ok(())
+  /// }
+  /// ```
   fn stats(&self) -> BucketStats;
 }
 
 /// RW Bucket API
 pub trait BucketRwApi<'tx>: BucketApi<'tx> {
+
+  /// Retrieves a nested mutable bucket by name.
+  ///
+  /// Returns None if the bucket does not exist.
+  ///
+  /// ```rust
+  /// use bbolt_rs::*;
+  ///
+  /// fn main() -> Result<()> {
+  ///   let mut db = Bolt::new_mem()?;
+  ///
+  ///   db.update(|mut tx| {
+  ///     let mut b = tx.create_bucket_if_not_exists("test")?;
+  ///     let _ = b.create_bucket_if_not_exists("sub")?;
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   db.update(|mut tx | {
+  ///     let mut b = tx.bucket_mut("test").unwrap();
+  ///     let mut sub = b.bucket_mut("sub").unwrap();
+  ///     sub.put("key1", "value1")?;
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   Ok(())
+  /// }
+  /// ```
   fn bucket_mut<T: AsRef<[u8]>>(&mut self, name: T) -> Option<impl BucketRwApi<'tx>>;
 
-  /// CreateBucket creates a new bucket at the given key and returns the new bucket.
+  /// Creates a new bucket at the given key and returns the new bucket.
+  ///
   /// Returns an error if the key already exists, if the bucket name is blank, or if the bucket name is too long.
+  ///
+  /// ```rust
+  /// use bbolt_rs::*;
+  ///
+  /// fn main() -> Result<()> {
+  ///   let mut db = Bolt::new_mem()?;
+  ///
+  ///   db.update(|mut tx| {
+  ///     let mut b = tx.create_bucket("test")?;
+  ///     let _ = b.create_bucket("sub")?;
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   db.view(|tx| {
+  ///     let b = tx.bucket("test").unwrap();
+  ///     let _ = b.bucket("sub").unwrap();
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   Ok(())
+  /// }
+  /// ```
   fn create_bucket<T: AsRef<[u8]>>(&mut self, key: T) -> crate::Result<impl BucketRwApi<'tx>>;
 
   /// CreateBucketIfNotExists creates a new bucket if it doesn't already exist and returns a reference to it.
+  ///
   /// Returns an error if the bucket name is blank, or if the bucket name is too long.
+  ///
+  /// ```rust
+  /// use bbolt_rs::*;
+  ///
+  /// fn main() -> Result<()> {
+  ///   let mut db = Bolt::new_mem()?;
+  ///
+  ///   db.update(|mut tx| {
+  ///     let mut b = tx.create_bucket_if_not_exists("test")?;
+  ///     let _ = b.create_bucket_if_not_exists("sub")?;
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   db.view(|tx| {
+  ///     let b = tx.bucket("test").unwrap();
+  ///     let _ = b.bucket("sub").unwrap();
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   Ok(())
+  /// }
+  /// ```
   fn create_bucket_if_not_exists<T: AsRef<[u8]>>(
     &mut self, key: T,
   ) -> crate::Result<impl BucketRwApi<'tx>>;
 
   /// Cursor creates a cursor associated with the bucket.
-  /// The cursor is only valid as long as the transaction is open.
+  ///
+  /// ```rust
+  /// use bbolt_rs::*;
+  ///
+  /// fn main() -> Result<()> {
+  ///   let mut db = Bolt::new_mem()?;
+  ///
+  ///   db.update(|mut tx| {
+  ///     let mut b = tx.create_bucket_if_not_exists("test")?;
+  ///     b.put("key1", "value1")?;
+  ///     b.put("key2", "value2")?;
+  ///     b.put("key3", "value3")?;
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   db.update(|mut tx| {
+  ///     let mut b = tx.bucket_mut("test").unwrap();
+  ///     let mut c = b.cursor_mut();
+  ///     c.seek("key2");
+  ///     c.delete()?;
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   db.view(|tx| {
+  ///     let b = tx.bucket("test").unwrap();
+  ///     let mut c = b.cursor();
+  ///     let seek = c.seek("key2");
+  ///     assert_eq!(Some((b"key3".as_slice(), Some(b"value3".as_slice()))), seek);
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   Ok(())
+  /// }
+  /// ```
   fn cursor_mut(&self) -> impl CursorRwApi<'tx>;
 
-  /// DeleteBucket deletes a bucket at the given key.
+  /// Deletes a bucket at the given key.
+  ///
   /// Returns an error if the bucket does not exist, or if the key represents a non-bucket value.
+  ///
+  /// ```rust
+  /// use bbolt_rs::*;
+  ///
+  /// fn main() -> Result<()> {
+  ///   let mut db = Bolt::new_mem()?;
+  ///
+  ///   db.update(|mut tx| {
+  ///     let mut b = tx.create_bucket_if_not_exists("test")?;
+  ///     let _ = b.create_bucket_if_not_exists("sub")?;
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   db.update(|mut tx| {
+  ///     let mut b = tx.bucket_mut("test").unwrap();
+  ///     b.delete_bucket("sub")?;
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   db.view(|tx| {
+  ///     let b = tx.bucket("test").unwrap();
+  ///     assert_eq!(false, b.bucket("sub").is_some());
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   Ok(())
+  /// }
+  /// ```
   fn delete_bucket<T: AsRef<[u8]>>(&mut self, key: T) -> crate::Result<()>;
 
-  /// Put sets the value for a key in the bucket.
+  /// Sets the value for a key in the bucket.
+  ///
   /// If the key exist then its previous value will be overwritten.
+  ///
   /// Returns an error if the key is blank, if the key is too large, or if the value is too large.
+  ///
+  /// ```rust
+  /// use bbolt_rs::*;
+  ///
+  /// fn main() -> Result<()> {
+  ///   let mut db = Bolt::new_mem()?;
+  ///
+  ///   db.update(|mut tx| {
+  ///     let mut b = tx.create_bucket_if_not_exists("test")?;
+  ///     b.put("key1", "value1")?;
+  ///     b.put("key2", "value2")?;
+  ///     b.put("key3", "value3")?;
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   db.update(|mut tx| {
+  ///     let mut b = tx.create_bucket_if_not_exists("test")?;
+  ///     b.put("key2", "new value")?;
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   db.view(|tx| {
+  ///     let b = tx.bucket("test").unwrap();
+  ///     let get = b.get("key1");
+  ///     assert_eq!(Some(b"value1".as_slice()), get);
+  ///     let get = b.get("key2");
+  ///     assert_eq!(Some(b"new value".as_slice()), get);
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   Ok(())
+  /// }
+  /// ```
   fn put<T: AsRef<[u8]>, U: AsRef<[u8]>>(&mut self, key: T, data: U) -> crate::Result<()>;
 
-  /// Delete removes a key from the bucket.
+  /// Removes a key from the bucket.
+  ///
   /// If the key does not exist then nothing is done.
+  ///
+  /// ```rust
+  /// use bbolt_rs::*;
+  ///
+  /// fn main() -> Result<()> {
+  ///   let mut db = Bolt::new_mem()?;
+  ///
+  ///   db.update(|mut tx| {
+  ///     let mut b = tx.create_bucket_if_not_exists("test")?;
+  ///     b.put("key1", "value1")?;
+  ///     b.put("key2", "value2")?;
+  ///     b.put("key3", "value3")?;
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   db.update(|mut tx| {
+  ///     let mut b = tx.create_bucket_if_not_exists("test")?;
+  ///     b.delete("key2")?;
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   db.view(|tx| {
+  ///     let b = tx.bucket("test").unwrap();
+  ///     let get = b.get("key1");
+  ///     assert_eq!(Some(b"value1".as_slice()), get);
+  ///     let get = b.get("key2");
+  ///     assert_eq!(false, get.is_some());
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   Ok(())
+  /// }
+  /// ```
   fn delete<T: AsRef<[u8]>>(&mut self, key: T) -> crate::Result<()>;
 
-  /// SetSequence updates the sequence number for the bucket.
+  /// Updates the sequence number for the bucket.
+  ///
+  /// ```rust
+  /// use bbolt_rs::*;
+  ///
+  /// fn main() -> Result<()> {
+  ///   let mut db = Bolt::new_mem()?;
+  ///
+  ///   db.update(|mut tx| {
+  ///     let mut b = tx.create_bucket_if_not_exists("test")?;
+  ///     b.set_sequence(42)?;
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   db.view(|tx| {
+  ///     let b = tx.bucket("test").unwrap();
+  ///     assert_eq!(42, b.sequence());
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   Ok(())
+  /// }
+  /// ```
   fn set_sequence(&mut self, v: u64) -> crate::Result<()>;
 
-  /// NextSequence returns an autoincrementing integer for the bucket.
+  /// Returns the auto-incremented integer for the bucket.
+  ///
+  /// ```rust
+  /// use bbolt_rs::*;
+  ///
+  /// fn main() -> Result<()> {
+  ///   let mut db = Bolt::new_mem()?;
+  ///
+  ///   db.update(|mut tx| {
+  ///     let mut b = tx.create_bucket_if_not_exists("test")?;
+  ///     b.set_sequence(42)?;
+  ///     assert_eq!(43, b.next_sequence()?);
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   Ok(())
+  /// }
+  /// ```
   fn next_sequence(&mut self) -> crate::Result<u64>;
 
   /// Set the fill percent of the bucket
+  ///
+  /// ```rust
+  /// use bbolt_rs::{BucketApi, BucketRwApi, Bolt,CursorApi, DbApi, DbRwAPI, TxApi, TxRwRefApi};
+  ///
+  /// fn main() -> bbolt_rs::Result<()> {
+  ///   let mut db = Bolt::new_mem()?;
+  ///
+  ///   db.update(|mut tx| {
+  ///     let mut b = tx.create_bucket_if_not_exists("test")?;
+  ///     b.set_fill_percent(0.90);
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   Ok(())
+  /// }
+  /// ```
   fn set_fill_percent(&mut self, fill_percent: f64);
 }
 
@@ -158,7 +620,7 @@ impl<'tx> BucketApi<'tx> for BucketImpl<'tx> {
     }
   }
 
-  fn is_writeable(&self) -> bool {
+  fn writable(&self) -> bool {
     match self {
       BucketImpl::R(r) => r.is_writeable(),
       BucketImpl::RW(rw) => rw.is_writeable(),
@@ -232,7 +694,7 @@ impl<'tx> BucketApi<'tx> for BucketRwImpl<'tx> {
     self.b.root()
   }
 
-  fn is_writeable(&self) -> bool {
+  fn writable(&self) -> bool {
     self.b.is_writeable()
   }
 
@@ -319,7 +781,8 @@ impl<'tx> BucketRwApi<'tx> for BucketRwImpl<'tx> {
 }
 
 /// BucketStats records statistics about resources used by a bucket.
-#[derive(Copy, Clone, Eq, PartialEq, Default, Debug)]
+#[derive(Copy, Clone, Eq, PartialEq, Default, Debug, CopyGetters)]
+#[getset(get_copy = "pub")]
 pub struct BucketStats {
   // Page count statistics.
   /// number of logical branch pages
@@ -1376,7 +1839,7 @@ mod tests {
     db.update(|tx| {
       let b = tx.bucket(b"widgets").unwrap();
       let mut c = b.cursor();
-      if let Some((k, Some(v))) = c.first() {
+      if let Some((_k, Some(_v))) = c.first() {
         todo!("We don't allow modifying values in place for this first version");
       }
       Ok(())

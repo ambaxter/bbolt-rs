@@ -1,11 +1,16 @@
 bbolt-rs
 =====
 
-bbolt-rs is a work in progress implementation of the [etcd-io/bbolt](https://github.com/etcd-io/bbolt) database in Rust. It successfully reads and commits, but it has many rough edges.
+bbolt-rs is a work in progress implementation of the [etcd-io/bbolt](https://github.com/etcd-io/bbolt) database in Rust.
+It successfully reads and commits, but it has some rough edges.
 
-I'm rather pleased with my work as I believe the public API I've created has substantially fewer footguns than the Go code has. The database can't be dropped until all sessions are dropped. No resources from the transaction can escape the transaction. You can't deadlock the database by opening up a RW transaction and then opening up a R transaction right afterwards.
+I'm rather pleased with my work as I believe the public API I've created has substantially fewer footguns than the Go code has.
+* The database can't be dropped until all sessions are dropped.
+* No resources from the transaction can escape the transaction.
+* You can't deadlock the database by opening up a RW transaction and then opening up a R transaction right afterwards.
 
-It also is interesting that, despite the increased memory usage, this code is about 40% faster in a synthetic large transaction than the equivalent Go code. Further benchmarking is postponed until the database is fully feature complete and we can have a proper duel.
+It also is interesting that, despite the increased memory usage, this code is about 40% faster in a synthetic large transaction than the equivalent Go code.
+Further benchmarking is postponed until the database is fully feature complete and we can have a proper duel (in progress!).
 
 Lastly, I must express my eternal gratitude to the bbolt developers who have created such a simple and easy to understand project to learn from.
 
@@ -30,7 +35,7 @@ Currently not supported:
 
 ### Before Release 1.38
 - [ ] Most of the db tests
-- [ ] Most of the examples
+- [x] Most of the examples
 - [ ] Node leaf tests
 - [x] All stats 
 - [x] db batch
@@ -83,7 +88,6 @@ Currently not supported:
 - [ ] test_tx_copy_file
 - [ ] test_tx_copy_file_error_meta
 - [ ] test_tx_copy_file_error_normal
-- [ ] example_tx_rollback
 - [ ] example_tx_copy_file
 - [ ] test_tx_truncate_before_write
 
@@ -132,9 +136,6 @@ Currently not supported:
 - [ ] test_db_batch_full
 - [ ] test_db_batch_time
 - [ ] test_dbunmap
-- [ ] example_db_update
-- [ ] example_db_view
-- [ ] example_db_begin
 - [ ] benchmark_dbbatch_automatic
 - [ ] benchmark_dbbatch_single
 - [ ] benchmark_dbbatch_manual10x100
@@ -150,16 +151,11 @@ Currently not supported:
 - [ ] test_cursor_quick_check_reverse
 - [ ] test_cursor_quick_check_buckets_only
 - [ ] test_cursor_quick_check_buckets_only_reverse
-- [ ] example_cursor
-- [ ] example_cursor_reverse
 
 ### src/bucket.rs
 - [ ] test_bucket_put_single
 - [ ] test_bucket_put_multiple
 - [ ] test_bucket_delete_quick
-- [ ] example_bucket_put
-- [ ] example_bucket_delete
-- [ ] example_bucket_for_each
 
 ## Notstarted
 - [ ] tx_stats_test.go

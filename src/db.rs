@@ -17,7 +17,7 @@ use crate::freelist::{Freelist, MappedFreeListPage};
 use crate::tx::{
   TxClosingState, TxIApi, TxImpl, TxRef, TxRwApi, TxRwCell, TxRwImpl, TxRwRef, TxStats,
 };
-use crate::{Error, TxApi};
+use crate::{Error, TxApi, TxRwRefApi};
 use aligners::{alignment, AlignedBytes};
 use anyhow::anyhow;
 use fs4::FileExt;
@@ -44,6 +44,7 @@ where
   Self: Sized,
 {
   /// Begin starts a new transaction.
+  ///
   /// Multiple read-only transactions can be used concurrently but only one
   /// write transaction can be used at a time. Starting multiple write transactions
   /// will cause the calls to block and be serialized until the current write
@@ -62,9 +63,9 @@ where
   /// else the database will not reclaim old pages.
   ///
   /// ```rust
-  /// use bbolt_rs::{BucketApi, BucketRwApi, Bolt, DbApi, DbRwAPI, TxApi, TxRwRefApi};
+  /// use bbolt_rs::*;
   ///
-  /// fn main() -> bbolt_rs::Result<()> {
+  /// fn main() -> Result<()> {
   ///   let mut db = Bolt::new_mem()?;
   ///
   ///   db.update(|mut tx| {
@@ -95,9 +96,9 @@ where
   /// Any error that is returned from the function is returned from the View() method.
   ///
   /// ```rust
-  /// use bbolt_rs::{BucketApi, BucketRwApi, Bolt, DbApi, DbRwAPI, TxApi, TxRwRefApi};
+  /// use bbolt_rs::*;
   ///
-  /// fn main() -> bbolt_rs::Result<()> {
+  /// fn main() -> Result<()> {
   ///   let mut db = Bolt::new_mem()?;
   ///
   ///   db.update(|mut tx| {
@@ -118,19 +119,21 @@ where
   fn view<'tx, F: Fn(TxRef<'tx>) -> crate::Result<()>>(&'tx self, f: F) -> crate::Result<()>;
 
   /// Stats retrieves ongoing performance stats for the database.
+  ///
   /// This is only updated when a transaction closes.
   fn stats(&self) -> Arc<DbStats>;
 
   /// Close releases all database resources.
+  ///
   /// It will block waiting for any open transactions to finish
   /// before closing the database and returning.
   ///
   /// Once closed, other instances return [Error::DatabaseNotOpen]
   ///
   /// ```rust
-  /// use bbolt_rs::{BucketApi, BucketRwApi, Bolt, DbApi, DbRwAPI, TxApi, TxRwRefApi, Error};
+  /// use bbolt_rs::*;
   ///
-  /// fn main() -> bbolt_rs::Result<()> {
+  /// fn main() -> Result<()> {
   ///   let mut db = Bolt::new_mem()?;
   ///   let cloned = db.clone();
   ///   db.update(|mut tx| {
@@ -149,7 +152,7 @@ where
 
 /// RW DB API
 pub trait DbRwAPI: DbApi {
-  /// Begin starts a new transaction.
+  /// Starts a new transaction.
   /// Multiple read-only transactions can be used concurrently but only one
   /// write transaction can be used at a time. Starting multiple write transactions
   /// will cause the calls to block and be serialized until the current write
@@ -164,10 +167,12 @@ pub trait DbRwAPI: DbApi {
   /// needed, you might want to set BoltOptions.initial_map_size to a large enough value
   /// to avoid potential blocking of write transaction.
   ///
-  /// ```rust
-  /// use bbolt_rs::{BucketApi, BucketRwApi, Bolt, DbApi, DbRwAPI, TxApi, TxRwApi, TxRwRefApi};
+  /// Dropping the transaction will cause it to rollback.
   ///
-  /// fn main() -> bbolt_rs::Result<()> {
+  /// ```rust
+  /// use bbolt_rs::*;
+  ///
+  /// fn main() -> Result<()> {
   ///   let mut db = Bolt::new_mem()?;
   ///
   ///   let mut tx = db.begin_rw()?;
@@ -195,16 +200,17 @@ pub trait DbRwAPI: DbApi {
   #[cfg(feature = "try-begin")]
   fn try_begin_rw_until(&self, instant: Instant) -> crate::Result<Option<impl TxRwApi>>;
 
-  /// Update executes a function within the context of a read-write managed transaction.
+  /// Executes a function within the context of a read-write managed transaction.
+  ///
   /// If no error is returned from the function then the transaction is committed.
   /// If an error is returned then the entire transaction is rolled back.
   /// Any error that is returned from the function or returned from the commit is
   /// returned from the Update() method.
   ///
   /// ```rust
-  /// use bbolt_rs::{BucketApi, BucketRwApi, Bolt, DbApi, DbRwAPI, TxApi, TxRwRefApi};
+  /// use bbolt_rs::*;
   ///
-  /// fn main() -> bbolt_rs::Result<()> {
+  /// fn main() -> Result<()> {
   ///   let mut db = Bolt::new_mem()?;
   ///
   ///   db.update(|mut tx| {
@@ -226,10 +232,28 @@ pub trait DbRwAPI: DbApi {
     &'tx mut self, f: F,
   ) -> crate::Result<()>;
 
-  /// ```rust
-  /// use bbolt_rs::{BucketApi, BucketRwApi, Bolt, DbApi, DbRwAPI, TxApi, TxRwRefApi};
+  /// Calls a function as part of a batch. It behaves similar to Update,
+  /// except:
   ///
-  /// fn main() -> bbolt_rs::Result<()> {
+  /// 1. concurrent Batch calls can be combined into a single Bolt
+  /// transaction.
+  ///
+  /// 2. the function passed to Batch may be called multiple times,
+  /// regardless of whether it returns error or not.
+  ///
+  /// This means that Batch function side effects must be idempotent and
+  /// take permanent effect only after a successful return is seen in
+  /// caller.
+  ///
+  /// The maximum batch size and delay can be adjusted with MaxBatchSize
+  /// and MaxBatchDelay, respectively.
+  ///
+  /// Batch is only useful when there are multiple threads calling it.
+  ///
+  /// ```rust
+  /// use bbolt_rs::*;
+  ///
+  /// fn main() -> Result<()> {
   ///   let mut db = Bolt::new_mem()?;
   ///
   ///   db.batch(|mut tx| {
@@ -251,14 +275,14 @@ pub trait DbRwAPI: DbApi {
   where
     F: FnMut(&mut TxRwRef) -> crate::Result<()> + Send + Sync + Clone + 'static;
 
-  /// Sync executes fdatasync() against the database file handle.
+  /// Executes fdatasync() against the database file handle.
   ///
   /// This is not necessary under normal operation, however, if you use NoSync
   /// then it allows you to force the database file to sync against the disk.
   /// ```rust
-  /// use bbolt_rs::{BucketApi, BucketRwApi, Bolt, DbApi, DbRwAPI, TxApi, TxRwRefApi};
+  /// use bbolt_rs::*;
   ///
-  /// fn main() -> bbolt_rs::Result<()> {
+  /// fn main() -> Result<()> {
   ///   let mut db = Bolt::new_mem()?;
   ///
   ///   db.batch(|mut tx| {
@@ -299,11 +323,11 @@ pub struct DbStats {
 }
 
 impl DbStats {
-  pub fn get_tx_stats(&self) -> &TxStats {
+  pub fn tx_stats(&self) -> &TxStats {
     &self.tx_stats
   }
 
-  pub fn get_free_page_n(&self) -> i64 {
+  pub fn free_page_n(&self) -> i64 {
     self.free_page_n.load(Ordering::Acquire)
   }
 
@@ -311,7 +335,7 @@ impl DbStats {
     self.free_page_n.fetch_add(delta, Ordering::AcqRel);
   }
 
-  pub fn get_pending_page_n(&self) -> i64 {
+  pub fn pending_page_n(&self) -> i64 {
     self.pending_page_n.load(Ordering::Acquire)
   }
 
@@ -319,7 +343,7 @@ impl DbStats {
     self.pending_page_n.fetch_add(delta, Ordering::AcqRel);
   }
 
-  pub fn get_free_alloc(&self) -> i64 {
+  pub fn free_alloc(&self) -> i64 {
     self.free_alloc.load(Ordering::Acquire)
   }
 
@@ -327,7 +351,7 @@ impl DbStats {
     self.free_alloc.fetch_add(delta, Ordering::AcqRel);
   }
 
-  pub fn get_free_list_in_use(&self) -> i64 {
+  pub fn free_list_in_use(&self) -> i64 {
     self.free_list_in_use.load(Ordering::Acquire)
   }
 
@@ -335,7 +359,7 @@ impl DbStats {
     self.free_list_in_use.fetch_add(delta, Ordering::AcqRel);
   }
 
-  pub fn get_tx_n(&self) -> i64 {
+  pub fn tx_n(&self) -> i64 {
     self.tx_n.load(Ordering::Acquire)
   }
 
@@ -343,13 +367,13 @@ impl DbStats {
     self.tx_n.fetch_add(delta, Ordering::AcqRel);
   }
 
-  pub fn get_open_tx_n(&self) -> i64 {
+  pub fn open_tx_n(&self) -> i64 {
     self.open_tx_n.load(Ordering::Acquire)
   }
 
   pub fn sub(&self, rhs: &DbStats) -> DbStats {
     let diff = self.clone();
-    diff.inc_tx_n(-rhs.get_tx_n());
+    diff.inc_tx_n(-rhs.tx_n());
     diff.tx_stats.sub_assign(&rhs.tx_stats);
     diff
   }
@@ -359,12 +383,12 @@ impl Clone for DbStats {
   fn clone(&self) -> Self {
     DbStats {
       tx_stats: self.tx_stats.clone(),
-      free_page_n: self.get_free_page_n().into(),
-      pending_page_n: self.get_pending_page_n().into(),
-      free_alloc: self.get_free_alloc().into(),
-      free_list_in_use: self.get_free_list_in_use().into(),
-      tx_n: self.get_tx_n().into(),
-      open_tx_n: self.get_open_tx_n().into(),
+      free_page_n: self.free_page_n().into(),
+      pending_page_n: self.pending_page_n().into(),
+      free_alloc: self.free_alloc().into(),
+      free_list_in_use: self.free_list_in_use().into(),
+      tx_n: self.tx_n().into(),
+      open_tx_n: self.open_tx_n().into(),
     }
   }
 }
@@ -1924,7 +1948,6 @@ impl DbApi for Bolt {
     let tx = self.begin_tx()?;
     let tx_ref = tx.get_ref();
     let r = f(tx_ref);
-    let _ = tx.rollback();
     r
   }
 
@@ -2205,9 +2228,9 @@ mod test {
       Ok(())
     })?;
     let stats = db.stats();
-    assert_eq!(2, stats.tx_stats.get_page_count());
-    assert_eq!(0, stats.get_free_page_n());
-    assert_eq!(2, stats.get_pending_page_n());
+    assert_eq!(2, stats.tx_stats.page_count());
+    assert_eq!(0, stats.free_page_n());
+    assert_eq!(2, stats.pending_page_n());
     Ok(())
   }
 
@@ -2226,8 +2249,8 @@ mod test {
     b.tx_stats.inc_page_count(10);
     b.inc_free_page_n(14);
     let diff = b.sub(&a);
-    assert_eq!(7, diff.tx_stats.get_page_count());
-    assert_eq!(14, diff.get_free_page_n());
+    assert_eq!(7, diff.tx_stats.page_count());
+    assert_eq!(14, diff.free_page_n());
   }
 
   #[test]

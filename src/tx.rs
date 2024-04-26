@@ -14,7 +14,7 @@ use crate::common::pool::SyncReusable;
 use crate::common::self_owned::SelfOwned;
 use crate::common::tree::{MappedBranchPage, TreePage};
 use crate::common::{BVec, HashMap, PgId, SplitRef, TxId};
-use crate::cursor::{CursorImpl, CursorRwIApi, CursorRwImpl, InnerCursor};
+use crate::cursor::{CursorImpl, InnerCursor};
 use crate::db::{AllocateResult, DbIApi, DbMutIApi, DbShared};
 use crate::tx::check::TxICheck;
 use crate::TxCheck;
@@ -38,34 +38,177 @@ use std::time::{Duration, Instant};
 
 /// Read-only transaction API
 pub trait TxApi<'tx>: TxCheck<'tx> {
-  /// ID returns the transaction id.
+  /// Returns the transaction id.
+  ///
+  /// ```rust
+  /// use bbolt_rs::{BucketApi, BucketRwApi, Bolt, DbApi, DbRwAPI, TxApi, TxRwRefApi};
+  ///
+  /// fn main() -> bbolt_rs::Result<()> {
+  ///   let mut db = Bolt::new_mem()?;
+  ///
+  ///   db.view(|tx| {
+  ///     assert_eq!(1, tx.id().0);
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   db.update(|mut tx| {
+  ///     assert_eq!(2, tx.id().0);
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   db.view(|tx| {
+  ///     assert_eq!(2, tx.id().0);
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   Ok(())
+  /// }
+  /// ```
   fn id(&self) -> TxId;
 
-  /// Size returns current database size in bytes as seen by this transaction.
+  /// Returns current database size in bytes as seen by this transaction.
+  ///
+  /// ```rust
+  /// use bbolt_rs::{BucketApi, BucketRwApi, Bolt,CursorApi, DbApi, DbRwAPI, TxApi, TxRwRefApi};
+  ///
+  /// fn main() -> bbolt_rs::Result<()> {
+  ///   let mut db = Bolt::new_mem()?;
+  ///
+  ///   db.update(|mut tx| {
+  ///     let mut b = tx.create_bucket_if_not_exists("test")?;
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   db.view(|tx| {
+  ///     assert_eq!(24576, tx.size());
+  ///     Ok(())
+  ///   })?;
+  ///   Ok(())
+  /// }
+  /// ```
   fn size(&self) -> u64;
 
-  /// Writable returns whether the transaction can perform write operations.
-  fn writeable(&self) -> bool;
+  /// Returns whether the transaction can perform write operations.
+  ///
+  /// ```rust
+  /// use bbolt_rs::{BucketApi, BucketRwApi, Bolt, DbApi, DbRwAPI, TxApi, TxRwRefApi};
+  ///
+  /// fn main() -> bbolt_rs::Result<()> {
+  ///   let mut db = Bolt::new_mem()?;
+  ///
+  ///   db.update(|mut tx| {
+  ///     assert_eq!(true, tx.writable());
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   db.view(|tx| {
+  ///     assert_eq!(false, tx.writable());
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   Ok(())
+  /// }
+  /// ```
+  fn writable(&self) -> bool;
 
-  /// Cursor creates a cursor associated with the root bucket.
+  /// Creates a cursor associated with the root bucket.
   /// All items in the cursor will return None value because all root bucket keys point to buckets.
+  ///
+  /// ```rust
+  /// use bbolt_rs::{BucketApi, BucketRwApi, Bolt, CursorApi, DbApi, DbRwAPI, TxApi, TxRwRefApi};
+  ///
+  /// fn main() -> bbolt_rs::Result<()> {
+  ///   let mut db = Bolt::new_mem()?;
+  ///
+  ///   db.update(|mut tx| {
+  ///     tx.create_bucket_if_not_exists("test1")?;
+  ///     tx.create_bucket_if_not_exists("test2")?;
+  ///     tx.create_bucket_if_not_exists("test3")?;
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   db.view(|tx| {
+  ///     let mut c = tx.cursor();
+  ///     assert_eq!(Some((b"test1".as_slice(), None)), c.first());
+  ///     assert_eq!(Some((b"test2".as_slice(), None)), c.next());
+  ///     assert_eq!(Some((b"test3".as_slice(), None)), c.next());
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   Ok(())
+  /// }
+  /// ```
   fn cursor(&self) -> CursorImpl<'tx>;
 
-  /// Stats retrieves a copy of the current transaction statistics.
+  /// Retrieves a copy of the current transaction statistics.
   fn stats(&self) -> Arc<TxStats>;
 
-  /// Bucket retrieves a bucket by name.
+  /// Retrieves a bucket by name.
   /// Returns None if the bucket does not exist.
+  ///
+  /// ```rust
+  /// use bbolt_rs::{BucketApi, BucketRwApi, Bolt, DbApi, DbRwAPI, TxApi, TxRwRefApi};
+  ///
+  /// fn main() -> bbolt_rs::Result<()> {
+  ///   let mut db = Bolt::new_mem()?;
+  ///
+  ///   db.update(|mut tx| {
+  ///     let mut b = tx.create_bucket_if_not_exists("test")?;
+  ///     b.put("key", "value")?;
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   db.view(|tx| {
+  ///     let b = tx.bucket("test").unwrap();
+  ///     assert_eq!(Some(b"value".as_slice()), b.get("key"));
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   Ok(())
+  /// }
+  /// ```
   fn bucket<T: AsRef<[u8]>>(&self, name: T) -> Option<BucketImpl<'tx>>;
 
+  /// Executes a function for each key/value pair in a bucket.
+  /// Because ForEach uses a Cursor, the iteration over keys is in lexicographical order.
+  ///
+  /// If the provided function returns an error then the iteration is stopped and
+  /// the error is returned to the caller.
+  ///
+  /// ```rust
+  /// use bbolt_rs::{BucketApi, BucketRwApi, Bolt,CursorApi, DbApi, DbRwAPI, TxApi, TxRwRefApi};
+  ///
+  /// fn main() -> bbolt_rs::Result<()> {
+  ///   let mut db = Bolt::new_mem()?;
+  ///
+  ///   db.update(|mut tx| {
+  ///     let mut b = tx.create_bucket_if_not_exists("test")?;
+  ///     b.put("key1", "value1")?;
+  ///     b.put("key2", "value2")?;
+  ///     b.put("key3", "value3")?;
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   db.view(|tx| {;
+  ///     tx.for_each(|bk,b| {
+  ///       b.for_each(|k, v| {
+  ///         println!("{:?}->{:?}, {:?}", bk, k, v);
+  ///         Ok(())
+  ///       })?;
+  ///      Ok(())
+  ///     })?;
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   Ok(())
+  /// }
+  /// ```
   fn for_each<F: FnMut(&[u8], BucketImpl<'tx>) -> crate::Result<()>>(
     &self, f: F,
   ) -> crate::Result<()>;
 
-  /// Rollback closes the transaction and ignores all previous updates.
-  fn rollback(self) -> crate::Result<()>;
-
-  /// Page returns page information for a given page number.
+  /// Returns page information for a given page number.
+  ///
   /// This is only safe for concurrent use when used by a writable transaction.
   /// ```rust
   /// use bbolt_rs::{BucketApi, BucketRwApi, Bolt, DbApi, DbRwAPI, TxApi, TxRwRefApi};
@@ -79,11 +222,13 @@ pub trait TxApi<'tx>: TxCheck<'tx> {
   ///     Ok(())
   ///   })?;
   ///
-  ///   let tx = db.begin()?;
-  ///   let b = tx.bucket("test").unwrap();
-  ///   let page_id = b.root();
-  ///   let page_info = tx.page(page_id)?.unwrap();
-  ///   println!("{:?}", page_info);
+  ///   db.view(|tx| {
+  ///     let b = tx.bucket("test").unwrap();
+  ///     let page_id = b.root();
+  ///     let page_info = tx.page(page_id)?.unwrap();
+  ///     println!("{:?}", page_info);
+  ///     Ok(())
+  ///   })?;
   ///
   ///   Ok(())
   /// }
@@ -93,29 +238,177 @@ pub trait TxApi<'tx>: TxCheck<'tx> {
 
 /// RW transaction API
 pub trait TxRwRefApi<'tx>: TxApi<'tx> {
-  /// Cursor creates a mutable cursor associated with the root bucket.
-  /// All items in the cursor will return None because all root bucket keys point to buckets.
-  fn cursor_mut(&mut self) -> CursorRwImpl<'tx>;
+  /// Closes the transaction and ignores all previous updates.
+  ///
+  /// ```rust
+  /// use bbolt_rs::{BucketApi, BucketRwApi, Bolt, DbApi, DbRwAPI, TxApi, TxRwRefApi};
+  ///
+  /// fn main() -> bbolt_rs::Result<()> {
+  ///   let mut db = Bolt::new_mem()?;
+  ///
+  ///   db.update(|mut tx| {
+  ///     let mut b = tx.create_bucket_if_not_exists("test")?;
+  ///     b.put("key", "value")?;
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   db.update(|mut tx| {
+  ///     let mut b = tx.bucket_mut("test").unwrap();
+  ///     b.put("key", "new value")?;
+  ///     tx.rollback()?;
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   db.view(|tx| {
+  ///     let b = tx.bucket("test").unwrap();
+  ///     assert_eq!(Some(b"value".as_slice()), b.get("key"));
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   Ok(())
+  /// }
+  /// ```
+  fn rollback(self) -> crate::Result<()>;
 
-  /// bucket_mut retrieves a mutable bucket by name.
+  /// Retrieves a mutable bucket by name.
+  ///
   /// Returns None if the bucket does not exist.
+  ///
+  /// ```rust
+  /// use bbolt_rs::{BucketApi, BucketRwApi, Bolt, DbApi, DbRwAPI, TxApi, TxRwRefApi};
+  ///
+  /// fn main() -> bbolt_rs::Result<()> {
+  ///   let mut db = Bolt::new_mem()?;
+  ///
+  ///   db.update(|mut tx| {
+  ///     let mut b = tx.create_bucket_if_not_exists("test")?;
+  ///     b.put("key", "value")?;
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   db.update(|mut tx| {
+  ///     let mut b = tx.bucket_mut("test").unwrap();
+  ///     b.put("key", "new value")?;
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   db.view(|tx| {
+  ///     let b = tx.bucket("test").unwrap();
+  ///     assert_eq!(Some(b"new value".as_slice()), b.get("key"));
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   Ok(())
+  /// }
+  /// ```
   fn bucket_mut<T: AsRef<[u8]>>(&mut self, name: T) -> Option<BucketRwImpl<'tx>>;
 
-  /// CreateBucket creates a new bucket.
+  /// Creates a new bucket.
+  ///
   /// Returns an error if the bucket already exists, if the bucket name is blank, or if the bucket name is too long.
+  ///
+  /// ```rust
+  /// use bbolt_rs::{BucketApi, BucketRwApi, Bolt, DbApi, DbRwAPI, TxApi, TxRwRefApi};
+  ///
+  /// fn main() -> bbolt_rs::Result<()> {
+  ///   let mut db = Bolt::new_mem()?;
+  ///
+  ///   db.update(|mut tx| {
+  ///     let mut b = tx.create_bucket("test")?;
+  ///     b.put("key", "value")?;
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   db.view(|tx| {
+  ///     let b = tx.bucket("test").unwrap();
+  ///     assert_eq!(Some(b"value".as_slice()), b.get("key"));
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   Ok(())
+  /// }
+  /// ```
   fn create_bucket<T: AsRef<[u8]>>(&mut self, name: T) -> crate::Result<BucketRwImpl<'tx>>;
 
-  /// CreateBucketIfNotExists creates a new bucket if it doesn't already exist.
+  /// Creates a new bucket if it doesn't already exist.
+  ///
   /// Returns an error if the bucket name is blank, or if the bucket name is too long.
+  ///
+  /// ```rust
+  /// use bbolt_rs::{BucketApi, BucketRwApi, Bolt, DbApi, DbRwAPI, TxApi, TxRwRefApi};
+  ///
+  /// fn main() -> bbolt_rs::Result<()> {
+  ///   let mut db = Bolt::new_mem()?;
+  ///
+  ///   db.update(|mut tx| {
+  ///     let mut b = tx.create_bucket_if_not_exists("test")?;
+  ///     b.put("key", "value")?;
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   db.view(|tx| {
+  ///     let b = tx.bucket("test").unwrap();
+  ///     assert_eq!(Some(b"value".as_slice()), b.get("key"));
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   Ok(())
+  /// }
+  /// ```
   fn create_bucket_if_not_exists<T: AsRef<[u8]>>(
     &mut self, name: T,
   ) -> crate::Result<BucketRwImpl<'tx>>;
 
   /// DeleteBucket deletes a bucket.
   /// Returns an error if the bucket cannot be found or if the key represents a non-bucket value.
+  ///
+  /// ```rust
+  /// use bbolt_rs::{BucketApi, BucketRwApi, Bolt, DbApi, DbRwAPI, TxApi, TxRwRefApi};
+  ///
+  /// fn main() -> bbolt_rs::Result<()> {
+  ///   let mut db = Bolt::new_mem()?;
+  ///
+  ///   db.update(|mut tx| {
+  ///     let mut b = tx.create_bucket("test")?;
+  ///     b.put("key", "value")?;
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   db.update(|mut tx| {
+  ///     tx.delete_bucket("test")?;
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   db.view(|tx| {
+  ///     assert_eq!(false, tx.bucket("test").is_some());
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   Ok(())
+  /// }
+  /// ```
   fn delete_bucket<T: AsRef<[u8]>>(&mut self, name: T) -> crate::Result<()>;
 
   /// OnCommit adds a handler function to be executed after the transaction successfully commits.
+  ///
+  /// ```rust
+  /// use bbolt_rs::{BucketApi, BucketRwApi, Bolt,CursorApi, DbApi, DbRwAPI, TxApi, TxRwRefApi};
+  /// use std::cell::RefCell;
+  ///
+  /// fn main() -> bbolt_rs::Result<()> {
+  ///   let mut db = Bolt::new_mem()?;
+  ///
+  ///   let tx_committed = RefCell::new(false);
+  ///   db.update(|mut tx| {
+  ///     let mut b = tx.create_bucket_if_not_exists("test")?;
+  ///     tx.on_commit(|| *tx_committed.borrow_mut() = true);
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   assert_eq!(true, *tx_committed.borrow());
+  ///   Ok(())
+  /// }
+  /// ```
   fn on_commit<F: FnMut() + 'tx>(&mut self, f: F);
 }
 
@@ -123,6 +416,31 @@ pub trait TxRwRefApi<'tx>: TxApi<'tx> {
 pub trait TxRwApi<'tx>: TxRwRefApi<'tx> {
   /// commit writes all changes to disk and updates the meta page.
   /// Returns an error if a disk write error occurs
+  ///
+  /// ```rust
+  /// use bbolt_rs::{BucketApi, BucketRwApi, Bolt, CursorApi, DbApi, DbRwAPI, TxApi, TxRwRefApi, TxRwApi};
+  ///
+  /// fn main() -> bbolt_rs::Result<()> {
+  ///   let mut db = Bolt::new_mem()?;
+  ///
+  ///   let mut tx = db.begin_rw()?;
+  ///   tx.create_bucket_if_not_exists("test1")?;
+  ///   tx.create_bucket_if_not_exists("test2")?;
+  ///   tx.create_bucket_if_not_exists("test3")?;
+  ///   tx.commit()?;
+  ///
+  ///   db.view(|tx| {
+  ///     let mut c = tx.cursor();
+  ///     assert_eq!(Some((b"test1".as_slice(), None)), c.first());
+  ///     assert_eq!(Some((b"test2".as_slice(), None)), c.next());
+  ///     assert_eq!(Some((b"test3".as_slice(), None)), c.next());
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   Ok(())
+  /// }
+  /// ```
+
   fn commit(self) -> crate::Result<()>;
 }
 
@@ -173,7 +491,7 @@ pub struct TxStats {
 }
 
 impl TxStats {
-  pub fn get_page_alloc(&self) -> i64 {
+  pub fn page_alloc(&self) -> i64 {
     self.page_alloc.load(Ordering::Acquire)
   }
 
@@ -181,7 +499,7 @@ impl TxStats {
     self.page_alloc.fetch_add(delta, Ordering::AcqRel);
   }
 
-  pub fn get_page_count(&self) -> i64 {
+  pub fn page_count(&self) -> i64 {
     self.page_count.load(Ordering::Acquire)
   }
 
@@ -189,7 +507,7 @@ impl TxStats {
     self.page_count.fetch_add(delta, Ordering::AcqRel);
   }
 
-  pub fn get_cursor_count(&self) -> i64 {
+  pub fn cursor_count(&self) -> i64 {
     self.cursor_count.load(Ordering::Acquire)
   }
 
@@ -197,7 +515,7 @@ impl TxStats {
     self.cursor_count.fetch_add(delta, Ordering::AcqRel);
   }
 
-  pub fn get_node_count(&self) -> i64 {
+  pub fn node_count(&self) -> i64 {
     self.node_count.load(Ordering::Acquire)
   }
 
@@ -205,7 +523,7 @@ impl TxStats {
     self.node_count.fetch_add(delta, Ordering::AcqRel);
   }
 
-  pub fn get_node_deref(&self) -> i64 {
+  pub fn node_deref(&self) -> i64 {
     self.node_deref.load(Ordering::Acquire)
   }
 
@@ -213,7 +531,7 @@ impl TxStats {
     self.node_deref.fetch_add(delta, Ordering::AcqRel);
   }
 
-  pub fn get_rebalance(&self) -> i64 {
+  pub fn rebalance(&self) -> i64 {
     self.rebalance.load(Ordering::Acquire)
   }
 
@@ -221,7 +539,7 @@ impl TxStats {
     self.rebalance.fetch_add(delta, Ordering::AcqRel);
   }
 
-  pub fn get_rebalance_time(&self) -> Duration {
+  pub fn rebalance_time(&self) -> Duration {
     *self.rebalance_time.lock()
   }
 
@@ -229,7 +547,7 @@ impl TxStats {
     *self.rebalance_time.lock() += delta;
   }
 
-  pub fn get_split(&self) -> i64 {
+  pub fn split(&self) -> i64 {
     self.split.load(Ordering::Acquire)
   }
 
@@ -237,7 +555,7 @@ impl TxStats {
     self.split.fetch_add(delta, Ordering::AcqRel);
   }
 
-  pub fn get_spill(&self) -> i64 {
+  pub fn spill(&self) -> i64 {
     self.spill.load(Ordering::Acquire)
   }
 
@@ -245,7 +563,7 @@ impl TxStats {
     self.spill.fetch_add(delta, Ordering::AcqRel);
   }
 
-  pub fn get_spill_time(&self) -> Duration {
+  pub fn spill_time(&self) -> Duration {
     *self.spill_time.lock()
   }
 
@@ -253,7 +571,7 @@ impl TxStats {
     *self.spill_time.lock() += delta;
   }
 
-  pub fn get_write(&self) -> i64 {
+  pub fn write(&self) -> i64 {
     self.write.load(Ordering::Acquire)
   }
 
@@ -261,7 +579,7 @@ impl TxStats {
     self.write.fetch_add(delta, Ordering::AcqRel);
   }
 
-  pub fn get_write_time(&self) -> Duration {
+  pub fn write_time(&self) -> Duration {
     *self.write_time.lock()
   }
 
@@ -270,18 +588,18 @@ impl TxStats {
   }
 
   pub(crate) fn add_assign(&self, rhs: &TxStats) {
-    self.inc_page_count(rhs.get_page_count());
-    self.inc_page_alloc(rhs.get_page_alloc());
-    self.inc_cursor_count(rhs.get_cursor_count());
-    self.inc_node_count(rhs.get_node_count());
-    self.inc_node_deref(rhs.get_node_deref());
-    self.inc_rebalance(rhs.get_rebalance());
-    self.inc_rebalance_time(rhs.get_rebalance_time());
-    self.inc_split(rhs.get_split());
-    self.inc_spill(rhs.get_spill());
-    self.inc_spill_time(rhs.get_spill_time());
-    self.inc_write(rhs.get_write());
-    self.inc_write_time(rhs.get_write_time());
+    self.inc_page_count(rhs.page_count());
+    self.inc_page_alloc(rhs.page_alloc());
+    self.inc_cursor_count(rhs.cursor_count());
+    self.inc_node_count(rhs.node_count());
+    self.inc_node_deref(rhs.node_deref());
+    self.inc_rebalance(rhs.rebalance());
+    self.inc_rebalance_time(rhs.rebalance_time());
+    self.inc_split(rhs.split());
+    self.inc_spill(rhs.spill());
+    self.inc_spill_time(rhs.spill_time());
+    self.inc_write(rhs.write());
+    self.inc_write_time(rhs.write_time());
   }
 
   pub(crate) fn add(&self, rhs: &TxStats) -> TxStats {
@@ -291,21 +609,18 @@ impl TxStats {
   }
 
   pub(crate) fn sub_assign(&self, rhs: &TxStats) {
-    self.inc_page_count(-rhs.get_page_count());
-    self.inc_page_alloc(-rhs.get_page_alloc());
-    self.inc_cursor_count(-rhs.get_cursor_count());
-    self.inc_node_count(-rhs.get_node_count());
-    self.inc_node_deref(-rhs.get_node_deref());
-    self.inc_rebalance(-rhs.get_rebalance());
-    self
-      .rebalance_time
-      .lock()
-      .sub_assign(rhs.get_rebalance_time());
-    self.inc_split(-rhs.get_split());
-    self.inc_spill(-rhs.get_spill());
-    self.spill_time.lock().sub_assign(rhs.get_spill_time());
-    self.inc_write(-rhs.get_write());
-    self.write_time.lock().sub_assign(rhs.get_write_time());
+    self.inc_page_count(-rhs.page_count());
+    self.inc_page_alloc(-rhs.page_alloc());
+    self.inc_cursor_count(-rhs.cursor_count());
+    self.inc_node_count(-rhs.node_count());
+    self.inc_node_deref(-rhs.node_deref());
+    self.inc_rebalance(-rhs.rebalance());
+    self.rebalance_time.lock().sub_assign(rhs.rebalance_time());
+    self.inc_split(-rhs.split());
+    self.inc_spill(-rhs.spill());
+    self.spill_time.lock().sub_assign(rhs.spill_time());
+    self.inc_write(-rhs.write());
+    self.write_time.lock().sub_assign(rhs.write_time());
   }
 
   pub(crate) fn sub(&self, rhs: &TxStats) -> TxStats {
@@ -318,36 +633,36 @@ impl TxStats {
 impl Clone for TxStats {
   fn clone(&self) -> Self {
     TxStats {
-      page_count: self.get_page_count().into(),
-      page_alloc: self.get_page_alloc().into(),
-      cursor_count: self.get_cursor_count().into(),
-      node_count: self.get_node_count().into(),
-      node_deref: self.get_node_deref().into(),
-      rebalance: self.get_rebalance().into(),
-      rebalance_time: self.get_rebalance_time().into(),
-      split: self.get_split().into(),
-      spill: self.get_spill().into(),
-      spill_time: self.get_spill_time().into(),
-      write: self.get_write().into(),
-      write_time: self.get_write_time().into(),
+      page_count: self.page_count().into(),
+      page_alloc: self.page_alloc().into(),
+      cursor_count: self.cursor_count().into(),
+      node_count: self.node_count().into(),
+      node_deref: self.node_deref().into(),
+      rebalance: self.rebalance().into(),
+      rebalance_time: self.rebalance_time().into(),
+      split: self.split().into(),
+      spill: self.spill().into(),
+      spill_time: self.spill_time().into(),
+      write: self.write().into(),
+      write_time: self.write_time().into(),
     }
   }
 }
 
 impl PartialEq for TxStats {
   fn eq(&self, other: &Self) -> bool {
-    self.get_page_count() == other.get_page_count()
-      && self.get_page_alloc() == other.get_page_alloc()
-      && self.get_cursor_count() == other.get_cursor_count()
-      && self.get_node_count() == other.get_node_count()
-      && self.get_node_deref() == other.get_node_deref()
-      && self.get_rebalance() == other.get_rebalance()
-      && self.get_rebalance_time() == other.get_rebalance_time()
-      && self.get_split() == other.get_split()
-      && self.get_spill() == other.get_spill()
-      && self.get_spill_time() == other.get_spill_time()
-      && self.get_write() == other.get_write()
-      && self.get_write_time() == other.get_write_time()
+    self.page_count() == other.page_count()
+      && self.page_alloc() == other.page_alloc()
+      && self.cursor_count() == other.cursor_count()
+      && self.node_count() == other.node_count()
+      && self.node_deref() == other.node_deref()
+      && self.rebalance() == other.rebalance()
+      && self.rebalance_time() == other.rebalance_time()
+      && self.split() == other.split()
+      && self.spill() == other.spill()
+      && self.spill_time() == other.spill_time()
+      && self.write() == other.write()
+      && self.write_time() == other.write_time()
   }
 }
 
@@ -356,18 +671,18 @@ impl Eq for TxStats {}
 impl Debug for TxStats {
   fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
     f.debug_struct("TxStats")
-      .field("page_count", &self.get_page_count())
-      .field("page_alloc", &self.get_page_alloc())
-      .field("cursor_count", &self.get_cursor_count())
-      .field("node_count", &self.get_node_count())
-      .field("node_deref", &self.get_node_deref())
-      .field("rebalance", &self.get_rebalance())
-      .field("rebalance_time", &self.get_rebalance_time())
-      .field("split", &self.get_split())
-      .field("spill", &self.get_spill())
-      .field("spill_time", &self.get_spill_time())
-      .field("write", &self.get_write())
-      .field("write_time", &self.get_write_time())
+      .field("page_count", &self.page_count())
+      .field("page_alloc", &self.page_alloc())
+      .field("cursor_count", &self.cursor_count())
+      .field("node_count", &self.node_count())
+      .field("node_deref", &self.node_deref())
+      .field("rebalance", &self.rebalance())
+      .field("rebalance_time", &self.rebalance_time())
+      .field("split", &self.split())
+      .field("spill", &self.spill())
+      .field("spill_time", &self.spill_time())
+      .field("write", &self.write())
+      .field("write_time", &self.write_time())
       .finish()
   }
 }
@@ -393,6 +708,7 @@ impl<'a, 'tx: 'a> Deref for AnyPage<'tx, 'a> {
 pub(crate) enum TxClosingState {
   #[default]
   Rollback,
+  ExplicitRollback,
   PhysicalRollback,
   Commit,
 }
@@ -402,7 +718,9 @@ impl TxClosingState {
   pub(crate) fn is_rollback(&self) -> bool {
     matches!(
       self,
-      TxClosingState::Rollback | TxClosingState::PhysicalRollback
+      TxClosingState::Rollback
+        | TxClosingState::ExplicitRollback
+        | TxClosingState::PhysicalRollback
     )
   }
 
@@ -523,7 +841,7 @@ pub(crate) trait TxIApi<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
 
   fn rollback(self) -> crate::Result<()> {
     if let Some(mut w) = self.split_ow_mut() {
-      w.tx_closing_state = TxClosingState::Rollback;
+      w.tx_closing_state = TxClosingState::ExplicitRollback;
     }
     Ok(())
   }
@@ -558,7 +876,6 @@ pub(crate) trait TxIApi<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
 }
 
 pub(crate) trait TxRwIApi<'tx>: TxIApi<'tx> + TxICheck<'tx> {
-  type CursorRwType: CursorRwIApi<'tx>;
   fn freelist_free_page(self, txid: TxId, p: &PageHeader);
 
   fn root_bucket_mut(self) -> BucketRwCell<'tx>;
@@ -568,9 +885,6 @@ pub(crate) trait TxRwIApi<'tx>: TxIApi<'tx> + TxICheck<'tx> {
   ) -> crate::Result<SelfOwned<AlignedBytes<alignment::Page>, MutPage<'tx>>>;
 
   fn queue_page(self, page: SelfOwned<AlignedBytes<alignment::Page>, MutPage<'tx>>);
-
-  /// See [TxRwRefApi::cursor_mut]
-  fn api_cursor_mut(self) -> Self::CursorRwType;
 
   /// See [TxRwRefApi::create_bucket]
   fn api_create_bucket(self, name: &[u8]) -> crate::Result<Self::BucketType>;
@@ -696,7 +1010,6 @@ impl<'tx> TxIApi<'tx> for TxRwCell<'tx> {
 }
 
 impl<'tx> TxRwIApi<'tx> for TxRwCell<'tx> {
-  type CursorRwType = InnerCursor<'tx, Self, Self::BucketType>;
 
   fn freelist_free_page(self, txid: TxId, p: &PageHeader) {
     self.cell.borrow().r.db.free_page(txid, p)
@@ -732,11 +1045,6 @@ impl<'tx> TxRwIApi<'tx> for TxRwCell<'tx> {
           .repool_allocated(pending.into_owner());
       }
     }
-  }
-
-  fn api_cursor_mut(self) -> Self::CursorRwType {
-    let root_bucket = self.root_bucket();
-    root_bucket.i_cursor()
   }
 
   fn api_create_bucket(self, name: &[u8]) -> crate::Result<Self::BucketType> {
@@ -918,7 +1226,7 @@ impl<'tx> TxApi<'tx> for TxImpl<'tx> {
   }
 
   #[inline]
-  fn writeable(&self) -> bool {
+  fn writable(&self) -> bool {
     false
   }
 
@@ -938,10 +1246,6 @@ impl<'tx> TxApi<'tx> for TxImpl<'tx> {
     &self, f: F,
   ) -> crate::Result<()> {
     self.tx.api_for_each(f)
-  }
-
-  fn rollback(self) -> crate::Result<()> {
-    self.tx.rollback()
   }
 
   fn page(&self, id: PgId) -> crate::Result<Option<PageInfo>> {
@@ -965,7 +1269,7 @@ impl<'tx> TxApi<'tx> for TxRef<'tx> {
   }
 
   #[inline]
-  fn writeable(&self) -> bool {
+  fn writable(&self) -> bool {
     false
   }
 
@@ -985,10 +1289,6 @@ impl<'tx> TxApi<'tx> for TxRef<'tx> {
     &self, f: F,
   ) -> crate::Result<()> {
     self.tx.api_for_each(f)
-  }
-
-  fn rollback(self) -> crate::Result<()> {
-    self.tx.rollback()
   }
 
   fn page(&self, id: PgId) -> crate::Result<Option<PageInfo>> {
@@ -1120,7 +1420,7 @@ impl<'tx> TxApi<'tx> for TxRwImpl<'tx> {
   }
 
   #[inline]
-  fn writeable(&self) -> bool {
+  fn writable(&self) -> bool {
     true
   }
 
@@ -1142,18 +1442,15 @@ impl<'tx> TxApi<'tx> for TxRwImpl<'tx> {
     self.tx.api_for_each(f)
   }
 
-  fn rollback(self) -> crate::Result<()> {
-    self.tx.rollback()
-  }
-
   fn page(&self, id: PgId) -> crate::Result<Option<PageInfo>> {
     self.tx.api_page(id)
   }
 }
 
 impl<'tx> TxRwRefApi<'tx> for TxRwImpl<'tx> {
-  fn cursor_mut(&mut self) -> CursorRwImpl<'tx> {
-    CursorRwImpl::new(self.tx.api_cursor_mut())
+
+  fn rollback(self) -> crate::Result<()> {
+    self.tx.rollback()
   }
 
   fn bucket_mut<T: AsRef<[u8]>>(&mut self, name: T) -> Option<BucketRwImpl<'tx>> {
@@ -1187,14 +1484,22 @@ impl<'tx> TxRwRefApi<'tx> for TxRwImpl<'tx> {
 
 impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
   fn commit(mut self) -> crate::Result<()> {
-    self.tx.split_ow_mut().unwrap().tx_closing_state = TxClosingState::Commit;
+    let tx_stats = {
+      let mut tx = self.tx.cell.borrow_mut();
 
-    let tx_stats = self.tx.split_r().stats.as_ref().cloned().unwrap();
+      // Handle the case where the rollback is called within a managed transaction
+      if tx.w.tx_closing_state == TxClosingState::ExplicitRollback {
+        return Ok(());
+      }
+      tx.w.tx_closing_state = TxClosingState::Commit;
+      tx.r.stats.as_ref().cloned().unwrap()
+    };
+
     let bump = self.tx.bump();
 
     let start_time = Instant::now();
     self.tx.root_bucket().rebalance();
-    if tx_stats.get_rebalance() > 0 {
+    if tx_stats.rebalance() > 0 {
       tx_stats.inc_rebalance_time(start_time.elapsed());
     }
     let opgid = self.tx.meta().pgid();
@@ -1293,7 +1598,7 @@ impl<'tx> TxApi<'tx> for TxRwRef<'tx> {
   }
 
   #[inline]
-  fn writeable(&self) -> bool {
+  fn writable(&self) -> bool {
     true
   }
 
@@ -1315,18 +1620,15 @@ impl<'tx> TxApi<'tx> for TxRwRef<'tx> {
     self.tx.api_for_each(f)
   }
 
-  fn rollback(self) -> crate::Result<()> {
-    self.tx.rollback()
-  }
-
   fn page(&self, id: PgId) -> crate::Result<Option<PageInfo>> {
     self.tx.api_page(id)
   }
 }
 
 impl<'tx> TxRwRefApi<'tx> for TxRwRef<'tx> {
-  fn cursor_mut(&mut self) -> CursorRwImpl<'tx> {
-    CursorRwImpl::new(self.tx.api_cursor_mut())
+
+  fn rollback(self) -> crate::Result<()> {
+    self.tx.rollback()
   }
 
   fn bucket_mut<T: AsRef<[u8]>>(&mut self, name: T) -> Option<BucketRwImpl<'tx>> {
@@ -1909,7 +2211,7 @@ mod test {
     let tx = db.begin_tx()?;
     let b = tx.bucket("mybucket").unwrap();
     assert_eq!(None, b.get("k"));
-    tx.rollback()?;
+    drop(tx);
     //todo!("noSyncFreelist");
     Ok(())
   }
@@ -1956,10 +2258,6 @@ mod test {
       assert_eq!(want_value, value);
     };
 
-    let rollback = |tx: TxImpl| {
-      tx.rollback().unwrap();
-    };
-
     put("k1", "v1");
     let rtx1 = open_read_tx();
     put("k2", "v2");
@@ -1976,11 +2274,11 @@ mod test {
     let hold5 = open_read_tx();
 
     // Close the read transactions we established to hold a portion of the pages in pending state.
-    rollback(hold1);
-    rollback(hold2);
-    rollback(hold3);
-    rollback(hold4);
-    rollback(hold5);
+    drop(hold1);
+    drop(hold2);
+    drop(hold3);
+    drop(hold4);
+    drop(hold5);
 
     // Execute a write transaction to trigger a releaseRange operation in the db
     // that will free multiple ranges between the remaining open read transactions, now that the
@@ -1990,8 +2288,8 @@ mod test {
     // Check that all long running reads still read correct values.
     check_with_read_tx(&rtx1, "k1", Some("v1".as_bytes()));
     check_with_read_tx(&rtx2, "k2", Some("v2".as_bytes()));
-    rollback(rtx1);
-    rollback(rtx2);
+    drop(rtx1);
+    drop(rtx2);
 
     // Check that the final state is correct.
     let rtx7 = open_read_tx();
@@ -2019,40 +2317,40 @@ mod test {
     let stats = TxStats::default();
 
     stats.inc_page_count(1);
-    assert_eq!(1, stats.get_page_count());
+    assert_eq!(1, stats.page_count());
 
     stats.inc_page_alloc(2);
-    assert_eq!(2, stats.get_page_alloc());
+    assert_eq!(2, stats.page_alloc());
 
     stats.inc_cursor_count(3);
-    assert_eq!(3, stats.get_cursor_count());
+    assert_eq!(3, stats.cursor_count());
 
     stats.inc_node_count(100);
-    assert_eq!(100, stats.get_node_count());
+    assert_eq!(100, stats.node_count());
 
     stats.inc_node_deref(101);
-    assert_eq!(101, stats.get_node_deref());
+    assert_eq!(101, stats.node_deref());
 
     stats.inc_rebalance(1000);
-    assert_eq!(1000, stats.get_rebalance());
+    assert_eq!(1000, stats.rebalance());
 
     stats.inc_rebalance_time(Duration::from_secs(1001));
-    assert_eq!(1001, stats.get_rebalance_time().as_secs());
+    assert_eq!(1001, stats.rebalance_time().as_secs());
 
     stats.inc_split(10000);
-    assert_eq!(10000, stats.get_split());
+    assert_eq!(10000, stats.split());
 
     stats.inc_spill(10001);
-    assert_eq!(10001, stats.get_spill());
+    assert_eq!(10001, stats.spill());
 
     stats.inc_spill_time(Duration::from_secs(10001));
-    assert_eq!(10001, stats.get_spill_time().as_secs());
+    assert_eq!(10001, stats.spill_time().as_secs());
 
     stats.inc_write(100_000);
-    assert_eq!(100_000, stats.get_write());
+    assert_eq!(100_000, stats.write());
 
     stats.inc_write_time(Duration::from_secs(100_001));
-    assert_eq!(100_001, stats.get_write_time().as_secs());
+    assert_eq!(100_001, stats.write_time().as_secs());
 
     let expected_stats = TxStats {
       page_count: 1.into(),
