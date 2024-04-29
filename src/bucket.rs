@@ -1987,12 +1987,12 @@ mod tests {
 
   // TODO: long running tests. This one is about a 12 minute test on --release
   #[test]
-  #[ignore]
+  #[cfg(not(miri))]
   fn test_bucket_delete_freelist_overflow() -> crate::Result<()> {
     let mut db = TestDb::new()?;
 
-    //TODO:
-    for i in 0u64..4096 {
+    //TODO: make this based off of page size
+    for i in 0u64..8192 {
       db.update(|mut tx| {
         let mut b = tx.create_bucket_if_not_exists(b"0")?;
         for j in 0u64..1000 {
@@ -2004,7 +2004,6 @@ mod tests {
         }
         Ok(())
       })?;
-      println!("i: {}", i);
     }
     db.update(|mut tx| {
       let b = tx.bucket_mut(b"0").unwrap();
@@ -2016,7 +2015,16 @@ mod tests {
       }
       Ok(())
     })?;
-    todo!("Stats check");
+    let stats = db.stats();
+    let free_page_n = stats.free_page_n();
+    let pending_page_n = stats.pending_page_n();
+    let free_pages = free_page_n + pending_page_n;
+    assert!(free_pages > 0xFFFF, "expected more than 0xFFFF free pages. Got {}", free_pages);
+    db.must_close();
+    db.must_reopen();
+    let stats = db.stats();
+    let reopen_free_pages = stats.free_page_n();
+    assert_eq!(free_pages, reopen_free_pages, "Expected {} free pages, got {:?}", free_pages, reopen_free_pages);
     Ok(())
   }
 

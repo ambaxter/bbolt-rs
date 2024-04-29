@@ -17,20 +17,21 @@ pub(crate) fn mapped_page<T: CoerciblePage + Sized>(
 
 pub(crate) struct TestDb {
   pub(crate) tmp_file: Option<NamedTempFile>,
-  pub(crate) db: Bolt,
+  pub(crate) db: Option<Bolt>,
+  options: BoltOptions
 }
 
 impl Deref for TestDb {
   type Target = Bolt;
 
   fn deref(&self) -> &Self::Target {
-    &self.db
+    self.db.as_ref().unwrap()
   }
 }
 
 impl DerefMut for TestDb {
   fn deref_mut(&mut self) -> &mut Self::Target {
-    &mut self.db
+    self.db.as_mut().unwrap()
   }
 }
 
@@ -56,21 +57,22 @@ impl TestDb {
       .prefix("bbolt-rs-")
       .suffix(".db")
       .tempfile()?;
-    let db = options.open(tmp_file.path())?;
+    let db = options.clone().open(tmp_file.path())?;
 
     Ok(TestDb {
       tmp_file: Some(tmp_file),
-      db,
+      db: Some(db),
+      options
     })
   }
 
   pub(crate) fn new_mem(options: BoltOptions) -> crate::Result<TestDb> {
-    let db = options.new_mem()?;
-    Ok(TestDb { tmp_file: None, db })
+    let db = options.clone().new_mem()?;
+    Ok(TestDb { tmp_file: None, db: Some(db), options })
   }
 
   pub(crate) fn must_check(&mut self) {
-    if let Ok(tx) = self.db.begin() {
+    if let Ok(tx) = self.db.as_ref().unwrap().begin() {
       let errors = tx.check();
       if !errors.is_empty() {
         for error in errors {
@@ -81,16 +83,29 @@ impl TestDb {
     }
   }
 
+  pub(crate) fn must_close(&mut self) {
+    let db = self.db.take().unwrap();
+    db.close();
+  }
+
+  pub(crate) fn must_reopen(&mut self) {
+    assert!(self.tmp_file.is_some(), "Reopen only supported on file based databases");
+    assert!(self.db.is_none(), "Please call close before must_reopen");
+    let options = self.options.clone();
+    let db = options.open(self.tmp_file.as_ref().unwrap().path()).unwrap();
+    self.db = Some(db);
+  }
+
   pub(crate) fn clone_db(&self) -> Bolt {
-    self.db.clone()
+    self.db.as_ref().unwrap().clone()
   }
 
   pub(crate) fn begin_unseal(&self) -> crate::Result<impl TxApi + UnsealTx> {
-    self.db.begin_tx()
+    self.db.as_ref().unwrap().begin_tx()
   }
 
   pub(crate) fn begin_rw_unseal(&mut self) -> crate::Result<impl TxRwRefApi + UnsealRwTx> {
-    self.db.begin_rw_tx()
+    self.db.as_mut().unwrap().begin_rw_tx()
   }
 }
 

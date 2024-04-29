@@ -1979,7 +1979,7 @@ mod test {
       b.put("foo", "bar")?;
       Ok(())
     })?;
-    let close_db = db.db.clone();
+    let close_db = db.clone_db();
     close_db.close();
 
     let file = db.tmp_file.as_ref().unwrap();

@@ -333,8 +333,8 @@ impl DbStats {
     self.free_page_n.load(Ordering::Acquire)
   }
 
-  pub(crate) fn inc_free_page_n(&self, delta: i64) {
-    self.free_page_n.fetch_add(delta, Ordering::AcqRel);
+  pub(crate) fn set_free_page_n(&self, value: i64) {
+    self.free_page_n.store(value, Ordering::Release);
   }
 
   /// total number of pending pages on the freelist
@@ -342,8 +342,8 @@ impl DbStats {
     self.pending_page_n.load(Ordering::Acquire)
   }
 
-  pub(crate) fn inc_pending_page_n(&self, delta: i64) {
-    self.pending_page_n.fetch_add(delta, Ordering::AcqRel);
+  pub(crate) fn set_pending_page_n(&self, value: i64) {
+    self.pending_page_n.store(value, Ordering::Release);
   }
 
   /// total bytes allocated in free pages
@@ -351,8 +351,8 @@ impl DbStats {
     self.free_alloc.load(Ordering::Acquire)
   }
 
-  pub(crate) fn inc_free_alloc(&self, delta: i64) {
-    self.free_alloc.fetch_add(delta, Ordering::AcqRel);
+  pub(crate) fn set_free_alloc(&self, value: i64) {
+    self.free_alloc.store(value, Ordering::Release);
   }
 
   /// total bytes used by the freelist
@@ -360,8 +360,8 @@ impl DbStats {
     self.free_list_in_use.load(Ordering::Acquire)
   }
 
-  pub(crate) fn inc_free_list_in_use(&self, delta: i64) {
-    self.free_list_in_use.fetch_add(delta, Ordering::AcqRel);
+  pub(crate) fn set_free_list_in_use(&self, value: i64) {
+    self.free_list_in_use.store(value, Ordering::Release);
   }
 
   /// total number of started read transactions
@@ -1237,12 +1237,12 @@ impl<'tx> DbIApi<'tx> for DbShared {
 
     state.rwtx = None;
 
-    self.stats.inc_free_page_n(free_list_free_n as i64);
-    self.stats.inc_pending_page_n(free_list_pending_n as i64);
+    self.stats.set_free_page_n(free_list_free_n as i64);
+    self.stats.set_pending_page_n(free_list_pending_n as i64);
     self
       .stats
-      .inc_free_alloc(((free_list_free_n + free_list_pending_n) * page_size as u64) as i64);
-    self.stats.inc_free_list_in_use(free_list_alloc as i64);
+      .set_free_alloc(((free_list_free_n + free_list_pending_n) * page_size as u64) as i64);
+    self.stats.set_free_list_in_use(free_list_alloc as i64);
     self.stats.tx_stats.add_assign(&tx_stats);
   }
 
@@ -2252,9 +2252,9 @@ mod test {
     let a = DbStats::default();
     let b = DbStats::default();
     a.tx_stats.inc_page_count(3);
-    a.inc_free_page_n(4);
+    a.set_free_page_n(4);
     b.tx_stats.inc_page_count(10);
-    b.inc_free_page_n(14);
+    b.set_free_page_n(14);
     let diff = b.sub(&a);
     assert_eq!(7, diff.tx_stats.page_count());
     assert_eq!(14, diff.free_page_n());
