@@ -67,7 +67,7 @@ impl TestDb {
   }
 
   pub(crate) fn new_mem(options: BoltOptions) -> crate::Result<TestDb> {
-    let db = options.clone().new_mem()?;
+    let db = options.clone().open_mem()?;
     Ok(TestDb { tmp_file: None, db: Some(db), options })
   }
 

@@ -38,7 +38,7 @@ where
   /// use bbolt_rs::*;
   ///
   /// fn main() -> Result<()> {
-  ///   let mut db = Bolt::new_mem()?;
+  ///   let mut db = Bolt::open_mem()?;
   ///
   ///   db.update(|mut tx| {
   ///     let mut b = tx.create_bucket_if_not_exists("test")?;
@@ -65,7 +65,7 @@ where
   /// use bbolt_rs::*;
   ///
   /// fn main() -> Result<()> {
-  ///   let mut db = Bolt::new_mem()?;
+  ///   let mut db = Bolt::open_mem()?;
   ///
   ///   db.update(|mut tx| {
   ///     let b = tx.create_bucket_if_not_exists("test")?;
@@ -90,7 +90,7 @@ where
   /// use bbolt_rs::*;
   ///
   /// fn main() -> Result<()> {
-  ///   let mut db = Bolt::new_mem()?;
+  ///   let mut db = Bolt::open_mem()?;
   ///
   ///   db.update(|mut tx| {
   ///     let mut b = tx.create_bucket_if_not_exists("test")?;
@@ -119,7 +119,7 @@ where
   /// use bbolt_rs::*;
   ///
   /// fn main() -> Result<()> {
-  ///   let mut db = Bolt::new_mem()?;
+  ///   let mut db = Bolt::open_mem()?;
   ///
   ///   db.update(|mut tx| {
   ///     let mut b = tx.create_bucket_if_not_exists("test")?;
@@ -148,7 +148,7 @@ where
   /// use bbolt_rs::*;
   ///
   /// fn main() -> Result<()> {
-  ///   let mut db = Bolt::new_mem()?;
+  ///   let mut db = Bolt::open_mem()?;
   ///
   ///   db.update(|mut tx| {
   ///     let mut b = tx.create_bucket_if_not_exists("test")?;
@@ -176,7 +176,7 @@ where
   /// use bbolt_rs::*;
   ///
   /// fn main() -> Result<()> {
-  ///   let mut db = Bolt::new_mem()?;
+  ///   let mut db = Bolt::open_mem()?;
   ///
   ///   db.update(|mut tx| {
   ///     let mut b = tx.create_bucket_if_not_exists("test")?;
@@ -206,7 +206,7 @@ where
   /// use bbolt_rs::*;
   ///
   /// fn main() -> Result<()> {
-  ///   let mut db = Bolt::new_mem()?;
+  ///   let mut db = Bolt::open_mem()?;
   ///
   ///   db.update(|mut tx| {
   ///     let mut b = tx.create_bucket_if_not_exists("test")?;
@@ -242,7 +242,7 @@ where
   /// use bbolt_rs::*;
   ///
   /// fn main() -> Result<()> {
-  ///   let mut db = Bolt::new_mem()?;
+  ///   let mut db = Bolt::open_mem()?;
   ///
   ///   db.update(|mut tx| {
   ///     let mut b = tx.create_bucket_if_not_exists("test")?;
@@ -272,7 +272,7 @@ where
   /// use bbolt_rs::*;
   ///
   /// fn main() -> Result<()> {
-  ///   let mut db = Bolt::new_mem()?;
+  ///   let mut db = Bolt::open_mem()?;
   ///
   ///   db.update(|mut tx| {
   ///     let mut b = tx.create_bucket_if_not_exists("test")?;
@@ -306,7 +306,7 @@ pub trait BucketRwApi<'tx>: BucketApi<'tx> {
   /// use bbolt_rs::*;
   ///
   /// fn main() -> Result<()> {
-  ///   let mut db = Bolt::new_mem()?;
+  ///   let mut db = Bolt::open_mem()?;
   ///
   ///   db.update(|mut tx| {
   ///     let mut b = tx.create_bucket_if_not_exists("test")?;
@@ -334,7 +334,7 @@ pub trait BucketRwApi<'tx>: BucketApi<'tx> {
   /// use bbolt_rs::*;
   ///
   /// fn main() -> Result<()> {
-  ///   let mut db = Bolt::new_mem()?;
+  ///   let mut db = Bolt::open_mem()?;
   ///
   ///   db.update(|mut tx| {
   ///     let mut b = tx.create_bucket("test")?;
@@ -361,7 +361,7 @@ pub trait BucketRwApi<'tx>: BucketApi<'tx> {
   /// use bbolt_rs::*;
   ///
   /// fn main() -> Result<()> {
-  ///   let mut db = Bolt::new_mem()?;
+  ///   let mut db = Bolt::open_mem()?;
   ///
   ///   db.update(|mut tx| {
   ///     let mut b = tx.create_bucket_if_not_exists("test")?;
@@ -388,7 +388,7 @@ pub trait BucketRwApi<'tx>: BucketApi<'tx> {
   /// use bbolt_rs::*;
   ///
   /// fn main() -> Result<()> {
-  ///   let mut db = Bolt::new_mem()?;
+  ///   let mut db = Bolt::open_mem()?;
   ///
   ///   db.update(|mut tx| {
   ///     let mut b = tx.create_bucket_if_not_exists("test")?;
@@ -427,7 +427,7 @@ pub trait BucketRwApi<'tx>: BucketApi<'tx> {
   /// use bbolt_rs::*;
   ///
   /// fn main() -> Result<()> {
-  ///   let mut db = Bolt::new_mem()?;
+  ///   let mut db = Bolt::open_mem()?;
   ///
   ///   db.update(|mut tx| {
   ///     let mut b = tx.create_bucket_if_not_exists("test")?;
@@ -462,7 +462,7 @@ pub trait BucketRwApi<'tx>: BucketApi<'tx> {
   /// use bbolt_rs::*;
   ///
   /// fn main() -> Result<()> {
-  ///   let mut db = Bolt::new_mem()?;
+  ///   let mut db = Bolt::open_mem()?;
   ///
   ///   db.update(|mut tx| {
   ///     let mut b = tx.create_bucket_if_not_exists("test")?;
@@ -500,7 +500,7 @@ pub trait BucketRwApi<'tx>: BucketApi<'tx> {
   /// use bbolt_rs::*;
   ///
   /// fn main() -> Result<()> {
-  ///   let mut db = Bolt::new_mem()?;
+  ///   let mut db = Bolt::open_mem()?;
   ///
   ///   db.update(|mut tx| {
   ///     let mut b = tx.create_bucket_if_not_exists("test")?;
@@ -536,7 +536,7 @@ pub trait BucketRwApi<'tx>: BucketApi<'tx> {
   /// use bbolt_rs::*;
   ///
   /// fn main() -> Result<()> {
-  ///   let mut db = Bolt::new_mem()?;
+  ///   let mut db = Bolt::open_mem()?;
   ///
   ///   db.update(|mut tx| {
   ///     let mut b = tx.create_bucket_if_not_exists("test")?;
@@ -561,7 +561,7 @@ pub trait BucketRwApi<'tx>: BucketApi<'tx> {
   /// use bbolt_rs::*;
   ///
   /// fn main() -> Result<()> {
-  ///   let mut db = Bolt::new_mem()?;
+  ///   let mut db = Bolt::open_mem()?;
   ///
   ///   db.update(|mut tx| {
   ///     let mut b = tx.create_bucket_if_not_exists("test")?;
@@ -578,10 +578,10 @@ pub trait BucketRwApi<'tx>: BucketApi<'tx> {
   /// Set the fill percent of the bucket
   ///
   /// ```rust
-  /// use bbolt_rs::{BucketApi, BucketRwApi, Bolt,CursorApi, DbApi, DbRwAPI, TxApi, TxRwRefApi};
+  /// use bbolt_rs::*;
   ///
-  /// fn main() -> bbolt_rs::Result<()> {
-  ///   let mut db = Bolt::new_mem()?;
+  /// fn main() -> Result<()> {
+  ///   let mut db = Bolt::open_mem()?;
   ///
   ///   db.update(|mut tx| {
   ///     let mut b = tx.create_bucket_if_not_exists("test")?;
@@ -595,6 +595,7 @@ pub trait BucketRwApi<'tx>: BucketApi<'tx> {
   fn set_fill_percent(&mut self, fill_percent: f64);
 }
 
+/// Read-only Bucket
 pub enum BucketImpl<'tx> {
   R(BucketCell<'tx>),
   RW(BucketRwCell<'tx>),
@@ -679,6 +680,7 @@ impl<'tx> BucketApi<'tx> for BucketImpl<'tx> {
   }
 }
 
+/// Read/Write Bucket
 pub struct BucketRwImpl<'tx> {
   b: BucketRwCell<'tx>,
 }
@@ -1910,7 +1912,8 @@ mod tests {
   }
 
   #[test]
-  #[cfg(not(miri))]
+  #[cfg(all(not(miri),feature = "long-tests"))]
+
   fn test_db_put_very_large() -> crate::Result<()> {
     let mut db = TestDb::new()?;
     let n = 400000u64;
@@ -1985,9 +1988,8 @@ mod tests {
     Ok(())
   }
 
-  // TODO: long running tests. This one is about a 12 minute test on --release
   #[test]
-  #[cfg(not(miri))]
+  #[cfg(all(not(miri), feature="long_tests"))]
   fn test_bucket_delete_freelist_overflow() -> crate::Result<()> {
     let mut db = TestDb::new()?;
 
@@ -2471,6 +2473,7 @@ mod tests {
   }
 
   #[test]
+  #[cfg(feature = "long-tests")]
   fn test_bucket_stats() -> crate::Result<()> {
     let mut db = TestDb::new()?;
     let big_key = "really-big-value";
@@ -2521,6 +2524,7 @@ mod tests {
   }
 
   #[test]
+  #[cfg(feature = "long-tests")]
   fn test_bucket_stats_random_fill() -> crate::Result<()> {
     let mut db = TestDb::new()?;
     let mut count = 0;
@@ -2699,6 +2703,7 @@ mod tests {
   }
 
   #[test]
+  #[cfg(feature = "long-tests")]
   fn test_bucket_stats_large() -> crate::Result<()> {
     let mut db = TestDb::new()?;
     let mut index = 0;
@@ -2744,18 +2749,21 @@ mod tests {
 
   #[test]
   #[ignore]
+  #[cfg(feature = "long-tests")]
   fn test_bucket_put_single() -> crate::Result<()> {
     todo!("quick-check")
   }
 
   #[test]
   #[ignore]
+  #[cfg(feature = "long-tests")]
   fn test_bucket_put_multiple() -> crate::Result<()> {
     todo!("quick-check")
   }
 
   #[test]
   #[ignore]
+  #[cfg(feature = "long-tests")]
   fn test_bucket_delete_quick() -> crate::Result<()> {
     todo!("quick-check")
   }

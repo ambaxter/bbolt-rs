@@ -41,10 +41,10 @@ pub trait TxApi<'tx>: TxCheck<'tx> {
   /// Returns the transaction id.
   ///
   /// ```rust
-  /// use bbolt_rs::{BucketApi, BucketRwApi, Bolt, DbApi, DbRwAPI, TxApi, TxRwRefApi};
+  /// use bbolt_rs::*;
   ///
-  /// fn main() -> bbolt_rs::Result<()> {
-  ///   let mut db = Bolt::new_mem()?;
+  /// fn main() -> Result<()> {
+  ///   let mut db = Bolt::open_mem()?;
   ///
   ///   db.view(|tx| {
   ///     assert_eq!(1, tx.id().0);
@@ -69,10 +69,10 @@ pub trait TxApi<'tx>: TxCheck<'tx> {
   /// Returns current database size in bytes as seen by this transaction.
   ///
   /// ```rust
-  /// use bbolt_rs::{BucketApi, BucketRwApi, Bolt,CursorApi, DbApi, DbRwAPI, TxApi, TxRwRefApi};
+  /// use bbolt_rs::*;
   ///
-  /// fn main() -> bbolt_rs::Result<()> {
-  ///   let mut db = Bolt::new_mem()?;
+  /// fn main() -> Result<()> {
+  ///   let mut db = Bolt::open_mem()?;
   ///
   ///   db.update(|mut tx| {
   ///     let mut b = tx.create_bucket_if_not_exists("test")?;
@@ -91,10 +91,10 @@ pub trait TxApi<'tx>: TxCheck<'tx> {
   /// Returns whether the transaction can perform write operations.
   ///
   /// ```rust
-  /// use bbolt_rs::{BucketApi, BucketRwApi, Bolt, DbApi, DbRwAPI, TxApi, TxRwRefApi};
+  /// use bbolt_rs::*;
   ///
-  /// fn main() -> bbolt_rs::Result<()> {
-  ///   let mut db = Bolt::new_mem()?;
+  /// fn main() -> Result<()> {
+  ///   let mut db = Bolt::open_mem()?;
   ///
   ///   db.update(|mut tx| {
   ///     assert_eq!(true, tx.writable());
@@ -115,10 +115,10 @@ pub trait TxApi<'tx>: TxCheck<'tx> {
   /// All items in the cursor will return None value because all root bucket keys point to buckets.
   ///
   /// ```rust
-  /// use bbolt_rs::{BucketApi, BucketRwApi, Bolt, CursorApi, DbApi, DbRwAPI, TxApi, TxRwRefApi};
+  /// use bbolt_rs::*;
   ///
-  /// fn main() -> bbolt_rs::Result<()> {
-  ///   let mut db = Bolt::new_mem()?;
+  /// fn main() -> Result<()> {
+  ///   let mut db = Bolt::open_mem()?;
   ///
   ///   db.update(|mut tx| {
   ///     tx.create_bucket_if_not_exists("test1")?;
@@ -147,10 +147,10 @@ pub trait TxApi<'tx>: TxCheck<'tx> {
   /// Returns None if the bucket does not exist.
   ///
   /// ```rust
-  /// use bbolt_rs::{BucketApi, BucketRwApi, Bolt, DbApi, DbRwAPI, TxApi, TxRwRefApi};
+  /// use bbolt_rs::*;
   ///
-  /// fn main() -> bbolt_rs::Result<()> {
-  ///   let mut db = Bolt::new_mem()?;
+  /// fn main() -> Result<()> {
+  ///   let mut db = Bolt::open_mem()?;
   ///
   ///   db.update(|mut tx| {
   ///     let mut b = tx.create_bucket_if_not_exists("test")?;
@@ -176,10 +176,10 @@ pub trait TxApi<'tx>: TxCheck<'tx> {
   /// the error is returned to the caller.
   ///
   /// ```rust
-  /// use bbolt_rs::{BucketApi, BucketRwApi, Bolt,CursorApi, DbApi, DbRwAPI, TxApi, TxRwRefApi};
+  /// use bbolt_rs::*;
   ///
-  /// fn main() -> bbolt_rs::Result<()> {
-  ///   let mut db = Bolt::new_mem()?;
+  /// fn main() -> Result<()> {
+  ///   let mut db = Bolt::open_mem()?;
   ///
   ///   db.update(|mut tx| {
   ///     let mut b = tx.create_bucket_if_not_exists("test")?;
@@ -211,10 +211,10 @@ pub trait TxApi<'tx>: TxCheck<'tx> {
   ///
   /// This is only safe for concurrent use when used by a writable transaction.
   /// ```rust
-  /// use bbolt_rs::{BucketApi, BucketRwApi, Bolt, DbApi, DbRwAPI, TxApi, TxRwRefApi};
+  /// use bbolt_rs::*;
   ///
-  /// fn main() -> bbolt_rs::Result<()> {
-  ///   let mut db = Bolt::new_mem()?;
+  /// fn main() -> Result<()> {
+  ///   let mut db = Bolt::open_mem()?;
   ///
   ///   db.update(|mut tx| {
   ///     let mut b = tx.create_bucket_if_not_exists("test")?;
@@ -241,10 +241,10 @@ pub trait TxRwRefApi<'tx>: TxApi<'tx> {
   /// Closes the transaction and ignores all previous updates.
   ///
   /// ```rust
-  /// use bbolt_rs::{BucketApi, BucketRwApi, Bolt, DbApi, DbRwAPI, TxApi, TxRwRefApi};
+  /// use bbolt_rs::*;
   ///
-  /// fn main() -> bbolt_rs::Result<()> {
-  ///   let mut db = Bolt::new_mem()?;
+  /// fn main() -> Result<()> {
+  ///   let mut db = Bolt::open_mem()?;
   ///
   ///   db.update(|mut tx| {
   ///     let mut b = tx.create_bucket_if_not_exists("test")?;
@@ -275,10 +275,10 @@ pub trait TxRwRefApi<'tx>: TxApi<'tx> {
   /// Returns None if the bucket does not exist.
   ///
   /// ```rust
-  /// use bbolt_rs::{BucketApi, BucketRwApi, Bolt, DbApi, DbRwAPI, TxApi, TxRwRefApi};
+  /// use bbolt_rs::*;
   ///
-  /// fn main() -> bbolt_rs::Result<()> {
-  ///   let mut db = Bolt::new_mem()?;
+  /// fn main() -> Result<()> {
+  ///   let mut db = Bolt::open_mem()?;
   ///
   ///   db.update(|mut tx| {
   ///     let mut b = tx.create_bucket_if_not_exists("test")?;
@@ -308,10 +308,10 @@ pub trait TxRwRefApi<'tx>: TxApi<'tx> {
   /// Returns an error if the bucket already exists, if the bucket name is blank, or if the bucket name is too long.
   ///
   /// ```rust
-  /// use bbolt_rs::{BucketApi, BucketRwApi, Bolt, DbApi, DbRwAPI, TxApi, TxRwRefApi};
+  /// use bbolt_rs::*;
   ///
-  /// fn main() -> bbolt_rs::Result<()> {
-  ///   let mut db = Bolt::new_mem()?;
+  /// fn main() -> Result<()> {
+  ///   let mut db = Bolt::open_mem()?;
   ///
   ///   db.update(|mut tx| {
   ///     let mut b = tx.create_bucket("test")?;
@@ -335,10 +335,10 @@ pub trait TxRwRefApi<'tx>: TxApi<'tx> {
   /// Returns an error if the bucket name is blank, or if the bucket name is too long.
   ///
   /// ```rust
-  /// use bbolt_rs::{BucketApi, BucketRwApi, Bolt, DbApi, DbRwAPI, TxApi, TxRwRefApi};
+  /// use bbolt_rs::*;
   ///
-  /// fn main() -> bbolt_rs::Result<()> {
-  ///   let mut db = Bolt::new_mem()?;
+  /// fn main() -> Result<()> {
+  ///   let mut db = Bolt::open_mem()?;
   ///
   ///   db.update(|mut tx| {
   ///     let mut b = tx.create_bucket_if_not_exists("test")?;
@@ -363,10 +363,10 @@ pub trait TxRwRefApi<'tx>: TxApi<'tx> {
   /// Returns an error if the bucket cannot be found or if the key represents a non-bucket value.
   ///
   /// ```rust
-  /// use bbolt_rs::{BucketApi, BucketRwApi, Bolt, DbApi, DbRwAPI, TxApi, TxRwRefApi};
+  /// use bbolt_rs::*;
   ///
-  /// fn main() -> bbolt_rs::Result<()> {
-  ///   let mut db = Bolt::new_mem()?;
+  /// fn main() -> Result<()> {
+  ///   let mut db = Bolt::open_mem()?;
   ///
   ///   db.update(|mut tx| {
   ///     let mut b = tx.create_bucket("test")?;
@@ -392,11 +392,11 @@ pub trait TxRwRefApi<'tx>: TxApi<'tx> {
   /// OnCommit adds a handler function to be executed after the transaction successfully commits.
   ///
   /// ```rust
-  /// use bbolt_rs::{BucketApi, BucketRwApi, Bolt,CursorApi, DbApi, DbRwAPI, TxApi, TxRwRefApi};
+  /// use bbolt_rs::*;
   /// use std::cell::RefCell;
   ///
-  /// fn main() -> bbolt_rs::Result<()> {
-  ///   let mut db = Bolt::new_mem()?;
+  /// fn main() -> Result<()> {
+  ///   let mut db = Bolt::open_mem()?;
   ///
   ///   let tx_committed = RefCell::new(false);
   ///   db.update(|mut tx| {
@@ -418,10 +418,10 @@ pub trait TxRwApi<'tx>: TxRwRefApi<'tx> {
   /// Returns an error if a disk write error occurs
   ///
   /// ```rust
-  /// use bbolt_rs::{BucketApi, BucketRwApi, Bolt, CursorApi, DbApi, DbRwAPI, TxApi, TxRwRefApi, TxRwApi};
+  /// use bbolt_rs::*;
   ///
-  /// fn main() -> bbolt_rs::Result<()> {
-  ///   let mut db = Bolt::new_mem()?;
+  /// fn main() -> Result<()> {
+  ///   let mut db = Bolt::open_mem()?;
   ///
   ///   let mut tx = db.begin_rw()?;
   ///   tx.create_bucket_if_not_exists("test1")?;
@@ -1156,6 +1156,7 @@ impl<'tx> TxRwIApi<'tx> for TxRwCell<'tx> {
   }
 }
 
+/// Read-only Transaction
 pub struct TxImpl<'tx> {
   bump: SyncReusable<Pin<Box<PinBump>>>,
   db: Pin<AliasableBox<PinLockGuard<'tx, DbShared>>>,
@@ -1265,6 +1266,7 @@ impl<'tx> TxApi<'tx> for TxImpl<'tx> {
   }
 }
 
+/// Read-only Transaction reference used in managed transactions
 pub struct TxRef<'tx> {
   tx: TxCell<'tx>,
 }
@@ -1308,6 +1310,7 @@ impl<'tx> TxApi<'tx> for TxRef<'tx> {
   }
 }
 
+/// Read/Write Transaction
 pub struct TxRwImpl<'tx> {
   bump: SyncReusable<Pin<Box<PinBump>>>,
   db: Pin<AliasableBox<PinLockGuard<'tx, DbShared>>>,
@@ -1595,6 +1598,7 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
   }
 }
 
+/// Read/Write Transaction reference used in managed transactions
 pub struct TxRwRef<'tx> {
   pub(crate) tx: TxRwCell<'tx>,
 }

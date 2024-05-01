@@ -66,7 +66,7 @@ where
   /// use bbolt_rs::*;
   ///
   /// fn main() -> Result<()> {
-  ///   let mut db = Bolt::new_mem()?;
+  ///   let mut db = Bolt::open_mem()?;
   ///
   ///   db.update(|mut tx| {
   ///     let mut b = tx.create_bucket_if_not_exists("test")?;
@@ -99,7 +99,7 @@ where
   /// use bbolt_rs::*;
   ///
   /// fn main() -> Result<()> {
-  ///   let mut db = Bolt::new_mem()?;
+  ///   let mut db = Bolt::open_mem()?;
   ///
   ///   db.update(|mut tx| {
   ///     let mut b = tx.create_bucket_if_not_exists("test")?;
@@ -134,7 +134,7 @@ where
   /// use bbolt_rs::*;
   ///
   /// fn main() -> Result<()> {
-  ///   let mut db = Bolt::new_mem()?;
+  ///   let mut db = Bolt::open_mem()?;
   ///   let cloned = db.clone();
   ///   db.update(|mut tx| {
   ///     let mut b = tx.create_bucket_if_not_exists("test")?;
@@ -173,7 +173,7 @@ pub trait DbRwAPI: DbApi {
   /// use bbolt_rs::*;
   ///
   /// fn main() -> Result<()> {
-  ///   let mut db = Bolt::new_mem()?;
+  ///   let mut db = Bolt::open_mem()?;
   ///
   ///   let mut tx = db.begin_rw()?;
   ///   let mut b = tx.create_bucket_if_not_exists("test")?;
@@ -211,7 +211,7 @@ pub trait DbRwAPI: DbApi {
   /// use bbolt_rs::*;
   ///
   /// fn main() -> Result<()> {
-  ///   let mut db = Bolt::new_mem()?;
+  ///   let mut db = Bolt::open_mem()?;
   ///
   ///   db.update(|mut tx| {
   ///     let mut b = tx.create_bucket_if_not_exists("test")?;
@@ -254,7 +254,7 @@ pub trait DbRwAPI: DbApi {
   /// use bbolt_rs::*;
   ///
   /// fn main() -> Result<()> {
-  ///   let mut db = Bolt::new_mem()?;
+  ///   let mut db = Bolt::open_mem()?;
   ///
   ///   db.batch(|mut tx| {
   ///     let mut b = tx.create_bucket_if_not_exists("test")?;
@@ -283,7 +283,7 @@ pub trait DbRwAPI: DbApi {
   /// use bbolt_rs::*;
   ///
   /// fn main() -> Result<()> {
-  ///   let mut db = Bolt::new_mem()?;
+  ///   let mut db = Bolt::open_mem()?;
   ///
   ///   db.batch(|mut tx| {
   ///     let mut b = tx.create_bucket_if_not_exists("test")?;
@@ -1420,7 +1420,7 @@ impl BoltOptions {
   }
 
   /// Opens an in-memory database
-  pub fn new_mem(self) -> crate::Result<Bolt> {
+  pub fn open_mem(self) -> crate::Result<Bolt> {
     Bolt::new_mem_with_options(self)
   }
 }
@@ -1605,7 +1605,7 @@ pub struct InnerDB {
 unsafe impl Send for InnerDB {}
 unsafe impl Sync for InnerDB {}
 
-/// A Bolt Database
+/// The Bolt Database
 #[derive(Clone)]
 pub struct Bolt {
   inner: Arc<InnerDB>,
@@ -1729,7 +1729,7 @@ impl Bolt {
   }
 
   /// Opens an in-memory database
-  pub fn new_mem() -> crate::Result<Self> {
+  pub fn open_mem() -> crate::Result<Self> {
     Bolt::new_mem_with_options(BoltOptions::default())
   }
 
@@ -2043,6 +2043,7 @@ mod test {
 
   #[test]
   #[ignore]
+  #[cfg(feature = "long-tests")]
   fn test_open_multiple_goroutines() {
     todo!()
   }
@@ -2097,6 +2098,7 @@ mod test {
 
   #[test]
   #[ignore]
+  #[cfg(feature = "long-tests")]
   fn test_open_size_large() {
     todo!()
   }

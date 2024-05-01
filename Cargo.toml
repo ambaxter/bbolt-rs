@@ -41,6 +41,7 @@ allgasnobrakes = []
 compat = []
 strict = []
 try-begin = []
+long-tests = []
 
 [dev-dependencies]
 

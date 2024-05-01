@@ -1,6 +1,7 @@
 use std::io;
 use thiserror::Error;
 
+/// Bolt database errors
 #[derive(Error, Debug)]
 pub enum Error {
   // These errors can be returned when opening or calling methods on a DB.

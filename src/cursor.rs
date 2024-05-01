@@ -19,7 +19,7 @@ pub trait CursorApi<'tx> {
   /// use bbolt_rs::*;
   ///
   /// fn main() -> Result<()> {
-  ///   let mut db = Bolt::new_mem()?;
+  ///   let mut db = Bolt::open_mem()?;
   ///
   ///   db.update(|mut tx| {
   ///     let mut b = tx.create_bucket_if_not_exists("test")?;
@@ -50,7 +50,7 @@ pub trait CursorApi<'tx> {
   /// use bbolt_rs::*;
   ///
   /// fn main() -> Result<()> {
-  ///   let mut db = Bolt::new_mem()?;
+  ///   let mut db = Bolt::open_mem()?;
   ///
   ///   db.update(|mut tx| {
   ///     let mut b = tx.create_bucket_if_not_exists("test")?;
@@ -81,7 +81,7 @@ pub trait CursorApi<'tx> {
   /// use bbolt_rs::*;
   ///
   /// fn main() -> Result<()> {
-  ///   let mut db = Bolt::new_mem()?;
+  ///   let mut db = Bolt::open_mem()?;
   ///
   ///   db.update(|mut tx| {
   ///     let mut b = tx.create_bucket_if_not_exists("test")?;
@@ -112,7 +112,7 @@ pub trait CursorApi<'tx> {
   /// use bbolt_rs::*;
   ///
   /// fn main() -> Result<()> {
-  ///   let mut db = Bolt::new_mem()?;
+  ///   let mut db = Bolt::open_mem()?;
   ///
   ///   db.update(|mut tx| {
   ///     let mut b = tx.create_bucket_if_not_exists("test")?;
@@ -145,7 +145,7 @@ pub trait CursorApi<'tx> {
   /// use bbolt_rs::*;
   ///
   /// fn main() -> Result<()> {
-  ///   let mut db = Bolt::new_mem()?;
+  ///   let mut db = Bolt::open_mem()?;
   ///
   ///   db.update(|mut tx| {
   ///     let mut b = tx.create_bucket_if_not_exists("test")?;
@@ -177,7 +177,7 @@ pub trait CursorRwApi<'tx>: CursorApi<'tx> {
   /// use bbolt_rs::*;
   ///
   /// fn main() -> Result<()> {
-  ///   let mut db = Bolt::new_mem()?;
+  ///   let mut db = Bolt::open_mem()?;
   ///
   ///   db.update(|mut tx| {
   ///     let mut b = tx.create_bucket_if_not_exists("test")?;
@@ -210,6 +210,7 @@ pub trait CursorRwApi<'tx>: CursorApi<'tx> {
 }
 
 // TODO: We need a better way to do this. InnerCursor shouldn't be leaked
+/// Read-only Cursor
 pub enum CursorImpl<'tx> {
   R(InnerCursor<'tx, TxCell<'tx>, BucketCell<'tx>>),
   RW(InnerCursor<'tx, TxRwCell<'tx>, BucketRwCell<'tx>>),
@@ -264,6 +265,7 @@ impl<'tx> CursorApi<'tx> for CursorImpl<'tx> {
   }
 }
 
+/// Read/Write Cursor
 pub struct CursorRwImpl<'tx> {
   c: InnerCursor<'tx, TxRwCell<'tx>, BucketRwCell<'tx>>,
 }
