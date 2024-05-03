@@ -5,13 +5,7 @@ bbolt-rs
 
 ## Before Release 1.38
 - [ ] Most of the db tests
-- [x] Most of the examples
 - [ ] Node leaf tests
-- [x] All stats
-- [x] db batch
-- [x] main bench
-- [x] clippy again
-
 
 ## General
 - [ ] Quick Check analog
