@@ -123,6 +123,9 @@ where
   /// This is only updated when a transaction closes.
   fn stats(&self) -> Arc<DbStats>;
 
+  // TODO:
+  //fn path(&self) -> &Path;
+
   /// Close releases all database resources.
   ///
   /// It will block waiting for any open transactions to finish
@@ -734,18 +737,19 @@ impl FileBackend {
     let mut buffer = AlignedBytes::<alignment::Page>::new_zeroed(4096);
     let refpage = RefPage::new(buffer.as_ptr());
     let mut meta_can_read = false;
-    file
+    let bw = file
       .seek(SeekFrom::Start(0))
       .and_then(|_| file.read(&mut buffer))
       .map_err(|_| Error::InvalidDatabase(meta_can_read))?;
-    meta_can_read = true;
-    if let Some(meta_page) = MappedMetaPage::coerce_ref(&refpage) {
-      if meta_page.meta.validate().is_ok() {
-        let page_size = meta_page.meta.page_size();
-        return Ok(page_size as usize);
+    if bw == buffer.len() {
+      meta_can_read = true;
+      if let Some(meta_page) = MappedMetaPage::coerce_ref(&refpage) {
+        if meta_page.meta.validate().is_ok() {
+          let page_size = meta_page.meta.page_size();
+          return Ok(page_size as usize);
+        }
       }
     }
-
     Err(Error::InvalidDatabase(meta_can_read))
   }
 
@@ -757,7 +761,7 @@ impl FileBackend {
     let mut buffer = AlignedBytes::<alignment::Page>::new_zeroed(4096);
     for i in 0..15u64 {
       let pos = 1024u64 << i;
-      if pos >= file_size - 1024 {
+      if file_size < 1024 || pos >= file_size - 1024 {
         break;
       }
       let bw = file
@@ -1408,13 +1412,13 @@ impl BoltOptions {
 
   /// Open creates and opens a database at the given path.
   /// If the file does not exist then it will be created automatically.
-  pub fn open<T: Into<PathBuf>>(self, path: T) -> crate::Result<Bolt> {
+  pub fn open<T: AsRef<Path>>(self, path: T) -> crate::Result<Bolt> {
     Bolt::open_path(path, self)
   }
 
   /// Opens a database as read-only at the given path.
   /// If the file does not exist then it will be created automatically.
-  pub fn open_ro<T: Into<PathBuf>>(mut self, path: T) -> crate::Result<impl DbApi> {
+  pub fn open_ro<T: AsRef<Path>>(mut self, path: T) -> crate::Result<impl DbApi> {
     self.read_only = true;
     Bolt::open_path(path, self)
   }
@@ -1614,13 +1618,13 @@ pub struct Bolt {
 impl Bolt {
   /// Open creates and opens a database at the given path.
   /// If the file does not exist then it will be created automatically.
-  pub fn open<T: Into<PathBuf>>(path: T) -> crate::Result<Self> {
+  pub fn open<T: AsRef<Path>>(path: T) -> crate::Result<Self> {
     Bolt::open_path(path, BoltOptions::default())
   }
 
   /// Opens a database as read-only at the given path.
   /// If the file does not exist then it will be created automatically.
-  pub fn open_ro<T: Into<PathBuf>>(path: T) -> crate::Result<impl DbApi> {
+  pub fn open_ro<T: AsRef<Path>>(path: T) -> crate::Result<impl DbApi> {
     Bolt::open_path(
       path,
       BoltOptions {
@@ -1630,21 +1634,24 @@ impl Bolt {
     )
   }
 
-  fn open_path<T: Into<PathBuf>>(path: T, db_options: BoltOptions) -> crate::Result<Self> {
-    let path = path.into();
-
-    if !path.exists() || path.metadata()?.len() == 0 {
-      let page_size = db_options
-        .page_size()
-        .unwrap_or(DEFAULT_PAGE_SIZE.bytes() as usize);
-      Bolt::init(&path, page_size)?;
-    }
+  fn open_path<T: AsRef<Path>>(path: T, db_options: BoltOptions) -> crate::Result<Self> {
+    let path = path.as_ref();
     let read_only = db_options.read_only();
-    let mut file = fs::OpenOptions::new()
-      .write(!read_only)
-      .create(!read_only)
-      .read(true)
-      .open(&path)?;
+    let mut file = if db_options.read_only() {
+      let file = fs::OpenOptions::new().read(true).open(path)?;
+      file.lock_shared()?;
+      file
+    } else {
+      let mut file = fs::OpenOptions::new().write(true).read(true).open(path)?;
+      file.lock_exclusive()?;
+      if !path.exists() || path.metadata()?.len() == 0 {
+        let page_size = db_options
+          .page_size()
+          .unwrap_or(DEFAULT_PAGE_SIZE.bytes() as usize);
+        Bolt::init(path, &mut file, page_size)?;
+      }
+      file
+    };
     let page_size = FileBackend::get_page_size(&mut file)?;
     assert!(page_size > 0, "invalid page size");
 
@@ -1659,10 +1666,8 @@ impl Bolt {
       .len(data_size as usize)
       .to_owned();
     let mmap = if read_only {
-      file.lock_shared()?;
       options.map_raw_read_only(&file)?
     } else {
-      file.lock_exclusive()?;
       options.map_raw(&file)?
     };
     #[cfg(unix)]
@@ -1673,7 +1678,7 @@ impl Bolt {
       }
     }
     let backend = FileBackend {
-      path,
+      path: path.into(),
       file: Mutex::new(FileState { file, file_size }),
       page_size,
       mmap: Some(mmap),
@@ -1826,14 +1831,8 @@ impl Bolt {
     buffer
   }
 
-  fn init(path: &Path, page_size: usize) -> io::Result<usize> {
+  fn init(path: &Path, db: &mut File, page_size: usize) -> io::Result<usize> {
     let buffer = Bolt::init_page(page_size);
-    let mut db = fs::OpenOptions::new()
-      .write(true)
-      .create(true)
-      .truncate(true)
-      .read(true)
-      .open(path)?;
     #[cfg(unix)]
     {
       use std::os::unix::fs::PermissionsExt;
@@ -2030,40 +2029,76 @@ impl DbRwAPI for Bolt {
 
 #[cfg(test)]
 mod test {
+  use std::io::Write;
   use crate::db::DbStats;
-  use crate::test_support::TestDb;
-  use crate::{BucketApi, BucketRwApi, DbApi, DbRwAPI, TxApi, TxRwRefApi};
+  use crate::test_support::{temp_file, TestDb};
+  use crate::{Bolt, BucketApi, BucketRwApi, DbApi, DbRwAPI, Error, TxApi, TxRwRefApi};
+  use std::sync::mpsc::{channel, sync_channel};
+  use std::sync::Arc;
   use std::thread;
 
   #[test]
-  #[ignore]
-  fn test_open() {
-    todo!()
+  fn test_open() -> crate::Result<()> {
+    let db = TestDb::new()?;
+    db.clone_db().close();
+    Ok(())
   }
 
   #[test]
-  #[ignore]
-  #[cfg(feature = "long-tests")]
-  fn test_open_multiple_goroutines() {
-    todo!()
+  //#[cfg(feature = "long-tests")]
+  fn test_open_multiple_threads() -> crate::Result<()> {
+    let instances = 30;
+    let iterations = 30;
+    let mut threads = Vec::new();
+    let temp_file = Arc::new(temp_file()?);
+    let (tx, rx) = channel();
+    for _ in 0..iterations {
+      for _ in 0..instances {
+        let t_file = temp_file.clone();
+        let t_tx = tx.clone();
+        let handle = thread::spawn(move || {
+          let db = Bolt::open(t_file.path());
+          if let Some(error) = db.err() {
+            let s = format!("{}", &error);
+            t_tx.send(error).unwrap();
+          }
+        });
+        threads.push(handle);
+      }
+      while let Some(handle) = threads.pop() {
+        handle.join().unwrap();
+      }
+    }
+    drop(tx);
+    if let Ok(error) = rx.try_recv() {
+      panic!("Fatal error: {}", error);
+    }
+    Ok(())
   }
 
   #[test]
-  #[ignore]
-  fn test_open_err_path_required() {
-    todo!()
+  fn test_open_err_path_required() -> crate::Result<()> {
+    let r = Bolt::open("");
+    assert!(r.is_err());
+    Ok(())
   }
 
   #[test]
-  #[ignore]
-  fn test_open_err_not_exists() {
-    todo!()
+  fn test_open_err_not_exists() -> crate::Result<()> {
+    let file = temp_file()?;
+    let path = file.path().join("bad-path");
+    let r = Bolt::open(path);
+    assert!(r.is_err());
+    Ok(())
   }
 
   #[test]
-  #[ignore]
-  fn test_open_err_invalid() {
-    todo!()
+  fn test_open_err_invalid() -> crate::Result<()> {
+    let mut file = temp_file()?;
+    file.as_file_mut().write_all(b"this is not a bolt database")?;
+    let r = Bolt::open(file.path());
+    assert_eq!(Some(Error::InvalidDatabase(false)), r.err());
+    Ok(())
   }
 
   #[test]

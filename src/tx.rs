@@ -1022,7 +1022,6 @@ impl<'tx> TxIApi<'tx> for TxRwCell<'tx> {
 }
 
 impl<'tx> TxRwIApi<'tx> for TxRwCell<'tx> {
-
   fn freelist_free_page(self, txid: TxId, p: &PageHeader) {
     self.cell.borrow().r.db.free_page(txid, p)
   }
@@ -1463,7 +1462,6 @@ impl<'tx> TxApi<'tx> for TxRwImpl<'tx> {
 }
 
 impl<'tx> TxRwRefApi<'tx> for TxRwImpl<'tx> {
-
   fn rollback(self) -> crate::Result<()> {
     self.tx.rollback()
   }
@@ -1642,7 +1640,6 @@ impl<'tx> TxApi<'tx> for TxRwRef<'tx> {
 }
 
 impl<'tx> TxRwRefApi<'tx> for TxRwRef<'tx> {
-
   fn rollback(self) -> crate::Result<()> {
     self.tx.rollback()
   }

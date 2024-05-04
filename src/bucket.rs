@@ -297,7 +297,6 @@ where
 
 /// RW Bucket API
 pub trait BucketRwApi<'tx>: BucketApi<'tx> {
-
   /// Retrieves a nested mutable bucket by name.
   ///
   /// Returns None if the bucket does not exist.
@@ -1912,7 +1911,7 @@ mod tests {
   }
 
   #[test]
-  #[cfg(all(not(miri),feature = "long-tests"))]
+  #[cfg(all(not(miri), feature = "long-tests"))]
 
   fn test_db_put_very_large() -> crate::Result<()> {
     let mut db = TestDb::new()?;
@@ -1989,7 +1988,7 @@ mod tests {
   }
 
   #[test]
-  #[cfg(all(not(miri), feature="long_tests"))]
+  #[cfg(all(not(miri), feature = "long_tests"))]
   fn test_bucket_delete_freelist_overflow() -> crate::Result<()> {
     let mut db = TestDb::new()?;
 
@@ -2021,12 +2020,20 @@ mod tests {
     let free_page_n = stats.free_page_n();
     let pending_page_n = stats.pending_page_n();
     let free_pages = free_page_n + pending_page_n;
-    assert!(free_pages > 0xFFFF, "expected more than 0xFFFF free pages. Got {}", free_pages);
+    assert!(
+      free_pages > 0xFFFF,
+      "expected more than 0xFFFF free pages. Got {}",
+      free_pages
+    );
     db.must_close();
     db.must_reopen();
     let stats = db.stats();
     let reopen_free_pages = stats.free_page_n();
-    assert_eq!(free_pages, reopen_free_pages, "Expected {} free pages, got {:?}", free_pages, reopen_free_pages);
+    assert_eq!(
+      free_pages, reopen_free_pages,
+      "Expected {} free pages, got {:?}",
+      free_pages, reopen_free_pages
+    );
     Ok(())
   }
 

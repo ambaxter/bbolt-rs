@@ -15,10 +15,19 @@ pub(crate) fn mapped_page<T: CoerciblePage + Sized>(
   )
 }
 
+pub(crate) fn temp_file() -> crate::Result<NamedTempFile> {
+  let temp_file = Builder::new()
+    .prefix("bbolt-rs-")
+    .suffix(".db")
+    .tempfile()?;
+
+  Ok(temp_file)
+}
+
 pub(crate) struct TestDb {
   pub(crate) tmp_file: Option<NamedTempFile>,
   pub(crate) db: Option<Bolt>,
-  options: BoltOptions
+  options: BoltOptions,
 }
 
 impl Deref for TestDb {
@@ -53,22 +62,23 @@ impl TestDb {
   }
 
   pub(crate) fn new_tmp(options: BoltOptions) -> crate::Result<TestDb> {
-    let tmp_file = Builder::new()
-      .prefix("bbolt-rs-")
-      .suffix(".db")
-      .tempfile()?;
+    let tmp_file = temp_file()?;
     let db = options.clone().open(tmp_file.path())?;
 
     Ok(TestDb {
       tmp_file: Some(tmp_file),
       db: Some(db),
-      options
+      options,
     })
   }
 
   pub(crate) fn new_mem(options: BoltOptions) -> crate::Result<TestDb> {
     let db = options.clone().open_mem()?;
-    Ok(TestDb { tmp_file: None, db: Some(db), options })
+    Ok(TestDb {
+      tmp_file: None,
+      db: Some(db),
+      options,
+    })
   }
 
   pub(crate) fn must_check(&mut self) {
@@ -89,10 +99,15 @@ impl TestDb {
   }
 
   pub(crate) fn must_reopen(&mut self) {
-    assert!(self.tmp_file.is_some(), "Reopen only supported on file based databases");
+    assert!(
+      self.tmp_file.is_some(),
+      "Reopen only supported on file based databases"
+    );
     assert!(self.db.is_none(), "Please call close before must_reopen");
     let options = self.options.clone();
-    let db = options.open(self.tmp_file.as_ref().unwrap().path()).unwrap();
+    let db = options
+      .open(self.tmp_file.as_ref().unwrap().path())
+      .unwrap();
     self.db = Some(db);
   }
 
