@@ -261,7 +261,7 @@ impl PageHeader {
   }
 }
 
-/// PageInfo represents human readable information about a page.
+/// PageInfo represents human-readable information about a page.
 #[derive(Debug, Eq, PartialEq)]
 pub struct PageInfo {
   pub id: u64,

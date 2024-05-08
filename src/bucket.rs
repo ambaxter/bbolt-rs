@@ -49,7 +49,7 @@ where
   ///   db.view(|tx| {
   ///     let b = tx.bucket("test").unwrap();
   ///     let page_id = b.root();
-  ///     let page_info = tx.page(page_id)?.unwrap();
+  ///     let page_info = tx.page(page_id).unwrap();
   ///     println!("{:?}", page_info);
   ///     Ok(())
   ///   })?;
@@ -1662,6 +1662,7 @@ impl<'tx> BucketRwIApi<'tx> for BucketRwCell<'tx> {
       *inline_bucket = self.cell.borrow().r.bucket_header;
       let mut mut_page = MutPage::new(inline_bucket_ptr.add(BUCKET_HEADER_SIZE));
       mut_page.id = PgId(0);
+      mut_page.count = 0;
       mut_page.overflow = 0;
       root_node.write(&mut mut_page);
       from_raw_parts(inline_bucket_ptr, page_size)
@@ -1777,10 +1778,10 @@ impl<'tx> BucketRwIApi<'tx> for BucketRwCell<'tx> {
 
 #[cfg(test)]
 mod tests {
-  use crate::bucket::{BucketStats, MAX_VALUE_SIZE};
+  use crate::bucket::MAX_VALUE_SIZE;
   use crate::test_support::TestDb;
   use crate::{
-    BucketApi, BucketRwApi, CursorApi, CursorRwApi, DbApi, DbRwAPI, Error, TxApi, TxRwRefApi,
+    BucketApi, BucketRwApi, BucketStats, CursorApi, DbApi, DbRwAPI, Error, TxApi, TxRwRefApi,
   };
   use anyhow::anyhow;
   use itertools::Itertools;

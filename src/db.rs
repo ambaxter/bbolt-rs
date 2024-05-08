@@ -123,8 +123,33 @@ where
   /// This is only updated when a transaction closes.
   fn stats(&self) -> Arc<DbStats>;
 
-  // TODO:
-  //fn path(&self) -> &Path;
+  /// Returns the database's path
+  ///
+  /// ```rust
+  /// use bbolt_rs::*;
+  ///
+  /// fn main() -> Result<()> {
+  ///   let db = Bolt::open_mem()?;
+  ///
+  ///   assert_eq!(&DbPath::Memory, db.path());
+  ///   Ok(())
+  /// }
+  /// ```
+  fn path(&self) -> &DbPath;
+
+  /// Returns the database internal information
+  ///
+  /// ```rust
+  /// use bbolt_rs::*;
+  ///
+  /// fn main() -> Result<()> {
+  ///   let db = Bolt::open_mem()?;
+  ///
+  ///   assert_eq!(4096, db.info().page_size);
+  ///   Ok(())
+  /// }
+  /// ```
+  fn info(&self) -> DbInfo;
 
   /// Close releases all database resources.
   ///
@@ -449,9 +474,39 @@ fn mmap_size(page_size: usize, size: u64) -> crate::Result<u64> {
   Ok(sz)
 }
 
+#[derive(Clone, PartialOrd, PartialEq, Ord, Eq, Debug)]
+pub enum DbPath {
+  Memory,
+  FilePath(PathBuf),
+}
+
+impl DbPath {
+  pub fn file_path(&self) -> Option<&Path> {
+    match self {
+      DbPath::Memory => None,
+      DbPath::FilePath(p) => Some(p),
+    }
+  }
+}
+
+#[derive(Clone, Debug)]
+pub struct DbInfo {
+  pub page_size: usize,
+}
+
 pub(crate) trait DBBackend: Send + Sync {
   fn page_size(&self) -> usize;
   fn data_size(&self) -> u64;
+
+  fn validate_meta(&self) -> crate::Result<()> {
+    let meta0 = self.meta0();
+    let meta1 = self.meta1();
+    if let (Err(error), Err(_)) = (meta0.meta.validate(), meta1.meta.validate()) {
+      return Err(error);
+    }
+    Ok(())
+  }
+
   fn meta(&self) -> Meta {
     let meta0 = self.meta0();
     let meta1 = self.meta1();
@@ -572,34 +627,33 @@ impl DBBackend for MemBackend {
       RefPage::new(
         mmap
           .as_ptr()
-          .offset(pg_id.0 as isize * self.page_size as isize),
+          .byte_add(pg_id.0 as usize * self.page_size),
       )
     }
   }
 
   fn grow(&self, size: u64) -> crate::Result<()> {
     let mut mmap = self.mmap.lock();
+    if size <= mmap.len() as u64 {
+      return Ok(())
+    }
     let mut new_mmap = AlignedBytes::new_zeroed(size as usize);
     new_mmap[0..mmap.len()].copy_from_slice(&mmap);
-    mem::swap(mmap.deref_mut(), &mut new_mmap);
+    *mmap = new_mmap;
     Ok(())
   }
 
+  //TODO: This is a mess, too
   fn mmap(&mut self, min_size: u64, _tx: TxRwCell) -> crate::Result<()> {
     let mut size = {
       let mmap = self.mmap.lock();
       if mmap.len() < self.page_size * 2 {
-        return Err(Error::MMapFileSizeTooSmall);
+        return Err(Error::MMapTooSmall(mmap.len() as u64));
       }
       (mmap.len() as u64).max(min_size)
     };
     size = mmap_size(self.page_size, size)?;
-    let r0 = self.meta0().meta.validate();
-    let r1 = self.meta1().meta.validate();
-
-    if r0.is_err() && r1.is_err() {
-      return r0;
-    }
+    self.validate_meta()?;
 
     self.data_size = size;
     Ok(())
@@ -653,7 +707,7 @@ impl DerefMut for FileState {
 }
 
 pub struct FileBackend {
-  path: PathBuf,
+  path: Arc<PathBuf>,
   file: Mutex<FileState>,
   page_size: usize,
   mmap: Option<MmapRaw>,
@@ -781,6 +835,16 @@ impl FileBackend {
     }
     Err(Error::InvalidDatabase(meta_can_read))
   }
+
+  pub(crate) fn file_size(&self) -> crate::Result<u64> {
+    let file_lock = self.file.lock();
+    let info = file_lock.metadata()?;
+    let size = info.len();
+    if size < (self.page_size * 2) as u64 {
+      return Err(Error::FileSizeTooSmall(size));
+    }
+    Ok(size)
+  }
 }
 
 impl DBBackend for FileBackend {
@@ -854,12 +918,7 @@ impl DBBackend for FileBackend {
   /// mmap opens the underlying memory-mapped file and initializes the meta references.
   /// min_size is the minimum size that the new mmap can be.
   fn mmap(&mut self, min_size: u64, tx: TxRwCell) -> crate::Result<()> {
-    let file_lock = self.file.lock();
-    let info = file_lock.metadata()?;
-    if info.len() < (self.page_size * 2) as u64 {
-      return Err(Error::MMapFileSizeTooSmall);
-    }
-    let file_size = info.len();
+    let file_size = self.file_size()?;
     let mut size = file_size.max(min_size);
 
     size = mmap_size(self.page_size, size)?;
@@ -871,6 +930,7 @@ impl DBBackend for FileBackend {
       tx.cell.bound().own_in();
     }
 
+    let file_lock = self.file.lock();
     let mmap = MmapOptions::new()
       .len(size as usize)
       .map_raw(&**file_lock)?;
@@ -952,7 +1012,7 @@ pub(crate) trait DbIApi<'tx>: 'tx {
   fn allocate(&self, tx: TxRwCell, page_count: u64) -> AllocateResult<'tx>;
 
   fn free_page(&self, txid: TxId, p: &PageHeader);
-  fn free_pages(&self);
+  fn free_pages(&self, state: &mut DbState);
 
   fn freelist_count(&self) -> u64;
 
@@ -1009,10 +1069,10 @@ impl<'tx> DbIApi<'tx> for LockGuard<'tx, DbShared> {
     }
   }
 
-  fn free_pages(&self) {
+  fn free_pages(&self, state: &mut DbState) {
     match self {
-      LockGuard::R(guard) => guard.free_pages(),
-      LockGuard::U(guard) => guard.borrow().free_pages(),
+      LockGuard::R(guard) => guard.free_pages(state),
+      LockGuard::U(guard) => guard.borrow().free_pages(state),
     }
   }
 
@@ -1150,8 +1210,7 @@ impl<'tx> DbIApi<'tx> for DbShared {
     self.backend.freelist().free(txid, p)
   }
 
-  fn free_pages(&self) {
-    let mut state = self.db_state.lock();
+  fn free_pages(&self, state: &mut DbState) {
     let mut freelist = self.backend.freelist();
     // Free all pending pages prior to earliest open transaction.
 
@@ -1598,7 +1657,7 @@ impl Batcher {
 
 /// A BBolt Database
 pub struct InnerDB {
-  // TODO: Save a single Bump for RW transactions with a size hint?
+  path: Arc<DbPath>,
   bump_pool: Arc<SyncPool<Pin<Box<PinBump>>>>,
   db: RwLock<DbShared>,
   stats: Arc<DbStats>,
@@ -1634,10 +1693,9 @@ impl Bolt {
     )
   }
 
-  fn open_path<T: AsRef<Path>>(path: T, db_options: BoltOptions) -> crate::Result<Self> {
-    let path = path.as_ref();
-    let read_only = db_options.read_only();
-    let mut file = if db_options.read_only() {
+  fn new_file_backend(path: &Path, bolt_options: BoltOptions) -> crate::Result<Bolt> {
+    let read_only = bolt_options.read_only();
+    let mut file = if bolt_options.read_only() {
       let file = fs::OpenOptions::new().read(true).open(path)?;
       file.lock_shared()?;
       file
@@ -1645,7 +1703,7 @@ impl Bolt {
       let mut file = fs::OpenOptions::new().write(true).read(true).open(path)?;
       file.lock_exclusive()?;
       if !path.exists() || path.metadata()?.len() == 0 {
-        let page_size = db_options
+        let page_size = bolt_options
           .page_size()
           .unwrap_or(DEFAULT_PAGE_SIZE.bytes() as usize);
         Bolt::init(path, &mut file, page_size)?;
@@ -1656,7 +1714,7 @@ impl Bolt {
     assert!(page_size > 0, "invalid page size");
 
     let file_size = file.metadata()?.len();
-    let data_size = if let Some(initial_mmap_size) = db_options.initial_map_size() {
+    let data_size = if let Some(initial_mmap_size) = bolt_options.initial_map_size() {
       file_size.max(initial_mmap_size)
     } else {
       file_size
@@ -1673,78 +1731,34 @@ impl Bolt {
     #[cfg(unix)]
     {
       mmap.advise(Advice::Random)?;
-      if db_options.mlock() {
+      if bolt_options.mlock() {
         mmap.lock()?;
       }
     }
     let backend = FileBackend {
-      path: path.into(),
+      path: Arc::new(path.into()),
       file: Mutex::new(FileState { file, file_size }),
       page_size,
       mmap: Some(mmap),
       freelist: OnceLock::new(),
       alloc_size: DEFAULT_ALLOC_SIZE.bytes() as u64,
       data_size,
-      use_mlock: db_options.mlock(),
-      grow_async: !db_options.no_grow_sync(),
+      use_mlock: bolt_options.mlock(),
+      grow_async: !bolt_options.no_grow_sync(),
       read_only,
     };
-    let mut free_count = 0u64;
-    if db_options.preload_freelist() {
-      free_count = backend.freelist().free_count();
-    }
-    let meta = backend.meta();
-    if meta.free_list() == PGID_NO_FREE_LIST {
-      return Err(Error::Other(anyhow!(
-        "PGID_NO_FREE_LIST not currently supported"
-      )));
-    }
-    let db_state = Arc::new(Mutex::new(DbState::new(meta)));
-    let stats = DbStats {
-      free_page_n: (free_count as i64).into(),
-      ..Default::default()
-    };
-    let arc_stats = Arc::new(stats);
-    let bump_pool = SyncPool::new(
-      || Box::pin(PinBump::default()),
-      |bump| Pin::as_mut(bump).reset(),
-    );
-
-    let inner = Arc::new_cyclic(|weak| InnerDB {
-      bump_pool,
-      db: RwLock::new(DbShared {
-        stats: arc_stats.clone(),
-        db_state: db_state.clone(),
-        backend: Box::new(backend),
-        page_pool: Mutex::new(vec![]),
-        options: db_options.clone(),
-      }),
-      stats: arc_stats,
-      db_state,
-      batcher: Arc::new(Batcher {
-        inner: Default::default(),
-        db: weak.clone(),
-        max_batch_delay: db_options
-          .max_batch_delay
-          .unwrap_or(DEFAULT_MAX_BATCH_DELAY),
-        max_batch_size: db_options.max_batch_size.unwrap_or(DEFAULT_MAX_BATCH_SIZE),
-      }),
-    });
-    Ok(Bolt { inner })
+    backend.file_size()?;
+    let backend = Box::new(backend);
+    Self::new_db(DbPath::FilePath(path.into()), bolt_options, backend)
   }
 
-  /// Opens an in-memory database
-  pub fn open_mem() -> crate::Result<Self> {
-    Bolt::new_mem_with_options(BoltOptions::default())
-  }
-
-  pub(crate) fn new_mem_with_options(db_options: BoltOptions) -> crate::Result<Self> {
-    let page_size = db_options
+  fn new_mem_with_options(bolt_options: BoltOptions) -> crate::Result<Bolt> {
+    let page_size = bolt_options
       .page_size()
       .unwrap_or(DEFAULT_PAGE_SIZE.bytes() as usize);
     let mut mmap = Bolt::init_page(page_size);
     let file_size = mmap.len() as u64;
-    let data_size = if let Some(initial_mmap_size) = db_options.initial_map_size() {
+    let data_size = if let Some(initial_mmap_size) = bolt_options.initial_map_size() {
       file_size.max(initial_mmap_size)
     } else {
       file_size
@@ -1765,8 +1779,24 @@ impl Bolt {
       file_size,
       data_size,
     };
-    let free_count = backend.freelist().free_count();
+    let backend = Box::new(backend);
+    Self::new_db(DbPath::Memory, bolt_options, backend)
+  }
+
+  fn new_db(
+    db_path: DbPath, bolt_options: BoltOptions, backend: Box<dyn DBBackend>,
+  ) -> crate::Result<Self> {
+    backend.validate_meta()?;
+    let mut free_count = 0u64;
+    if bolt_options.preload_freelist() {
+      free_count = backend.freelist().free_count();
+    }
     let meta = backend.meta();
+    if meta.free_list() == PGID_NO_FREE_LIST {
+      return Err(Error::Other(anyhow!(
+        "PGID_NO_FREE_LIST not currently supported"
+      )));
+    }
     let db_state = Arc::new(Mutex::new(DbState::new(meta)));
     let stats = DbStats {
       free_page_n: (free_count as i64).into(),
@@ -1779,27 +1809,39 @@ impl Bolt {
     );
 
     let inner = Arc::new_cyclic(|weak| InnerDB {
+      path: Arc::new(db_path),
       bump_pool,
       db: RwLock::new(DbShared {
         stats: arc_stats.clone(),
         db_state: db_state.clone(),
-        backend: Box::new(backend),
+        backend,
         page_pool: Mutex::new(vec![]),
-        options: db_options.clone(),
+        options: bolt_options.clone(),
       }),
       stats: arc_stats,
       db_state,
       batcher: Arc::new(Batcher {
         inner: Default::default(),
         db: weak.clone(),
-        max_batch_delay: db_options
+        max_batch_delay: bolt_options
           .max_batch_delay
           .unwrap_or(DEFAULT_MAX_BATCH_DELAY),
-        max_batch_size: db_options.max_batch_size.unwrap_or(DEFAULT_MAX_BATCH_SIZE),
+        max_batch_size: bolt_options
+          .max_batch_size
+          .unwrap_or(DEFAULT_MAX_BATCH_SIZE),
       }),
     });
-
     Ok(Bolt { inner })
+  }
+
+  fn open_path<T: AsRef<Path>>(path: T, db_options: BoltOptions) -> crate::Result<Self> {
+    let pref = path.as_ref();
+    Self::new_file_backend(pref, db_options)
+  }
+
+  /// Opens an in-memory database
+  pub fn open_mem() -> crate::Result<Self> {
+    Bolt::new_mem_with_options(BoltOptions::default())
   }
 
   fn init_page(page_size: usize) -> AlignedBytes<alignment::Page> {
@@ -1808,7 +1850,11 @@ impl Bolt {
       let mut page = MutPage::new(page_bytes.as_mut_ptr());
       if i < 2 {
         let meta_page = MappedMetaPage::mut_into(&mut page);
-        meta_page.page.id = PgId(i as u64);
+        let ph = &mut meta_page.page;
+        ph.id = PgId(i as u64);
+        // unused for meta page, but we explicitly set overflow and count to keep Miri happy
+        ph.count = 0;
+        ph.overflow = 0;
         let meta = &mut meta_page.meta;
         meta.set_magic(MAGIC);
         meta.set_version(VERSION);
@@ -1822,10 +1868,12 @@ impl Bolt {
         let free_list = MappedFreeListPage::mut_into(&mut page);
         free_list.id = PgId(2);
         free_list.count = 0;
+        free_list.overflow = 0;
       } else if i == 3 {
         let leaf_page = MappedLeafPage::mut_into(&mut page);
         leaf_page.id = PgId(3);
         leaf_page.count = 0;
+        leaf_page.overflow = 0;
       }
     }
     buffer
@@ -1896,9 +1944,9 @@ impl Bolt {
 
   pub(crate) fn begin_rw_tx(&mut self) -> crate::Result<TxRwImpl> {
     let lock = self.inner.db.upgradable_read();
-    lock.free_pages();
     let mut state = self.inner.db_state.lock();
     Bolt::require_open(&state)?;
+    lock.free_pages(&mut state);
     let bump = self.inner.bump_pool.pull();
     let mut meta = state.current_meta;
     let txid = meta.txid() + 1;
@@ -1959,6 +2007,16 @@ impl DbApi for Bolt {
 
   fn stats(&self) -> Arc<DbStats> {
     self.inner.stats.clone()
+  }
+
+  fn path(&self) -> &DbPath {
+    &self.inner.path
+  }
+
+  fn info(&self) -> DbInfo {
+    DbInfo {
+      page_size: self.inner.db.read().backend.page_size(),
+    }
   }
 
   fn close(self) {
@@ -2029,15 +2087,22 @@ impl DbRwAPI for Bolt {
 
 #[cfg(test)]
 mod test {
-  use std::io::Write;
+  use crate::common::defaults::DEFAULT_PAGE_SIZE;
+  use crate::common::meta::MappedMetaPage;
   use crate::db::DbStats;
   use crate::test_support::{temp_file, TestDb};
-  use crate::{Bolt, BucketApi, BucketRwApi, DbApi, DbRwAPI, Error, TxApi, TxRwRefApi};
-  use std::sync::mpsc::{channel, sync_channel};
+  use crate::{
+    Bolt, BoltOptions, BucketApi, BucketRwApi, DbApi, DbPath, DbRwAPI, Error, PgId, TxApi, TxCheck,
+    TxRwApi, TxRwRefApi,
+  };
+  use aligners::{alignment, AlignedBytes};
+  use std::io::{Read, Seek, SeekFrom, Write};
+  use std::sync::mpsc::channel;
   use std::sync::Arc;
   use std::thread;
 
   #[test]
+  #[cfg(not(miri))]
   fn test_open() -> crate::Result<()> {
     let db = TestDb::new()?;
     db.clone_db().close();
@@ -2045,7 +2110,8 @@ mod test {
   }
 
   #[test]
-  //#[cfg(feature = "long-tests")]
+  #[cfg(feature = "long-tests")]
+  #[cfg(not(miri))]
   fn test_open_multiple_threads() -> crate::Result<()> {
     let instances = 30;
     let iterations = 30;
@@ -2077,6 +2143,7 @@ mod test {
   }
 
   #[test]
+  #[cfg(not(miri))]
   fn test_open_err_path_required() -> crate::Result<()> {
     let r = Bolt::open("");
     assert!(r.is_err());
@@ -2084,6 +2151,7 @@ mod test {
   }
 
   #[test]
+  #[cfg(not(miri))]
   fn test_open_err_not_exists() -> crate::Result<()> {
     let file = temp_file()?;
     let path = file.path().join("bad-path");
@@ -2093,67 +2161,248 @@ mod test {
   }
 
   #[test]
+  #[cfg(not(miri))]
   fn test_open_err_invalid() -> crate::Result<()> {
     let mut file = temp_file()?;
-    file.as_file_mut().write_all(b"this is not a bolt database")?;
+    file
+      .as_file_mut()
+      .write_all(b"this is not a bolt database")?;
     let r = Bolt::open(file.path());
     assert_eq!(Some(Error::InvalidDatabase(false)), r.err());
     Ok(())
   }
 
   #[test]
-  #[ignore]
-  fn test_open_err_version_mismatch() {
-    todo!()
+  #[cfg(not(miri))]
+  fn test_open_err_version_mismatch() -> crate::Result<()> {
+    // TODO: Make this cleaner
+    let mut file = temp_file()?;
+    let db = Bolt::open(file.path())?;
+    db.close();
+    let mut bytes = AlignedBytes::<alignment::Page>::new_zeroed(4096 * 2);
+    file.seek(SeekFrom::Start(0))?;
+    file.read_exact(&mut bytes)?;
+    let mut meta_0 = unsafe { MappedMetaPage::new(bytes.as_mut_ptr()) };
+    let meta0_version = meta_0.meta.version();
+    meta_0.meta.set_version(meta0_version + 1);
+    let mut meta_1 = unsafe { MappedMetaPage::new(bytes.as_mut_ptr().add(4096)) };
+    let meta1_version = meta_1.meta.version();
+    meta_1.meta.set_version(meta1_version + 1);
+    file.seek(SeekFrom::Start(0))?;
+    file.write_all(&bytes)?;
+    file.flush()?;
+    let r = Bolt::open(file.path());
+    assert_eq!(Some(Error::VersionMismatch), r.err());
+    Ok(())
   }
 
   #[test]
-  #[ignore]
-  fn test_open_err_checksum() {
-    todo!()
+  #[cfg(not(miri))]
+  fn test_open_err_checksum() -> crate::Result<()> {
+    // TODO: Make this cleaner
+    let mut file = temp_file()?;
+    let db = Bolt::open(file.path())?;
+    db.close();
+    let mut bytes = AlignedBytes::<alignment::Page>::new_zeroed(4096 * 2);
+    file.seek(SeekFrom::Start(0))?;
+    file.read_exact(&mut bytes)?;
+    let mut meta_0 = unsafe { MappedMetaPage::new(bytes.as_mut_ptr()) };
+    let meta0_pgid = meta_0.meta.pgid();
+    meta_0.meta.set_pgid(meta0_pgid + 1);
+    let mut meta_1 = unsafe { MappedMetaPage::new(bytes.as_mut_ptr().add(4096)) };
+    let meta1_pgid = meta_1.meta.pgid();
+    meta_1.meta.set_pgid(meta1_pgid + 1);
+    file.seek(SeekFrom::Start(0))?;
+    file.write_all(&bytes)?;
+    file.flush()?;
+    let r = Bolt::open(file.path());
+    assert_eq!(Some(Error::ChecksumMismatch), r.err());
+    Ok(())
   }
 
   #[test]
-  #[ignore]
-  fn test_open_read_page_size_from_meta1_os() {
-    todo!()
+  #[cfg(not(miri))]
+  fn test_open_read_page_size_from_meta1_os() -> crate::Result<()> {
+    // TODO: Make this cleaner
+    let mut file = temp_file()?;
+    let db = Bolt::open(file.path())?;
+    db.close();
+    let mut bytes = AlignedBytes::<alignment::Page>::new_zeroed(4096 * 2);
+    file.seek(SeekFrom::Start(0))?;
+    file.read_exact(&mut bytes)?;
+    let mut meta_0 = unsafe { MappedMetaPage::new(bytes.as_mut_ptr()) };
+    let meta0_pgid = meta_0.meta.pgid();
+    meta_0.meta.set_pgid(meta0_pgid + 1);
+    file.seek(SeekFrom::Start(0))?;
+    file.write_all(&bytes)?;
+    file.flush()?;
+    let db = Bolt::open(file.path())?;
+    assert_eq!(4096, db.info().page_size);
+    Ok(())
   }
 
   #[test]
-  #[ignore]
-  fn test_open_read_page_size_from_meta1_given() {
-    todo!()
+  #[cfg(not(miri))]
+  fn test_open_read_page_size_from_meta1_given() -> crate::Result<()> {
+    for i in 0..=14usize {
+      let given_page_size = 1024usize << i;
+      let mut db = TestDb::with_options(BoltOptions::builder().page_size(given_page_size).build())?;
+
+      if i % 3 == 0 {
+        db.must_close();
+        let named_file = db.tmp_file.as_mut();
+        let file = named_file.unwrap();
+        let mut bytes = AlignedBytes::<alignment::Page>::new_zeroed(given_page_size * 2);
+        file.seek(SeekFrom::Start(0))?;
+        file.read_exact(&mut bytes)?;
+        let mut meta_0 = unsafe { MappedMetaPage::new(bytes.as_mut_ptr()) };
+        let meta0_pgid = meta_0.meta.pgid();
+        meta_0.meta.set_pgid(meta0_pgid + 1);
+        file.seek(SeekFrom::Start(0))?;
+        file.write_all(&bytes)?;
+        file.flush()?;
+        db.must_reopen();
+      }
+
+      assert_eq!(given_page_size, db.info().page_size);
+    }
+    Ok(())
   }
 
   #[test]
-  #[ignore]
-  fn test_open_size() {
-    todo!()
+  #[cfg(not(miri))]
+  fn test_open_size() -> crate::Result<()> {
+    let mut db = TestDb::new()?;
+    let page_size = db.info().page_size;
+    let v = [0; 1000];
+    for _tx_ct in 0..1 {
+      db.update(|mut tx| {
+        let mut b = tx.create_bucket_if_not_exists("data")?;
+        for keys_ct in 0..10000 {
+          let k = format!("{:04}", keys_ct);
+          b.put(&k, &v)?;
+        }
+        Ok(())
+      })?;
+    }
+    db.must_close();
+
+    let file_size = {
+      let tmp_file = db.tmp_file.as_ref();
+      let file = tmp_file.unwrap();
+      file.path().metadata()?.len()
+    };
+    assert_ne!(0, file_size, "unexpected new file size");
+
+    db.must_reopen();
+    db.update(|mut tx| {
+      tx.bucket_mut("data").unwrap().put("0", "0")?;
+      Ok(())
+    })?;
+
+    db.must_close();
+
+    let new_size = {
+      let tmp_file = db.tmp_file.as_ref();
+      let file = tmp_file.unwrap();
+      file.path().metadata()?.len()
+    };
+
+    assert!(
+      file_size > (new_size - (5 * page_size) as u64),
+      "unexpected file growth: {} => {}",
+      file_size,
+      new_size
+    );
+
+    Ok(())
   }
 
   #[test]
-  #[ignore]
+  #[cfg(not(miri))]
   #[cfg(feature = "long-tests")]
-  fn test_open_size_large() {
-    todo!()
+  fn test_open_size_large() -> crate::Result<()> {
+    let mut db = TestDb::new()?;
+    let page_size = db.info().page_size;
+    let v = [0; 50];
+    for _tx_ct in 0..10000 {
+      db.update(|mut tx| {
+        let mut b = tx.create_bucket_if_not_exists("data")?;
+        for keys_ct in 0..1000u64 {
+          let k = keys_ct.to_be_bytes();
+          b.put(k, v)?;
+        }
+        Ok(())
+      })?;
+    }
+    db.must_close();
+
+    let file_size = {
+      let tmp_file = db.tmp_file.as_ref();
+      let file = tmp_file.unwrap();
+      file.path().metadata()?.len()
+    };
+    assert_ne!(0, file_size, "unexpected new file size");
+
+    db.must_reopen();
+    db.update(|mut tx| {
+      tx.bucket_mut("data").unwrap().put("0", "0")?;
+      Ok(())
+    })?;
+
+    db.must_close();
+
+    let new_size = {
+      let tmp_file = db.tmp_file.as_ref();
+      let file = tmp_file.unwrap();
+      file.path().metadata()?.len()
+    };
+
+    assert!(
+      file_size > (new_size - (5 * page_size) as u64),
+      "unexpected file growth: {} => {}",
+      file_size,
+      new_size
+    );
+
+    Ok(())
   }
 
   #[test]
-  #[ignore]
-  fn test_open_check() {
-    todo!()
+  #[cfg(not(miri))]
+  fn test_open_check() -> crate::Result<()> {
+    let mut db = TestDb::new()?;
+    db.view(|tx| {
+      assert!(tx.check().is_empty());
+      Ok(())
+    })?;
+    db.must_close();
+    db.must_reopen();
+    db.view(|tx| {
+      assert!(tx.check().is_empty());
+      Ok(())
+    })?;
+    Ok(())
   }
 
   #[test]
   #[ignore]
   fn test_open_meta_init_write_error() {
-    todo!()
+    todo!("pending in go")
   }
 
   #[test]
-  #[ignore]
-  fn test_open_file_too_small() {
-    todo!()
+  #[cfg(not(miri))]
+  fn test_open_file_too_small() -> crate::Result<()> {
+    let mut db = TestDb::new()?;
+    db.must_close();
+    {
+      let temp_file = db.tmp_file.as_mut();
+      let file = temp_file.unwrap();
+      file.as_file_mut().set_len(4096)?;
+    }
+    assert_eq!(Some(Error::FileSizeTooSmall(4096)), db.reopen().err());
+    Ok(())
   }
 
   #[test]
@@ -2163,15 +2412,41 @@ mod test {
   }
 
   #[test]
-  #[ignore]
-  fn test_db_open_read_only() {
-    todo!()
+  #[cfg(not(miri))]
+  fn test_db_open_read_only() -> crate::Result<()> {
+    let mut db = TestDb::new()?;
+    db.update(|mut tx| {
+      let mut b = tx.create_bucket("widgets")?;
+      b.put("foo", "bar")?;
+      Ok(())
+    })?;
+    let path = db.path().clone();
+    db.must_close();
+    let ro = match path {
+      DbPath::Memory => panic!("Path is DbPath::Memory"),
+      DbPath::FilePath(path) => Bolt::open_ro(path)?,
+    };
+    ro.view(|tx| {
+      let b = tx.bucket("widgets").unwrap();
+      assert_eq!(Some(b"bar".as_slice()), b.get("foo"));
+      Ok(())
+    })?;
+    ro.close();
+    Ok(())
   }
 
   #[test]
-  #[ignore]
-  fn test_open_big_page() {
-    todo!()
+  #[cfg(not(miri))]
+  fn test_open_big_page() -> crate::Result<()> {
+    let page_size = DEFAULT_PAGE_SIZE.bytes() as usize;
+    let options = BoltOptions::builder().page_size(page_size * 2).build();
+    let db1 = TestDb::with_options(options.clone())?;
+    let options = BoltOptions::builder().page_size(page_size * 4).build();
+    let db2 = TestDb::with_options(options.clone())?;
+    let db1_len = db1.tmp_file.as_ref().unwrap().as_file().metadata()?.len();
+    let db2_len = db2.tmp_file.as_ref().unwrap().as_file().metadata()?.len();
+    assert!(db1_len < db2_len, "expected {} < {}", db1_len, db2_len);
+    Ok(())
   }
 
   #[test]
@@ -2181,15 +2456,22 @@ mod test {
   }
 
   #[test]
-  #[ignore]
-  fn test_db_begin_err_database_not_open() {
-    todo!()
+  fn test_db_begin_err_database_not_open() -> crate::Result<()> {
+    let db = TestDb::new()?;
+    let t_db = db.clone_db();
+    t_db.close();
+    let r = db.begin_tx();
+    assert_eq!(Some(Error::DatabaseNotOpen), r.err());
+    Ok(())
   }
 
   #[test]
-  #[ignore]
-  fn test_db_begin_rw() {
-    todo!()
+  fn test_db_begin_rw() -> crate::Result<()> {
+    let mut db = TestDb::new()?;
+    let tx = db.begin_rw()?;
+    assert!(tx.writable());
+    tx.commit()?;
+    Ok(())
   }
 
   #[test]
@@ -2199,9 +2481,13 @@ mod test {
   }
 
   #[test]
-  #[ignore]
-  fn test_db_begin_rw_closed() {
-    todo!()
+  fn test_db_begin_rw_closed() -> crate::Result<()> {
+    let mut db = TestDb::new()?;
+    let t_db = db.clone_db();
+    t_db.close();
+    let r = db.begin_rw_tx();
+    assert_eq!(Some(Error::DatabaseNotOpen), r.err());
+    Ok(())
   }
 
   #[test]
@@ -2217,45 +2503,50 @@ mod test {
   }
 
   #[test]
-  #[ignore]
-  fn test_db_update() {
-    todo!()
+  fn test_db_update() -> crate::Result<()> {
+    let mut db = TestDb::new()?;
+    db.update(|mut tx| {
+      let mut b = tx.create_bucket("widgets")?;
+      b.put("foo", "bar")?;
+      b.put("baz", "bat")?;
+      b.delete("foo")?;
+      Ok(())
+    })?;
+
+    db.view(|tx| {
+      let b = tx.bucket("widgets").unwrap();
+      assert_eq!(None, b.get("foo"));
+      assert_eq!(Some(b"bat".as_slice()), b.get("baz"));
+      Ok(())
+    })?;
+    Ok(())
+  }
+
+  #[test]
+  fn test_db_update_closed() -> crate::Result<()> {
+    let mut db = TestDb::new()?;
+    let t_db = db.clone_db();
+    t_db.close();
+    let r = db.update(|mut tx| {
+      tx.create_bucket("widgets")?;
+      Ok(())
+    });
+    assert_eq!(Some(Error::DatabaseNotOpen), r.err());
+    Ok(())
   }
 
   #[test]
   #[ignore]
-  fn test_db_update_closed() {
+  fn test_db_update_panic() -> crate::Result<()> {
     todo!()
   }
 
   #[test]
-  #[ignore]
-  fn test_db_update_manual_commit() {
-    todo!()
-  }
-
-  #[test]
-  #[ignore]
-  fn test_db_update_manual_rollback() {
-    todo!()
-  }
-
-  #[test]
-  #[ignore]
-  fn test_db_view_manual_commit() {
-    todo!()
-  }
-
-  #[test]
-  #[ignore]
-  fn test_db_update_panic() {
-    todo!()
-  }
-
-  #[test]
-  #[ignore]
-  fn test_db_view_error() {
-    todo!()
+  fn test_db_view_error() -> crate::Result<()> {
+    let db = TestDb::new()?;
+    let r = db.view(|_| Err(Error::InvalidDatabase(false))).err();
+    assert_eq!(Some(Error::InvalidDatabase(false)), r);
+    Ok(())
   }
 
   #[test]
@@ -2279,9 +2570,37 @@ mod test {
   }
 
   #[test]
-  #[ignore]
-  fn test_db_consistency() {
-    todo!()
+  fn test_db_consistency() -> crate::Result<()> {
+    let mut db = TestDb::new()?;
+    db.update(|mut tx| {
+      tx.create_bucket("widgets")?;
+      Ok(())
+    })?;
+
+    for _ in 0..10 {
+      db.update(|mut tx| {
+        tx.bucket_mut("widgets").unwrap().put("foo", "bar")?;
+        Ok(())
+      })?;
+    }
+
+    db.update(|tx| {
+      let p = tx.page(PgId(0)).expect("expected page");
+      assert_eq!("meta", p.t);
+      let p = tx.page(PgId(1)).expect("expected page");
+      assert_eq!("meta", p.t);
+      let p = tx.page(PgId(2)).expect("expected page");
+      assert_eq!("free", p.t);
+      let p = tx.page(PgId(3)).expect("expected page");
+      assert_eq!("free", p.t);
+      let p = tx.page(PgId(4)).expect("expected page");
+      assert_eq!("leaf", p.t);
+      let p = tx.page(PgId(5)).expect("expected page");
+      assert_eq!("freelist", p.t);
+      assert_eq!(None, tx.page(PgId(6)));
+      Ok(())
+    })?;
+    Ok(())
   }
 
   #[test]

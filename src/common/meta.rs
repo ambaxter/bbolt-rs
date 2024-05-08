@@ -41,7 +41,7 @@ pub struct Meta {
 
 impl Meta {
   /// validate checks the marker bytes and version of the meta page to ensure it matches this binary.
-  pub fn validate(&self) -> Result<(), crate::Error> {
+  pub fn validate(&self) -> crate::Result<()> {
     if self.magic != MAGIC {
       return Err(InvalidDatabase(true));
     } else if self.version != VERSION {
@@ -68,6 +68,9 @@ impl Meta {
     }
     // Page id is either going to be 0 or 1 which we can determine by the transaction ID.
     mp.page.id = PgId(self.txid.0 % 2);
+    // unused for meta page, but we explicitly set overflow and count to keep Miri happy
+    mp.page.overflow = 0;
+    mp.page.count = 0;
     mp.page.set_meta();
     mp.meta = *self;
     // Calculate the checksum.

@@ -225,7 +225,7 @@ pub trait TxApi<'tx>: TxCheck<'tx> {
   ///   db.view(|tx| {
   ///     let b = tx.bucket("test").unwrap();
   ///     let page_id = b.root();
-  ///     let page_info = tx.page(page_id)?.unwrap();
+  ///     let page_info = tx.page(page_id).unwrap();
   ///     println!("{:?}", page_info);
   ///     Ok(())
   ///   })?;
@@ -233,43 +233,11 @@ pub trait TxApi<'tx>: TxCheck<'tx> {
   ///   Ok(())
   /// }
   /// ```
-  fn page(&self, id: PgId) -> crate::Result<Option<PageInfo>>;
+  fn page(&self, id: PgId) -> Option<PageInfo>;
 }
 
 /// RW transaction API
 pub trait TxRwRefApi<'tx>: TxApi<'tx> {
-  /// Closes the transaction and ignores all previous updates.
-  ///
-  /// ```rust
-  /// use bbolt_rs::*;
-  ///
-  /// fn main() -> Result<()> {
-  ///   let mut db = Bolt::open_mem()?;
-  ///
-  ///   db.update(|mut tx| {
-  ///     let mut b = tx.create_bucket_if_not_exists("test")?;
-  ///     b.put("key", "value")?;
-  ///     Ok(())
-  ///   })?;
-  ///
-  ///   db.update(|mut tx| {
-  ///     let mut b = tx.bucket_mut("test").unwrap();
-  ///     b.put("key", "new value")?;
-  ///     tx.rollback()?;
-  ///     Ok(())
-  ///   })?;
-  ///
-  ///   db.view(|tx| {
-  ///     let b = tx.bucket("test").unwrap();
-  ///     assert_eq!(Some(b"value".as_slice()), b.get("key"));
-  ///     Ok(())
-  ///   })?;
-  ///
-  ///   Ok(())
-  /// }
-  /// ```
-  fn rollback(self) -> crate::Result<()>;
-
   /// Retrieves a mutable bucket by name.
   ///
   /// Returns None if the bucket does not exist.
@@ -414,6 +382,36 @@ pub trait TxRwRefApi<'tx>: TxApi<'tx> {
 
 /// RW transaction API + Commit
 pub trait TxRwApi<'tx>: TxRwRefApi<'tx> {
+  /// Closes the transaction and ignores all previous updates.
+  ///
+  /// ```rust
+  /// use bbolt_rs::*;
+  ///
+  /// fn main() -> Result<()> {
+  ///   let mut db = Bolt::open_mem()?;
+  ///
+  ///   db.update(|mut tx| {
+  ///     let mut b = tx.create_bucket_if_not_exists("test")?;
+  ///     b.put("key", "value")?;
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   let mut tx = db.begin_rw()?;
+  ///   let mut b = tx.bucket_mut("test").unwrap();
+  ///   b.put("key", "new value")?;
+  ///   tx.rollback()?;
+  ///
+  ///   db.view(|tx| {
+  ///     let b = tx.bucket("test").unwrap();
+  ///     assert_eq!(Some(b"value".as_slice()), b.get("key"));
+  ///     Ok(())
+  ///   })?;
+  ///
+  ///   Ok(())
+  /// }
+  /// ```
+  fn rollback(self) -> crate::Result<()>;
+
   /// commit writes all changes to disk and updates the meta page.
   /// Returns an error if a disk write error occurs
   ///
@@ -859,10 +857,10 @@ pub(crate) trait TxIApi<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
   }
 
   /// See [TxApi::page]
-  fn api_page(&self, id: PgId) -> crate::Result<Option<PageInfo>> {
+  fn api_page(&self, id: PgId) -> Option<PageInfo> {
     let r = self.split_r();
     if id >= r.meta.pgid() {
-      return Ok(None);
+      return None;
     }
     //TODO: Check if freelist loaded
     //WHEN: Freelists can be unloaded
@@ -883,7 +881,7 @@ pub(crate) trait TxIApi<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
       count,
       overflow_count,
     };
-    Ok(Some(info))
+    Some(info)
   }
 }
 
@@ -1260,7 +1258,7 @@ impl<'tx> TxApi<'tx> for TxImpl<'tx> {
     self.tx.api_for_each(f)
   }
 
-  fn page(&self, id: PgId) -> crate::Result<Option<PageInfo>> {
+  fn page(&self, id: PgId) -> Option<PageInfo> {
     self.tx.api_page(id)
   }
 }
@@ -1304,7 +1302,7 @@ impl<'tx> TxApi<'tx> for TxRef<'tx> {
     self.tx.api_for_each(f)
   }
 
-  fn page(&self, id: PgId) -> crate::Result<Option<PageInfo>> {
+  fn page(&self, id: PgId) -> Option<PageInfo> {
     self.tx.api_page(id)
   }
 }
@@ -1456,16 +1454,12 @@ impl<'tx> TxApi<'tx> for TxRwImpl<'tx> {
     self.tx.api_for_each(f)
   }
 
-  fn page(&self, id: PgId) -> crate::Result<Option<PageInfo>> {
+  fn page(&self, id: PgId) -> Option<PageInfo> {
     self.tx.api_page(id)
   }
 }
 
 impl<'tx> TxRwRefApi<'tx> for TxRwImpl<'tx> {
-  fn rollback(self) -> crate::Result<()> {
-    self.tx.rollback()
-  }
-
   fn bucket_mut<T: AsRef<[u8]>>(&mut self, name: T) -> Option<BucketRwImpl<'tx>> {
     self.tx.api_bucket(name.as_ref()).map(BucketRwImpl::from)
   }
@@ -1496,6 +1490,10 @@ impl<'tx> TxRwRefApi<'tx> for TxRwImpl<'tx> {
 }
 
 impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
+  fn rollback(self) -> crate::Result<()> {
+    self.tx.rollback()
+  }
+
   fn commit(mut self) -> crate::Result<()> {
     let tx_stats = {
       let mut tx = self.tx.cell.borrow_mut();
@@ -1634,16 +1632,12 @@ impl<'tx> TxApi<'tx> for TxRwRef<'tx> {
     self.tx.api_for_each(f)
   }
 
-  fn page(&self, id: PgId) -> crate::Result<Option<PageInfo>> {
+  fn page(&self, id: PgId) -> Option<PageInfo> {
     self.tx.api_page(id)
   }
 }
 
 impl<'tx> TxRwRefApi<'tx> for TxRwRef<'tx> {
-  fn rollback(self) -> crate::Result<()> {
-    self.tx.rollback()
-  }
-
   fn bucket_mut<T: AsRef<[u8]>>(&mut self, name: T) -> Option<BucketRwImpl<'tx>> {
     self.tx.api_bucket(name.as_ref()).map(BucketRwImpl::from)
   }
@@ -1973,6 +1967,7 @@ mod test {
   use std::time::Duration;
 
   #[test]
+  #[cfg(not(miri))]
   fn test_tx_check_read_only() -> crate::Result<()> {
     let mut db = TestDb::new()?;
     db.update(|mut tx| {

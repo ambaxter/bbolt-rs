@@ -27,6 +27,9 @@ pub enum Error {
   /// Checksum is returned when either meta page checksum does not match.
   #[error("checksum mismatch")]
   ChecksumMismatch,
+  /// Checksum is returned when either meta page checksum does not match.
+  #[error("file size too small: `{0}`")]
+  FileSizeTooSmall(u64),
   /// Timeout is returned when a database cannot obtain an exclusive lock
   /// on the data file after the timeout passed to Open().
   #[error("timeout")]
@@ -60,11 +63,10 @@ pub enum Error {
   /// non-bucket key on an existing bucket key.
   #[error("incompatible value")]
   IncompatibleValue,
-
+  #[error("mmap too small: `{0}`")]
+  MMapTooSmall(u64),
   #[error("mmap too large")]
   MMapTooLarge,
-  #[error("file size too small")]
-  MMapFileSizeTooSmall,
   #[error("try function without batch call")]
   TrySolo,
   #[error("max batch delay or length is set to 0")]
@@ -86,6 +88,7 @@ impl PartialEq for Error {
         | (Error::InvalidMapping, Error::InvalidMapping)
         | (Error::VersionMismatch, Error::VersionMismatch)
         | (Error::ChecksumMismatch, Error::ChecksumMismatch)
+        | (Error::FileSizeTooSmall(_), Error::FileSizeTooSmall(_))
         | (Error::Timeout, Error::Timeout)
         | (Error::FreePagesNotLoaded, Error::FreePagesNotLoaded)
         | (Error::BucketNotFound, Error::BucketNotFound)
@@ -95,8 +98,8 @@ impl PartialEq for Error {
         | (Error::KeyTooLarge, Error::KeyTooLarge)
         | (Error::ValueTooLarge, Error::ValueTooLarge)
         | (Error::IncompatibleValue, Error::IncompatibleValue)
+        | (Error::MMapTooSmall(_), Error::MMapTooSmall(_))
         | (Error::MMapTooLarge, Error::MMapTooLarge)
-        | (Error::MMapFileSizeTooSmall, Error::MMapFileSizeTooSmall)
         | (Error::TrySolo, Error::TrySolo)
         | (Error::BatchDisabled, Error::BatchDisabled)
     )

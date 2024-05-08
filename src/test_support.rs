@@ -46,11 +46,7 @@ impl DerefMut for TestDb {
 
 impl TestDb {
   pub(crate) fn new() -> crate::Result<TestDb> {
-    if cfg!(miri) {
-      Self::new_mem(BoltOptions::default())
-    } else {
-      Self::new_tmp(BoltOptions::default())
-    }
+    Self::with_options(BoltOptions::default())
   }
 
   pub(crate) fn with_options(options: BoltOptions) -> crate::Result<TestDb> {
@@ -82,7 +78,7 @@ impl TestDb {
   }
 
   pub(crate) fn must_check(&mut self) {
-    if let Ok(tx) = self.db.as_ref().unwrap().begin() {
+    if let Some(Ok(tx)) = self.db.as_ref().map(|db| db.begin()) {
       let errors = tx.check();
       if !errors.is_empty() {
         for error in errors {
@@ -93,22 +89,30 @@ impl TestDb {
     }
   }
 
+  #[cfg(not(miri))]
   pub(crate) fn must_close(&mut self) {
     let db = self.db.take().unwrap();
     db.close();
   }
 
-  pub(crate) fn must_reopen(&mut self) {
+  #[cfg(not(miri))]
+  pub(crate) fn reopen(&mut self) -> crate::Result<()> {
     assert!(
       self.tmp_file.is_some(),
       "Reopen only supported on file based databases"
     );
     assert!(self.db.is_none(), "Please call close before must_reopen");
     let options = self.options.clone();
-    let db = options
-      .open(self.tmp_file.as_ref().unwrap().path())
-      .unwrap();
-    self.db = Some(db);
+    match options.open(self.tmp_file.as_ref().unwrap().path()) {
+      Ok(db) => self.db = Some(db),
+      Err(err) => return Err(err),
+    }
+    Ok(())
+  }
+
+  #[cfg(not(miri))]
+  pub(crate) fn must_reopen(&mut self) {
+    self.reopen().expect("Unable to reopen db")
   }
 
   pub(crate) fn clone_db(&self) -> Bolt {

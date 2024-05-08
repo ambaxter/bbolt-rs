@@ -4,8 +4,9 @@ bbolt-rs
 # TODO
 
 ## Before Release 1.38
-- [ ] Most of the db tests
+- [x] Most of the db tests
 - [ ] Node leaf tests
+- [ ] In memory test feature
 
 ## General
 - [ ] Quick Check analog
@@ -62,40 +63,36 @@ bbolt-rs
 ## src/db.rs
 - [ ] Rework page size determination functions
 - [ ] Log IO Errors
-- [ ] Save a special bump just for the RW?
-- [ ] test_open
-- [ ] test_open_multiple_goroutines
-- [ ] test_open_err_path_required
-- [ ] test_open_err_not_exists
-- [ ] test_open_err_invalid
-- [ ] test_open_err_version_mismatch
-- [ ] test_open_err_checksum
-- [ ] test_open_read_page_size_from_meta1_os
-- [ ] test_open_read_page_size_from_meta1_given
-- [ ] test_open_size
-- [ ] test_open_size_large
-- [ ] test_open_check
-- [ ] test_open_meta_init_write_error
-- [ ] test_open_file_too_small
+- [x] test_open
+- [x] test_open_multiple_goroutines
+- [x] test_open_err_path_required
+- [x] test_open_err_not_exists
+- [x] test_open_err_invalid
+- [x] test_open_err_version_mismatch
+- [x] test_open_err_checksum
+- [x] test_open_read_page_size_from_meta1_os
+- [x] test_open_read_page_size_from_meta1_given
+- [x] test_open_size
+- [x] test_open_size_large
+- [x] test_open_check
+- [x] test_open_meta_init_write_error
+- [x] test_open_file_too_small
 - [ ] test_db_open_initial_mmap_size
-- [ ] test_db_open_read_only
-- [ ] test_open_big_page
+- [x] test_db_open_read_only
+- [x] test_open_big_page
 - [ ] test_open_recover_free_list
-- [ ] test_db_begin_err_database_not_open
-- [ ] test_db_begin_rw
+- [x] test_db_begin_err_database_not_open
+- [x] test_db_begin_rw
 - [ ] test_db_concurrent_write_to
-- [ ] test_db_begin_rw_closed
+- [x] test_db_begin_rw_closed
 - [ ] test_db_close_pending_tx_rw
 - [ ] test_db_close_pending_tx_ro
-- [ ] test_db_update
-- [ ] test_db_update_closed
-- [ ] test_db_update_manual_commit
-- [ ] test_db_update_manual_rollback
-- [ ] test_db_view_manual_commit
+- [x] test_db_update
+- [x] test_db_update_closed
 - [ ] test_db_update_panic
-- [ ] test_db_view_error
+- [x] test_db_view_error
 - [ ] test_db_view_panic
-- [ ] test_db_consistency
+- [x] test_db_consistency
 - [ ] test_db_batch_panic
 - [ ] test_db_batch_full
 - [ ] test_db_batch_time
