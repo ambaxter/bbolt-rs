@@ -17,7 +17,7 @@ use crate::freelist::{Freelist, MappedFreeListPage};
 use crate::tx::{
   TxClosingState, TxIApi, TxImpl, TxRef, TxRwApi, TxRwCell, TxRwImpl, TxRwRef, TxStats,
 };
-use crate::{Error, TxApi, TxRwRefApi};
+use crate::{Error, TxApi};
 use aligners::{alignment, AlignedBytes};
 use anyhow::anyhow;
 use fs4::FileExt;
@@ -474,6 +474,7 @@ fn mmap_size(page_size: usize, size: u64) -> crate::Result<u64> {
   Ok(sz)
 }
 
+/// Database path
 #[derive(Clone, PartialOrd, PartialEq, Ord, Eq, Debug)]
 pub enum DbPath {
   Memory,
@@ -489,6 +490,7 @@ impl DbPath {
   }
 }
 
+/// Database information
 #[derive(Clone, Debug)]
 pub struct DbInfo {
   pub page_size: usize,
@@ -623,19 +625,13 @@ impl DBBackend for MemBackend {
   fn page<'tx>(&self, pg_id: PgId) -> RefPage<'tx> {
     let mmap = self.mmap.lock();
     debug_assert!(((pg_id.0 as usize + 1) * self.page_size) <= mmap.len());
-    unsafe {
-      RefPage::new(
-        mmap
-          .as_ptr()
-          .byte_add(pg_id.0 as usize * self.page_size),
-      )
-    }
+    unsafe { RefPage::new(mmap.as_ptr().byte_add(pg_id.0 as usize * self.page_size)) }
   }
 
   fn grow(&self, size: u64) -> crate::Result<()> {
     let mut mmap = self.mmap.lock();
     if size <= mmap.len() as u64 {
-      return Ok(())
+      return Ok(());
     }
     let mut new_mmap = AlignedBytes::new_zeroed(size as usize);
     new_mmap[0..mmap.len()].copy_from_slice(&mmap);
@@ -1852,7 +1848,7 @@ impl Bolt {
         let meta_page = MappedMetaPage::mut_into(&mut page);
         let ph = &mut meta_page.page;
         ph.id = PgId(i as u64);
-        // unused for meta page, but we explicitly set overflow and count to keep Miri happy
+        // set overflow and count to keep Miri happy
         ph.count = 0;
         ph.overflow = 0;
         let meta = &mut meta_page.meta;
@@ -2111,7 +2107,7 @@ mod test {
 
   #[test]
   #[cfg(feature = "long-tests")]
-  #[cfg(not(miri))]
+  #[cfg(not(use_mem_backend))]
   fn test_open_multiple_threads() -> crate::Result<()> {
     let instances = 30;
     let iterations = 30;
@@ -2143,7 +2139,7 @@ mod test {
   }
 
   #[test]
-  #[cfg(not(miri))]
+  #[cfg(not(use_mem_backend))]
   fn test_open_err_path_required() -> crate::Result<()> {
     let r = Bolt::open("");
     assert!(r.is_err());
@@ -2151,7 +2147,7 @@ mod test {
   }
 
   #[test]
-  #[cfg(not(miri))]
+  #[cfg(not(use_mem_backend))]
   fn test_open_err_not_exists() -> crate::Result<()> {
     let file = temp_file()?;
     let path = file.path().join("bad-path");
@@ -2161,7 +2157,7 @@ mod test {
   }
 
   #[test]
-  #[cfg(not(miri))]
+  #[cfg(not(use_mem_backend))]
   fn test_open_err_invalid() -> crate::Result<()> {
     let mut file = temp_file()?;
     file
@@ -2173,7 +2169,7 @@ mod test {
   }
 
   #[test]
-  #[cfg(not(miri))]
+  #[cfg(not(use_mem_backend))]
   fn test_open_err_version_mismatch() -> crate::Result<()> {
     // TODO: Make this cleaner
     let mut file = temp_file()?;
@@ -2197,7 +2193,7 @@ mod test {
   }
 
   #[test]
-  #[cfg(not(miri))]
+  #[cfg(not(use_mem_backend))]
   fn test_open_err_checksum() -> crate::Result<()> {
     // TODO: Make this cleaner
     let mut file = temp_file()?;
@@ -2221,7 +2217,7 @@ mod test {
   }
 
   #[test]
-  #[cfg(not(miri))]
+  #[cfg(not(use_mem_backend))]
   fn test_open_read_page_size_from_meta1_os() -> crate::Result<()> {
     // TODO: Make this cleaner
     let mut file = temp_file()?;
@@ -2242,7 +2238,7 @@ mod test {
   }
 
   #[test]
-  #[cfg(not(miri))]
+  #[cfg(not(use_mem_backend))]
   fn test_open_read_page_size_from_meta1_given() -> crate::Result<()> {
     for i in 0..=14usize {
       let given_page_size = 1024usize << i;
@@ -2270,7 +2266,7 @@ mod test {
   }
 
   #[test]
-  #[cfg(not(miri))]
+  #[cfg(not(use_mem_backend))]
   fn test_open_size() -> crate::Result<()> {
     let mut db = TestDb::new()?;
     let page_size = db.info().page_size;
@@ -2319,7 +2315,7 @@ mod test {
   }
 
   #[test]
-  #[cfg(not(miri))]
+  #[cfg(not(use_mem_backend))]
   #[cfg(feature = "long-tests")]
   fn test_open_size_large() -> crate::Result<()> {
     let mut db = TestDb::new()?;
@@ -2369,7 +2365,7 @@ mod test {
   }
 
   #[test]
-  #[cfg(not(miri))]
+  #[cfg(not(use_mem_backend))]
   fn test_open_check() -> crate::Result<()> {
     let mut db = TestDb::new()?;
     db.view(|tx| {
@@ -2392,7 +2388,7 @@ mod test {
   }
 
   #[test]
-  #[cfg(not(miri))]
+  #[cfg(not(use_mem_backend))]
   fn test_open_file_too_small() -> crate::Result<()> {
     let mut db = TestDb::new()?;
     db.must_close();
@@ -2412,7 +2408,7 @@ mod test {
   }
 
   #[test]
-  #[cfg(not(miri))]
+  #[cfg(not(use_mem_backend))]
   fn test_db_open_read_only() -> crate::Result<()> {
     let mut db = TestDb::new()?;
     db.update(|mut tx| {
@@ -2436,7 +2432,7 @@ mod test {
   }
 
   #[test]
-  #[cfg(not(miri))]
+  #[cfg(not(use_mem_backend))]
   fn test_open_big_page() -> crate::Result<()> {
     let page_size = DEFAULT_PAGE_SIZE.bytes() as usize;
     let options = BoltOptions::builder().page_size(page_size * 2).build();

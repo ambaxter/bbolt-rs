@@ -8,7 +8,7 @@ use crate::common::tree::{
   MappedBranchPage, MappedLeafPage, TreePage, BRANCH_PAGE_ELEMENT_SIZE, LEAF_PAGE_ELEMENT_SIZE,
 };
 use crate::common::{BVec, HashMap, PgId, SplitRef, ZERO_PGID};
-use crate::cursor::{CursorIApi, CursorImpl, CursorRwIApi, CursorRwImpl, InnerCursor};
+use crate::cursor::{CursorIApi, CursorImpl, CursorRwIApi, CursorRwImpl, InnerCursor, PageNode};
 use crate::node::NodeRwCell;
 use crate::tx::{TxCell, TxIApi, TxRwCell, TxRwIApi};
 use crate::Error::{
@@ -18,7 +18,6 @@ use crate::Error::{
 use crate::{CursorRwApi, Error};
 use bumpalo::Bump;
 use bytemuck::{Pod, Zeroable};
-use either::Either;
 use getset::CopyGetters;
 use std::alloc::Layout;
 use std::marker::PhantomData;
@@ -595,86 +594,93 @@ pub trait BucketRwApi<'tx>: BucketApi<'tx> {
 }
 
 /// Read-only Bucket
-pub enum BucketImpl<'tx> {
+pub struct BucketImpl<'tx> {
+  b: BucketWrapper<'tx>,
+}
+pub enum BucketWrapper<'tx> {
   R(BucketCell<'tx>),
   RW(BucketRwCell<'tx>),
 }
 
 impl<'tx> From<BucketCell<'tx>> for BucketImpl<'tx> {
   fn from(value: BucketCell<'tx>) -> Self {
-    BucketImpl::R(value)
+    BucketImpl {
+      b: BucketWrapper::R(value),
+    }
   }
 }
 
 impl<'tx> From<BucketRwCell<'tx>> for BucketImpl<'tx> {
   fn from(value: BucketRwCell<'tx>) -> Self {
-    BucketImpl::RW(value)
+    BucketImpl {
+      b: BucketWrapper::RW(value),
+    }
   }
 }
 
 impl<'tx> BucketApi<'tx> for BucketImpl<'tx> {
   fn root(&self) -> PgId {
-    match self {
-      BucketImpl::R(r) => r.root(),
-      BucketImpl::RW(rw) => rw.root(),
+    match &self.b {
+      BucketWrapper::R(r) => r.root(),
+      BucketWrapper::RW(rw) => rw.root(),
     }
   }
 
   fn writable(&self) -> bool {
-    match self {
-      BucketImpl::R(r) => r.is_writeable(),
-      BucketImpl::RW(rw) => rw.is_writeable(),
+    match &self.b {
+      BucketWrapper::R(r) => r.is_writeable(),
+      BucketWrapper::RW(rw) => rw.is_writeable(),
     }
   }
 
   fn cursor(&self) -> CursorImpl<'tx> {
-    match self {
-      BucketImpl::R(r) => InnerCursor::new(*r, r.tx().bump()).into(),
-      BucketImpl::RW(rw) => InnerCursor::new(*rw, rw.tx().bump()).into(),
+    match &self.b {
+      BucketWrapper::R(r) => InnerCursor::new(*r, r.tx().bump()).into(),
+      BucketWrapper::RW(rw) => InnerCursor::new(*rw, rw.tx().bump()).into(),
     }
   }
 
   fn bucket<T: AsRef<[u8]>>(&self, name: T) -> Option<BucketImpl<'tx>> {
-    match self {
-      BucketImpl::R(r) => r.api_bucket(name.as_ref()).map(BucketImpl::from),
-      BucketImpl::RW(rw) => rw.api_bucket(name.as_ref()).map(BucketImpl::from),
+    match &self.b {
+      BucketWrapper::R(r) => r.api_bucket(name.as_ref()).map(BucketImpl::from),
+      BucketWrapper::RW(rw) => rw.api_bucket(name.as_ref()).map(BucketImpl::from),
     }
   }
 
   fn get<T: AsRef<[u8]>>(&self, key: T) -> Option<&[u8]> {
-    match self {
-      BucketImpl::R(r) => r.api_get(key.as_ref()),
-      BucketImpl::RW(rw) => rw.api_get(key.as_ref()),
+    match &self.b {
+      BucketWrapper::R(r) => r.api_get(key.as_ref()),
+      BucketWrapper::RW(rw) => rw.api_get(key.as_ref()),
     }
   }
 
   fn sequence(&self) -> u64 {
-    match self {
-      BucketImpl::R(r) => r.api_sequence(),
-      BucketImpl::RW(rw) => rw.api_sequence(),
+    match &self.b {
+      BucketWrapper::R(r) => r.api_sequence(),
+      BucketWrapper::RW(rw) => rw.api_sequence(),
     }
   }
 
   fn for_each<F: FnMut(&'tx [u8], Option<&'tx [u8]>) -> crate::Result<()>>(
     &self, f: F,
   ) -> crate::Result<()> {
-    match self {
-      BucketImpl::R(r) => r.api_for_each(f),
-      BucketImpl::RW(rw) => rw.api_for_each(f),
+    match &self.b {
+      BucketWrapper::R(r) => r.api_for_each(f),
+      BucketWrapper::RW(rw) => rw.api_for_each(f),
     }
   }
 
   fn for_each_bucket<F: FnMut(&'tx [u8]) -> crate::Result<()>>(&self, f: F) -> crate::Result<()> {
-    match self {
-      BucketImpl::R(r) => r.api_for_each_bucket(f),
-      BucketImpl::RW(rw) => rw.api_for_each_bucket(f),
+    match &self.b {
+      BucketWrapper::R(r) => r.api_for_each_bucket(f),
+      BucketWrapper::RW(rw) => rw.api_for_each_bucket(f),
     }
   }
 
   fn stats(&self) -> BucketStats {
-    match self {
-      BucketImpl::R(r) => r.api_stats(),
-      BucketImpl::RW(rw) => rw.api_stats(),
+    match &self.b {
+      BucketWrapper::R(r) => r.api_stats(),
+      BucketWrapper::RW(rw) => rw.api_stats(),
     }
   }
 }
@@ -1038,12 +1044,12 @@ pub(crate) trait BucketIApi<'tx, T: TxIApi<'tx>>:
 
   /// forEachPageNode iterates over every page (or node) in a bucket.
   /// This also includes inline pages.
-  fn for_each_page_node<F: FnMut(&Either<RefPage, NodeRwCell<'tx>>, usize) + Copy>(self, mut f: F) {
+  fn for_each_page_node<F: FnMut(&PageNode<'tx>, usize) + Copy>(self, mut f: F) {
     let root = {
       let r = self.split_r();
       // If we have an inline page or root node then just use that.
       if let Some(page) = &r.inline_page {
-        f(&Either::Left(*page), 0);
+        f(&PageNode::Page(*page), 0);
         return;
       }
       r.bucket_header.root()
@@ -1051,7 +1057,7 @@ pub(crate) trait BucketIApi<'tx, T: TxIApi<'tx>>:
     self._for_each_page_node(root, 0, f);
   }
 
-  fn _for_each_page_node<F: FnMut(&Either<RefPage, NodeRwCell<'tx>>, usize) + Copy>(
+  fn _for_each_page_node<F: FnMut(&PageNode<'tx>, usize) + Copy>(
     self, root: PgId, depth: usize, mut f: F,
   ) {
     let pn = self.page_node(root);
@@ -1061,14 +1067,14 @@ pub(crate) trait BucketIApi<'tx, T: TxIApi<'tx>>:
 
     // Recursively loop over children.
     match &pn {
-      Either::Left(page) => {
+      PageNode::Page(page) => {
         if let Some(branch_page) = MappedBranchPage::coerce_ref(page) {
           branch_page.elements().iter().for_each(|elem| {
             self._for_each_page_node(elem.pgid(), depth + 1, f);
           });
         }
       }
-      Either::Right(node) => {
+      PageNode::Node(node) => {
         let bump = self.tx().bump();
         // To keep with our rules we much copy the inode pgids to temporary storage first
         // This should be unnecessary, but working first *then* optimize
@@ -1085,7 +1091,7 @@ pub(crate) trait BucketIApi<'tx, T: TxIApi<'tx>>:
     }
   }
 
-  fn page_node(self, id: PgId) -> Either<RefPage<'tx>, NodeRwCell<'tx>> {
+  fn page_node(self, id: PgId) -> PageNode<'tx> {
     let (r, w) = self.split_ref();
     // Inline buckets have a fake page embedded in their value so treat them
     // differently. We'll return the rootNode (if available) or the fake page.
@@ -1094,20 +1100,20 @@ pub(crate) trait BucketIApi<'tx, T: TxIApi<'tx>>:
         panic!("inline bucket non-zero page access(2): {} != 0", id)
       }
       return if let Some(root_node) = &w.and_then(|wb| wb.root_node) {
-        Either::Right(*root_node)
+        PageNode::Node(*root_node)
       } else {
-        Either::Left(r.inline_page.unwrap())
+        PageNode::Page(r.inline_page.unwrap())
       };
     }
 
     // Check the node cache for non-inline buckets.
     if let Some(wb) = &w {
       if let Some(node) = wb.nodes.get(&id) {
-        return Either::Right(*node);
+        return PageNode::Node(*node);
       }
     }
 
-    Either::Left(self.tx().mem_page(id))
+    PageNode::Page(self.tx().mem_page(id))
   }
 
   /// See [BucketApi::sequence]
@@ -1304,7 +1310,7 @@ pub struct BucketRW<'tx> {
 }
 
 #[derive(Copy, Clone)]
-pub struct BucketCell<'tx> {
+pub(crate) struct BucketCell<'tx> {
   cell: BCell<'tx, BucketR<'tx>, TxCell<'tx>>,
 }
 
@@ -1368,7 +1374,7 @@ impl<'tx> SplitRef<BucketR<'tx>, TxCell<'tx>, InnerBucketW<'tx, TxCell<'tx>, Buc
 }
 
 #[derive(Copy, Clone)]
-pub struct BucketRwCell<'tx> {
+pub(crate) struct BucketRwCell<'tx> {
   pub(crate) cell: BCell<'tx, BucketRW<'tx>, TxRwCell<'tx>>,
 }
 
@@ -1579,8 +1585,8 @@ impl<'tx> BucketRwIApi<'tx> for BucketRwCell<'tx> {
     let txid = tx.meta().txid();
 
     self.for_each_page_node(|pn, _| match pn {
-      Either::Left(page) => tx.freelist_free_page(txid, page),
-      Either::Right(node) => node.free(),
+      PageNode::Page(page) => tx.freelist_free_page(txid, page),
+      PageNode::Node(node) => node.free(),
     });
     self.split_r_mut().bucket_header.set_root(ZERO_PGID);
   }

@@ -50,7 +50,7 @@ impl TestDb {
   }
 
   pub(crate) fn with_options(options: BoltOptions) -> crate::Result<TestDb> {
-    if cfg!(miri) {
+    if cfg!(use_mem_backend) {
       Self::new_mem(options)
     } else {
       Self::new_tmp(options)
@@ -89,13 +89,13 @@ impl TestDb {
     }
   }
 
-  #[cfg(not(miri))]
+  #[cfg(not(use_mem_backend))]
   pub(crate) fn must_close(&mut self) {
     let db = self.db.take().unwrap();
     db.close();
   }
 
-  #[cfg(not(miri))]
+  #[cfg(not(use_mem_backend))]
   pub(crate) fn reopen(&mut self) -> crate::Result<()> {
     assert!(
       self.tmp_file.is_some(),
@@ -110,7 +110,7 @@ impl TestDb {
     Ok(())
   }
 
-  #[cfg(not(miri))]
+  #[cfg(not(use_mem_backend))]
   pub(crate) fn must_reopen(&mut self) {
     self.reopen().expect("Unable to reopen db")
   }

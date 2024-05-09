@@ -6,7 +6,6 @@ use crate::node::NodeRwCell;
 use crate::tx::{TxCell, TxIApi, TxRwCell};
 use crate::Error::IncompatibleValue;
 use bumpalo::Bump;
-use either::Either;
 use std::marker::PhantomData;
 
 /// Read-only Cursor API
@@ -209,58 +208,66 @@ pub trait CursorRwApi<'tx>: CursorApi<'tx> {
   fn delete(&mut self) -> crate::Result<()>;
 }
 
-// TODO: We need a better way to do this. InnerCursor shouldn't be leaked
-/// Read-only Cursor
-pub enum CursorImpl<'tx> {
+pub(crate) enum CursorWrapper<'tx> {
   R(InnerCursor<'tx, TxCell<'tx>, BucketCell<'tx>>),
   RW(InnerCursor<'tx, TxRwCell<'tx>, BucketRwCell<'tx>>),
 }
 
+/// Read-only Cursor
+///
+pub struct CursorImpl<'tx> {
+  c: CursorWrapper<'tx>,
+}
+
 impl<'tx> From<InnerCursor<'tx, TxCell<'tx>, BucketCell<'tx>>> for CursorImpl<'tx> {
   fn from(value: InnerCursor<'tx, TxCell<'tx>, BucketCell<'tx>>) -> Self {
-    CursorImpl::R(value)
+    CursorImpl {
+      c: CursorWrapper::R(value),
+    }
   }
 }
 
 impl<'tx> From<InnerCursor<'tx, TxRwCell<'tx>, BucketRwCell<'tx>>> for CursorImpl<'tx> {
   fn from(value: InnerCursor<'tx, TxRwCell<'tx>, BucketRwCell<'tx>>) -> Self {
-    CursorImpl::RW(value)
+    CursorImpl {
+      c: CursorWrapper::RW(value),
+    }
   }
 }
 
 impl<'tx> CursorApi<'tx> for CursorImpl<'tx> {
   fn first(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
-    match self {
-      CursorImpl::R(r) => r.api_first(),
-      CursorImpl::RW(rw) => rw.api_first(),
+    match &mut self.c {
+      CursorWrapper::R(r) => r.api_first(),
+      CursorWrapper::RW(rw) => rw.api_first(),
     }
   }
 
   fn last(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
-    match self {
-      CursorImpl::R(r) => r.api_last(),
-      CursorImpl::RW(rw) => rw.api_last(),
+    match &mut self.c {
+      CursorWrapper::R(r) => r.api_last(),
+      CursorWrapper::RW(rw) => rw.api_last(),
     }
   }
 
   fn next(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
-    match self {
-      CursorImpl::R(r) => r.api_next(),
-      CursorImpl::RW(rw) => rw.api_next(),
+    match &mut self.c {
+      CursorWrapper::R(r) => r.api_next(),
+      CursorWrapper::RW(rw) => rw.api_next(),
     }
   }
 
   fn prev(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
-    match self {
-      CursorImpl::R(r) => r.api_prev(),
-      CursorImpl::RW(rw) => rw.api_prev(),
+    match &mut self.c {
+      CursorWrapper::R(r) => r.api_prev(),
+      CursorWrapper::RW(rw) => rw.api_prev(),
     }
   }
 
   fn seek<T: AsRef<[u8]>>(&mut self, seek: T) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
-    match self {
-      CursorImpl::R(r) => r.api_seek(seek.as_ref()),
-      CursorImpl::RW(rw) => rw.api_seek(seek.as_ref()),
+    match &mut self.c {
+      CursorWrapper::R(r) => r.api_seek(seek.as_ref()),
+      CursorWrapper::RW(rw) => rw.api_seek(seek.as_ref()),
     }
   }
 }
@@ -367,9 +374,15 @@ pub(crate) trait CursorRwIApi<'tx>: CursorIApi<'tx> {
   fn api_delete(&mut self) -> crate::Result<()>;
 }
 
+#[derive(Copy, Clone)]
+pub enum PageNode<'tx> {
+  Page(RefPage<'tx>),
+  Node(NodeRwCell<'tx>),
+}
+
 #[derive(Clone)]
 pub struct ElemRef<'tx> {
-  pn: Either<RefPage<'tx>, NodeRwCell<'tx>>,
+  pn: PageNode<'tx>,
   index: i32,
 }
 
@@ -377,16 +390,16 @@ impl<'tx> ElemRef<'tx> {
   /// count returns the number of inodes or page elements.
   fn count(&self) -> u32 {
     match &self.pn {
-      Either::Left(r) => r.count as u32,
-      Either::Right(n) => n.cell.borrow().inodes.len() as u32,
+      PageNode::Page(r) => r.count as u32,
+      PageNode::Node(n) => n.cell.borrow().inodes.len() as u32,
     }
   }
 
   /// is_leaf returns whether the ref is pointing at a leaf page/node.
   fn is_leaf(&self) -> bool {
     match &self.pn {
-      Either::Left(r) => r.is_leaf(),
-      Either::Right(n) => n.cell.borrow().is_leaf,
+      PageNode::Page(r) => r.is_leaf(),
+      PageNode::Node(n) => n.cell.borrow().is_leaf,
     }
   }
 }
@@ -575,11 +588,11 @@ impl<'tx, T: TxIApi<'tx>, B: BucketIApi<'tx, T>> CursorIApi<'tx> for InnerCursor
 
         // Keep adding pages pointing to the last element in the stack.
         let pgid = match &elem.pn {
-          Either::Left(page) => {
+          PageNode::Page(page) => {
             let branch_page = MappedBranchPage::coerce_ref(page).unwrap();
             branch_page.get_elem(elem.index as u16).unwrap().pgid()
           }
-          Either::Right(node) => node.cell.borrow().inodes[elem.index as usize].pgid(),
+          PageNode::Node(node) => node.cell.borrow().inodes[elem.index as usize].pgid(),
         };
 
         let pn = self.bucket.page_node(pgid);
@@ -601,13 +614,13 @@ impl<'tx, T: TxIApi<'tx>, B: BucketIApi<'tx, T>> CursorIApi<'tx> for InnerCursor
 
     match &elem_ref.pn {
       // Retrieve value from page.
-      Either::Left(r) => {
+      PageNode::Page(r) => {
         let l = MappedLeafPage::coerce_ref(r).unwrap();
         l.get_elem(elem_ref.index as u16)
           .map(|inode| (inode.key(), inode.value(), inode.flags()))
       }
       // Retrieve value from node.
-      Either::Right(n) => {
+      PageNode::Node(n) => {
         let ref_node = n.cell.borrow();
         ref_node
           .inodes
@@ -655,12 +668,12 @@ impl<'tx, T: TxIApi<'tx>, B: BucketIApi<'tx, T>> CursorIApi<'tx> for InnerCursor
 
         // Keep adding pages pointing to the first element to the stack.
         match r.pn {
-          Either::Left(page) => {
+          PageNode::Page(page) => {
             let branch_page = MappedBranchPage::coerce_ref(&page).unwrap();
             let elem = branch_page.get_elem(r.index as u16).unwrap();
             elem.pgid()
           }
-          Either::Right(node) => {
+          PageNode::Node(node) => {
             let node_borrow = node.cell.borrow();
             node_borrow.inodes[r.index as usize].pgid()
           }
@@ -675,7 +688,7 @@ impl<'tx, T: TxIApi<'tx>, B: BucketIApi<'tx, T>> CursorIApi<'tx> for InnerCursor
   fn search(&mut self, key: &[u8], pgid: PgId) {
     let pn = self.bucket.page_node(pgid);
 
-    if let Either::Left(page) = &pn {
+    if let PageNode::Page(page) = &pn {
       if !page.is_leaf() && !page.is_branch() {
         panic!("invalid page type: {}, {:X}", page.id, page.flags);
       }
@@ -694,8 +707,8 @@ impl<'tx, T: TxIApi<'tx>, B: BucketIApi<'tx, T>> CursorIApi<'tx> for InnerCursor
     }
 
     match &pn {
-      Either::Left(page) => self.search_page(key, page),
-      Either::Right(node) => self.search_node(key, *node),
+      PageNode::Page(page) => self.search_page(key, page),
+      PageNode::Node(node) => self.search_node(key, *node),
     }
   }
 
@@ -704,14 +717,14 @@ impl<'tx, T: TxIApi<'tx>, B: BucketIApi<'tx, T>> CursorIApi<'tx> for InnerCursor
     if let Some(elem) = self.stack.last_mut() {
       let index = match &elem.pn {
         // If we have a page then search its leaf elements.
-        Either::Left(page) => {
+        PageNode::Page(page) => {
           let leaf_page = MappedLeafPage::coerce_ref(page).unwrap();
           leaf_page
             .elements()
             .partition_point(|elem| unsafe { elem.key(leaf_page.page_ptr().cast_const()) } < key)
         }
         // If we have a node then search its inodes.
-        Either::Right(node) => node
+        PageNode::Node(node) => node
           .cell
           .borrow()
           .inodes
@@ -768,7 +781,7 @@ impl<'tx, B: BucketRwIApi<'tx>> CursorRwIApi<'tx> for InnerCursor<'tx, TxRwCell<
 
     // If the top of the stack is a leaf node then just return it.
     if let Some(elem_ref) = self.stack.last() {
-      if let Either::Right(node) = elem_ref.pn {
+      if let PageNode::Node(node) = elem_ref.pn {
         if node.cell.borrow().is_leaf {
           return node;
         }
@@ -778,8 +791,8 @@ impl<'tx, B: BucketRwIApi<'tx>> CursorRwIApi<'tx> for InnerCursor<'tx, TxRwCell<
     // Start from root and traverse down the hierarchy.
     let mut n = {
       match &self.stack.first().unwrap().pn {
-        Either::Left(page) => self.bucket.node(page.id, None),
-        Either::Right(node) => *node,
+        PageNode::Page(page) => self.bucket.node(page.id, None),
+        PageNode::Node(node) => *node,
       }
     };
     let _stack = &self.stack[0..self.stack.len() - 1];

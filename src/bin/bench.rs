@@ -30,6 +30,8 @@ struct Bench {
   value_size: usize,
   #[arg(short, long, default_value_t = 0.5f64)]
   fill_percent: f64,
+  #[arg(short, long)]
+  mem_backend: bool
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
@@ -127,12 +129,18 @@ fn main() -> bbolt_rs::Result<()> {
       "number of iterations must be divisible by the batch size"
     )));
   }
-  let tmp_file = Builder::new()
-    .prefix("bbolt-rs-")
-    .suffix(".db")
-    .tempfile()?;
+  let (_tmp_file, mut db) = if bench.mem_backend {
+    (None, BoltOptions::default().open_mem()?)
+  } else {
+    let tmp_file = Builder::new()
+      .prefix("bbolt-rs-")
+      .suffix(".db")
+      .tempfile()?;
 
-  let mut db = BoltOptions::default().open(tmp_file.path())?;
+    let path =  tmp_file.path().to_path_buf();
+    (Some(tmp_file),BoltOptions::default().open(path)?)
+  };
+
   let mut rng = StdRng::from_entropy();
   let mut write_results = BenchResults::default();
   let mut n_keys = run_writes(&mut db, &bench, &mut write_results, &mut rng)?;

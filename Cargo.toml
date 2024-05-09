@@ -19,12 +19,11 @@ page_size = "0.6.0"
 itertools = "0.12.1"
 bytemuck = { version = "1.15", features = ["derive"] }
 size = "0.4.1"
-either = "1.11.0"
 getset = "0.1.2"
 once_cell = "1.19.0"
 fnv_rs = "0.4.3"
-thiserror = "1.0.59"
-anyhow = "1.0.82"
+thiserror = "1.0.60"
+anyhow = "1.0.83"
 fs4 = { version = "0.8.2", features = ["sync"] }
 parking_lot = "0.12.2"
 aliasable = "0.1.3"
@@ -35,13 +34,34 @@ tempfile = "3.10"
 clap = { version = "4.5.4", features = ["derive"] }
 byteorder = "1.5.0"
 monotonic-timer = "1.0.0"
+document-features = "0.2.8"
 
 [features]
-allgasnobrakes = []
+#! ### Stable features
+
+## Enable working with Go Bolt databases
 compat = []
+
+## Run database check after each commit
 strict = []
-try-begin = []
+
+## Run long tests
 long-tests = []
+
+## Run tests using the memory backend
+test-mem-backend = []
+
+#! ### Experimental features
+#! The following features are experimental
+
+## Disables `RefCell` runtime memory guarantees. No performance gain.
+##
+## ⚠️Unit tests should prevent undefined behavior, but you're on your own!
+
+allgasnobrakes = []
+
+## Enable `try` family of functions. Transactions wrapped in `Option` instead of blocking
+try-begin = []
 
 [dev-dependencies]
 

@@ -68,7 +68,7 @@ impl Meta {
     }
     // Page id is either going to be 0 or 1 which we can determine by the transaction ID.
     mp.page.id = PgId(self.txid.0 % 2);
-    // unused for meta page, but we explicitly set overflow and count to keep Miri happy
+    // set overflow and count to keep Miri happy
     mp.page.overflow = 0;
     mp.page.count = 0;
     mp.page.set_meta();
