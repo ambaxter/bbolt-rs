@@ -892,7 +892,7 @@ impl DBBackend for FileBackend {
     // https://github.com/boltdb/bolt/issues/284
     if self.grow_async && !self.read_only {
       let file_lock = self.file.lock();
-      #[cfg(unix)]
+      #[cfg(mlock_supported)]
       if self.use_mlock {
         self.mmap.as_ref().unwrap().unlock()?;
       }
@@ -900,7 +900,7 @@ impl DBBackend for FileBackend {
         file_lock.set_len(size)?;
       }
       file_lock.sync_all()?;
-      #[cfg(unix)]
+      #[cfg(mlock_supported)]
       if self.use_mlock {
         self.mmap.as_ref().unwrap().lock()?;
       }
@@ -919,7 +919,7 @@ impl DBBackend for FileBackend {
 
     size = mmap_size(self.page_size, size)?;
     if let Some(mmap) = self.mmap.take() {
-      #[cfg(unix)]
+      #[cfg(mlock_supported)]
       if self.use_mlock {
         mmap.unlock()?;
       }
@@ -930,13 +930,12 @@ impl DBBackend for FileBackend {
     let mmap = MmapOptions::new()
       .len(size as usize)
       .map_raw(&**file_lock)?;
-    #[cfg(unix)]
-    {
-      mmap.advise(Advice::Random)?;
-      if self.use_mlock {
-        mmap.lock()?;
-      }
+    #[cfg(mlock_supported)]
+    if self.use_mlock {
+      mmap.lock()?;
     }
+    #[cfg(mmap_advise_supported)]
+    mmap.advise(Advice::Random)?;
 
     self.mmap = Some(mmap);
 
@@ -1321,6 +1320,7 @@ impl<'tx> DbMutIApi<'tx> for DbShared {
 #[builder(doc)]
 pub struct BoltOptions {
   // TODO: How do we handle this?
+  #[cfg(timeout_supported)]
   #[builder(
     default,
     setter(
@@ -1386,6 +1386,7 @@ pub struct BoltOptions {
   /// Mlock locks database file in memory when set to true.
   /// It prevents potential page faults, however
   /// used memory can't be reclaimed. (UNIX only)
+  #[cfg(mlock_supported)]
   #[builder(setter(strip_bool))]
   mlock: bool,
   #[builder(
@@ -1410,7 +1411,7 @@ pub struct BoltOptions {
 impl BoltOptions {
   #[inline]
   pub(crate) fn timeout(&self) -> Option<Duration> {
-    if cfg!(use_timeout) {
+    if cfg!(timeout_supported) {
       self.timeout
     } else {
       None
@@ -1453,7 +1454,7 @@ impl BoltOptions {
 
   #[inline]
   pub(crate) fn mlock(&self) -> bool {
-    if cfg!(use_mlock) {
+    if cfg!(mlock_supported) {
       self.mlock
     } else {
       false
@@ -1724,13 +1725,14 @@ impl Bolt {
     } else {
       options.map_raw(&file)?
     };
-    #[cfg(unix)]
-    {
-      mmap.advise(Advice::Random)?;
-      if bolt_options.mlock() {
-        mmap.lock()?;
-      }
+    #[cfg(mlock_supported)]
+    if bolt_options.mlock() {
+      mmap.lock()?;
     }
+
+    #[cfg(mmap_advise_supported)]
+    mmap.advise(Advice::Random)?;
+
     let backend = FileBackend {
       path: Arc::new(path.into()),
       file: Mutex::new(FileState { file, file_size }),
@@ -2107,7 +2109,7 @@ mod test {
 
   #[test]
   #[cfg(feature = "long-tests")]
-  #[cfg(not(use_mem_backend))]
+  #[cfg(not(any(miri, feature="test-mem-backend")))]
   fn test_open_multiple_threads() -> crate::Result<()> {
     let instances = 30;
     let iterations = 30;
@@ -2139,7 +2141,7 @@ mod test {
   }
 
   #[test]
-  #[cfg(not(use_mem_backend))]
+  #[cfg(not(any(miri, feature="test-mem-backend")))]
   fn test_open_err_path_required() -> crate::Result<()> {
     let r = Bolt::open("");
     assert!(r.is_err());
@@ -2147,7 +2149,7 @@ mod test {
   }
 
   #[test]
-  #[cfg(not(use_mem_backend))]
+  #[cfg(not(any(miri, feature="test-mem-backend")))]
   fn test_open_err_not_exists() -> crate::Result<()> {
     let file = temp_file()?;
     let path = file.path().join("bad-path");
@@ -2157,7 +2159,7 @@ mod test {
   }
 
   #[test]
-  #[cfg(not(use_mem_backend))]
+  #[cfg(not(any(miri, feature="test-mem-backend")))]
   fn test_open_err_invalid() -> crate::Result<()> {
     let mut file = temp_file()?;
     file
@@ -2169,7 +2171,7 @@ mod test {
   }
 
   #[test]
-  #[cfg(not(use_mem_backend))]
+  #[cfg(not(any(miri, feature="test-mem-backend")))]
   fn test_open_err_version_mismatch() -> crate::Result<()> {
     // TODO: Make this cleaner
     let mut file = temp_file()?;
@@ -2193,7 +2195,7 @@ mod test {
   }
 
   #[test]
-  #[cfg(not(use_mem_backend))]
+  #[cfg(not(any(miri, feature="test-mem-backend")))]
   fn test_open_err_checksum() -> crate::Result<()> {
     // TODO: Make this cleaner
     let mut file = temp_file()?;
@@ -2217,7 +2219,7 @@ mod test {
   }
 
   #[test]
-  #[cfg(not(use_mem_backend))]
+  #[cfg(not(any(miri, feature="test-mem-backend")))]
   fn test_open_read_page_size_from_meta1_os() -> crate::Result<()> {
     // TODO: Make this cleaner
     let mut file = temp_file()?;
@@ -2238,7 +2240,7 @@ mod test {
   }
 
   #[test]
-  #[cfg(not(use_mem_backend))]
+  #[cfg(not(any(miri, feature="test-mem-backend")))]
   fn test_open_read_page_size_from_meta1_given() -> crate::Result<()> {
     for i in 0..=14usize {
       let given_page_size = 1024usize << i;
@@ -2266,7 +2268,7 @@ mod test {
   }
 
   #[test]
-  #[cfg(not(use_mem_backend))]
+  #[cfg(not(any(miri, feature="test-mem-backend")))]
   fn test_open_size() -> crate::Result<()> {
     let mut db = TestDb::new()?;
     let page_size = db.info().page_size;
@@ -2315,7 +2317,7 @@ mod test {
   }
 
   #[test]
-  #[cfg(not(use_mem_backend))]
+  #[cfg(not(any(miri, feature="test-mem-backend")))]
   #[cfg(feature = "long-tests")]
   fn test_open_size_large() -> crate::Result<()> {
     let mut db = TestDb::new()?;
@@ -2365,7 +2367,7 @@ mod test {
   }
 
   #[test]
-  #[cfg(not(use_mem_backend))]
+  #[cfg(not(any(miri, feature="test-mem-backend")))]
   fn test_open_check() -> crate::Result<()> {
     let mut db = TestDb::new()?;
     db.view(|tx| {
@@ -2388,7 +2390,7 @@ mod test {
   }
 
   #[test]
-  #[cfg(not(use_mem_backend))]
+  #[cfg(not(any(miri, feature="test-mem-backend")))]
   fn test_open_file_too_small() -> crate::Result<()> {
     let mut db = TestDb::new()?;
     db.must_close();
@@ -2408,7 +2410,7 @@ mod test {
   }
 
   #[test]
-  #[cfg(not(use_mem_backend))]
+  #[cfg(not(any(miri, feature="test-mem-backend")))]
   fn test_db_open_read_only() -> crate::Result<()> {
     let mut db = TestDb::new()?;
     db.update(|mut tx| {
@@ -2432,7 +2434,7 @@ mod test {
   }
 
   #[test]
-  #[cfg(not(use_mem_backend))]
+  #[cfg(not(any(miri, feature="test-mem-backend")))]
   fn test_open_big_page() -> crate::Result<()> {
     let page_size = DEFAULT_PAGE_SIZE.bytes() as usize;
     let options = BoltOptions::builder().page_size(page_size * 2).build();
