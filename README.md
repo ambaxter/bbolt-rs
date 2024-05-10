@@ -25,6 +25,8 @@ Features:
 * Miri tested to prevent memory errors in unsafe blocks
 * Simple and straightforward public APIs
 
+[Check out the documentation!!](https://docs.rs/bbolt-rs/1.3.8/bbolt_rs/)
+
 Currently not supported:
 * Tx.copy
 * Compact
