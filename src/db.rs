@@ -2109,7 +2109,7 @@ mod test {
 
   #[test]
   #[cfg(feature = "long-tests")]
-  #[cfg(not(any(miri, feature="test-mem-backend")))]
+  #[cfg(not(any(miri, feature = "test-mem-backend")))]
   fn test_open_multiple_threads() -> crate::Result<()> {
     let instances = 30;
     let iterations = 30;
@@ -2141,7 +2141,7 @@ mod test {
   }
 
   #[test]
-  #[cfg(not(any(miri, feature="test-mem-backend")))]
+  #[cfg(not(any(miri, feature = "test-mem-backend")))]
   fn test_open_err_path_required() -> crate::Result<()> {
     let r = Bolt::open("");
     assert!(r.is_err());
@@ -2149,7 +2149,7 @@ mod test {
   }
 
   #[test]
-  #[cfg(not(any(miri, feature="test-mem-backend")))]
+  #[cfg(not(any(miri, feature = "test-mem-backend")))]
   fn test_open_err_not_exists() -> crate::Result<()> {
     let file = temp_file()?;
     let path = file.path().join("bad-path");
@@ -2159,7 +2159,7 @@ mod test {
   }
 
   #[test]
-  #[cfg(not(any(miri, feature="test-mem-backend")))]
+  #[cfg(not(any(miri, feature = "test-mem-backend")))]
   fn test_open_err_invalid() -> crate::Result<()> {
     let mut file = temp_file()?;
     file
@@ -2171,7 +2171,7 @@ mod test {
   }
 
   #[test]
-  #[cfg(not(any(miri, feature="test-mem-backend")))]
+  #[cfg(not(any(miri, feature = "test-mem-backend")))]
   fn test_open_err_version_mismatch() -> crate::Result<()> {
     // TODO: Make this cleaner
     let mut file = temp_file()?;
@@ -2195,7 +2195,7 @@ mod test {
   }
 
   #[test]
-  #[cfg(not(any(miri, feature="test-mem-backend")))]
+  #[cfg(not(any(miri, feature = "test-mem-backend")))]
   fn test_open_err_checksum() -> crate::Result<()> {
     // TODO: Make this cleaner
     let mut file = temp_file()?;
@@ -2219,7 +2219,7 @@ mod test {
   }
 
   #[test]
-  #[cfg(not(any(miri, feature="test-mem-backend")))]
+  #[cfg(not(any(miri, feature = "test-mem-backend")))]
   fn test_open_read_page_size_from_meta1_os() -> crate::Result<()> {
     // TODO: Make this cleaner
     let mut file = temp_file()?;
@@ -2240,7 +2240,7 @@ mod test {
   }
 
   #[test]
-  #[cfg(not(any(miri, feature="test-mem-backend")))]
+  #[cfg(not(any(miri, feature = "test-mem-backend")))]
   fn test_open_read_page_size_from_meta1_given() -> crate::Result<()> {
     for i in 0..=14usize {
       let given_page_size = 1024usize << i;
@@ -2268,7 +2268,7 @@ mod test {
   }
 
   #[test]
-  #[cfg(not(any(miri, feature="test-mem-backend")))]
+  #[cfg(not(any(miri, feature = "test-mem-backend")))]
   fn test_open_size() -> crate::Result<()> {
     let mut db = TestDb::new()?;
     let page_size = db.info().page_size;
@@ -2317,7 +2317,7 @@ mod test {
   }
 
   #[test]
-  #[cfg(not(any(miri, feature="test-mem-backend")))]
+  #[cfg(not(any(miri, feature = "test-mem-backend")))]
   #[cfg(feature = "long-tests")]
   fn test_open_size_large() -> crate::Result<()> {
     let mut db = TestDb::new()?;
@@ -2367,7 +2367,7 @@ mod test {
   }
 
   #[test]
-  #[cfg(not(any(miri, feature="test-mem-backend")))]
+  #[cfg(not(any(miri, feature = "test-mem-backend")))]
   fn test_open_check() -> crate::Result<()> {
     let mut db = TestDb::new()?;
     db.view(|tx| {
@@ -2390,7 +2390,7 @@ mod test {
   }
 
   #[test]
-  #[cfg(not(any(miri, feature="test-mem-backend")))]
+  #[cfg(not(any(miri, feature = "test-mem-backend")))]
   fn test_open_file_too_small() -> crate::Result<()> {
     let mut db = TestDb::new()?;
     db.must_close();
@@ -2410,7 +2410,7 @@ mod test {
   }
 
   #[test]
-  #[cfg(not(any(miri, feature="test-mem-backend")))]
+  #[cfg(not(any(miri, feature = "test-mem-backend")))]
   fn test_db_open_read_only() -> crate::Result<()> {
     let mut db = TestDb::new()?;
     db.update(|mut tx| {
@@ -2434,7 +2434,7 @@ mod test {
   }
 
   #[test]
-  #[cfg(not(any(miri, feature="test-mem-backend")))]
+  #[cfg(not(any(miri, feature = "test-mem-backend")))]
   fn test_open_big_page() -> crate::Result<()> {
     let page_size = DEFAULT_PAGE_SIZE.bytes() as usize;
     let options = BoltOptions::builder().page_size(page_size * 2).build();

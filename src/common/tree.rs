@@ -76,9 +76,8 @@ pub struct LeafPageElement {
 }
 
 impl LeafPageElement {
-
   pub(crate) fn new(flags: u32, pos: u32, key_size: u32, value_size: u32) -> LeafPageElement {
-    LeafPageElement{
+    LeafPageElement {
       flags,
       pos,
       key_size,

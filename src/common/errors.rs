@@ -27,7 +27,7 @@ pub enum Error {
   /// Checksum is returned when either meta page checksum does not match.
   #[error("checksum mismatch")]
   ChecksumMismatch,
-  /// Checksum is returned when either meta page checksum does not match.
+  /// File size is below the minimum size a Bolt database could be
   #[error("file size too small: `{0}`")]
   FileSizeTooSmall(u64),
   /// Timeout is returned when a database cannot obtain an exclusive lock
@@ -63,17 +63,22 @@ pub enum Error {
   /// non-bucket key on an existing bucket key.
   #[error("incompatible value")]
   IncompatibleValue,
+  /// File size is below the minimum size a Bolt database could be
   #[error("mmap too small: `{0}`")]
   MMapTooSmall(u64),
+  /// File size is larger than the maximum size a Bolt database could be
   #[error("mmap too large")]
   MMapTooLarge,
+  /// Batch call failed. Try again without batch
   #[error("try function without batch call")]
   TrySolo,
+  /// Batch is disabled
   #[error("max batch delay or length is set to 0")]
   BatchDisabled,
-  // Chained errors from other sources
+  /// Chained errors from other sources
   #[error(transparent)]
   IO(#[from] io::Error),
+  /// User defined error
   #[error(transparent)]
   Other(#[from] anyhow::Error),
 }

@@ -1967,7 +1967,7 @@ mod test {
   use std::time::Duration;
 
   #[test]
-  #[cfg(not(any(miri, feature="test-mem-backend")))]
+  #[cfg(not(any(miri, feature = "test-mem-backend")))]
   fn test_tx_check_read_only() -> crate::Result<()> {
     let mut db = TestDb::new()?;
     db.update(|mut tx| {

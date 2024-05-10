@@ -754,16 +754,16 @@ impl<'tx> NodeRwCell<'tx> {
 #[cfg(test)]
 mod test {
   use crate::bucket::BucketRwIApi;
-  use crate::common::page::{CoerciblePage, LEAF_PAGE_FLAG, MutPage, PAGE_HEADER_SIZE, RefPage};
+  use crate::common::ids::pd;
+  use crate::common::page::{CoerciblePage, MutPage, RefPage, LEAF_PAGE_FLAG, PAGE_HEADER_SIZE};
+  use crate::common::tree::{LeafPageElement, MappedLeafPage, TreePage, LEAF_PAGE_ELEMENT_SIZE};
   use crate::common::ZERO_PGID;
+  use crate::node::NodeW;
   use crate::test_support::TestDb;
   use crate::tx::check::UnsealRwTx;
   use crate::tx::TxRwIApi;
+  use aligners::{alignment, AlignedBytes};
   use itertools::Itertools;
-  use aligners::{AlignedBytes, alignment};
-  use crate::common::ids::pd;
-  use crate::common::tree::{LEAF_PAGE_ELEMENT_SIZE, LeafPageElement, MappedLeafPage, TreePage};
-  use crate::node::NodeW;
 
   #[test]
   fn test_node_put() -> crate::Result<()> {
@@ -815,10 +815,15 @@ mod test {
     assert!(node.is_leaf);
     assert_eq!(2, node.inodes.len());
     let inodes = &node.inodes;
-    assert_eq!((b"bar".as_slice(), b"fooz".as_slice()), (inodes[0].key(), inodes[0].value()));
-    assert_eq!((b"helloworld".as_slice(), b"bye".as_slice()), (inodes[1].key(), inodes[1].value()));
+    assert_eq!(
+      (b"bar".as_slice(), b"fooz".as_slice()),
+      (inodes[0].key(), inodes[0].value())
+    );
+    assert_eq!(
+      (b"helloworld".as_slice(), b"bye".as_slice()),
+      (inodes[1].key(), inodes[1].value())
+    );
     Ok(())
-
   }
 
   #[test]
@@ -845,9 +850,18 @@ mod test {
     assert!(node.is_leaf);
     assert_eq!(3, node.inodes.len());
     let inodes = &node.inodes;
-    assert_eq!((b"john".as_slice(), b"johnson".as_slice()), (inodes[0].key(), inodes[0].value()));
-    assert_eq!((b"ricki".as_slice(), b"lake".as_slice()), (inodes[1].key(), inodes[1].value()));
-    assert_eq!((b"susy".as_slice(), b"que".as_slice()), (inodes[2].key(), inodes[2].value()));
+    assert_eq!(
+      (b"john".as_slice(), b"johnson".as_slice()),
+      (inodes[0].key(), inodes[0].value())
+    );
+    assert_eq!(
+      (b"ricki".as_slice(), b"lake".as_slice()),
+      (inodes[1].key(), inodes[1].value())
+    );
+    assert_eq!(
+      (b"susy".as_slice(), b"que".as_slice()),
+      (inodes[2].key(), inodes[2].value())
+    );
     Ok(())
   }
 

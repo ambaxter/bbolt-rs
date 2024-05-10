@@ -21,7 +21,8 @@ Features:
 * Explicitly designed to prevent transaction dependant resources from escaping the transaction.
 * RwLock based transactions
 * File backed database
-* Memory backed database for Miri to check for unsafe behavior against
+* Memory backed database
+* Miri tested to prevent memory errors in unsafe blocks
 * Simple and straightforward public APIs
 
 Currently not supported:

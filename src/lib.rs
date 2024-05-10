@@ -1,5 +1,5 @@
 //! bbolt-rs is an implementation of the [etcd-io/bbolt](https://github.com/etcd-io/bbolt) database in Rust.
-//! It successfully reads and commits, but it has some limitations. 
+//! It successfully reads and commits, but it has some limitations.
 //!
 //! Features:
 //! * Arena memory allocation per transaction
@@ -7,19 +7,19 @@
 //! * RwLock based transactions
 //! * File backed database
 //! * Memory backed database
-//! * Miri tested to guarantee memory safety
+//! * Miri tested to prevent memory errors in unsafe blocks
 //! * Simple and straightforward public APIs
-//! 
+//!
 //! Currently not supported:
 //! * Tx.copy
 //! * Compact
 //! * Most of the main application
-//! * A variety of DB Options including 
+//! * A variety of DB Options including
 //!   * no freelist sync
 //!   * file open timeout
 //! * Panic handling during bench
-//! 
-//! 
+//!
+//!
 //! ## Feature flags
 #![doc = document_features::document_features!()]
 
@@ -37,8 +37,8 @@ mod tx;
 pub use bucket::{BucketApi, BucketImpl, BucketRwApi, BucketRwImpl, BucketStats};
 pub use common::errors::{Error, Result};
 pub use common::ids::{PgId, TxId};
+pub use common::page::PageInfo;
 pub use cursor::{CursorApi, CursorImpl, CursorRwApi, CursorRwImpl};
-pub use db::{Bolt, BoltOptions, BoltOptionsBuilder, DbApi, DbPath, DbRwAPI, DbInfo, DbStats};
+pub use db::{Bolt, BoltOptions, BoltOptionsBuilder, DbApi, DbInfo, DbPath, DbRwAPI, DbStats};
 pub use tx::check::TxCheck;
 pub use tx::{TxApi, TxImpl, TxRef, TxRwApi, TxRwImpl, TxRwRef, TxRwRefApi, TxStats};
-

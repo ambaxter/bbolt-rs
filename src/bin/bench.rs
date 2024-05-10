@@ -31,7 +31,7 @@ struct Bench {
   #[arg(short, long, default_value_t = 0.5f64)]
   fill_percent: f64,
   #[arg(short, long)]
-  mem_backend: bool
+  mem_backend: bool,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
@@ -137,8 +137,8 @@ fn main() -> bbolt_rs::Result<()> {
       .suffix(".db")
       .tempfile()?;
 
-    let path =  tmp_file.path().to_path_buf();
-    (Some(tmp_file),BoltOptions::default().open(path)?)
+    let path = tmp_file.path().to_path_buf();
+    (Some(tmp_file), BoltOptions::default().open(path)?)
   };
 
   let mut rng = StdRng::from_entropy();
