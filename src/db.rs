@@ -2613,7 +2613,6 @@ mod test {
   }
 
   #[test]
-  #[ignore]
   fn test_db_batch() -> crate::Result<()> {
     let mut db = TestDb::new()?;
     db.update(|mut tx| {

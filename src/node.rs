@@ -754,13 +754,16 @@ impl<'tx> NodeRwCell<'tx> {
 #[cfg(test)]
 mod test {
   use crate::bucket::BucketRwIApi;
-  use crate::common::page::LEAF_PAGE_FLAG;
+  use crate::common::page::{CoerciblePage, LEAF_PAGE_FLAG, MutPage, PAGE_HEADER_SIZE, RefPage};
   use crate::common::ZERO_PGID;
   use crate::test_support::TestDb;
   use crate::tx::check::UnsealRwTx;
   use crate::tx::TxRwIApi;
   use itertools::Itertools;
-  use std::ops::Deref;
+  use aligners::{AlignedBytes, alignment};
+  use crate::common::ids::pd;
+  use crate::common::tree::{LEAF_PAGE_ELEMENT_SIZE, LeafPageElement, MappedLeafPage, TreePage};
+  use crate::node::NodeW;
 
   #[test]
   fn test_node_put() -> crate::Result<()> {
@@ -786,7 +789,6 @@ mod test {
   }
 
   #[test]
-  #[ignore]
   fn test_node_read_leaf_page() -> crate::Result<()> {
     let mut test_db = TestDb::new()?;
     let tx = test_db.begin_rw_unseal()?;
@@ -794,19 +796,59 @@ mod test {
     let root_bucket = txrw.root_bucket_mut();
     root_bucket.materialize_root();
     let n = root_bucket.cell.borrow_mut().w.root_node.unwrap();
-    todo!()
+
+    let mut page = AlignedBytes::<alignment::Page>::new_zeroed(4096);
+    {
+      let mut mut_page = MutPage::new(page.as_mut_ptr());
+      let mapped_page = MappedLeafPage::mut_into(&mut mut_page);
+      mapped_page.count = 2;
+
+      let elements = mapped_page.elements_mut();
+      elements[0] = LeafPageElement::new(0, 32, 3, 4);
+      elements[1] = LeafPageElement::new(0, 23, 10, 3);
+      let data = b"barfoozhelloworldbye";
+      let data_offset = PAGE_HEADER_SIZE + (LEAF_PAGE_ELEMENT_SIZE * 2);
+      page[data_offset..data_offset + data.len()].copy_from_slice(data.as_slice());
+    }
+    let ref_page = RefPage::new(page.as_ptr());
+    let node = NodeW::read_in(root_bucket, Some(n), &ref_page);
+    assert!(node.is_leaf);
+    assert_eq!(2, node.inodes.len());
+    let inodes = &node.inodes;
+    assert_eq!((b"bar".as_slice(), b"fooz".as_slice()), (inodes[0].key(), inodes[0].value()));
+    assert_eq!((b"helloworld".as_slice(), b"bye".as_slice()), (inodes[1].key(), inodes[1].value()));
+    Ok(())
+
   }
 
   #[test]
-  #[ignore]
   fn test_node_write_leaf_page() -> crate::Result<()> {
+    let mut page = AlignedBytes::<alignment::Page>::new_zeroed(4096);
     let mut test_db = TestDb::new()?;
     let tx = test_db.begin_rw_unseal()?;
     let txrw = tx.unseal_rw();
     let root_bucket = txrw.root_bucket_mut();
     root_bucket.materialize_root();
     let n = root_bucket.cell.borrow_mut().w.root_node.unwrap();
-    todo!()
+    {
+      n.put(b"susy", b"susy", b"que", pd(0), 0);
+      n.put(b"ricki", b"ricki", b"lake", pd(0), 0);
+      n.put(b"john", b"john", b"johnson", pd(0), 0);
+      let mut mut_page = MutPage::new(page.as_mut_ptr());
+      n.write(&mut mut_page);
+      n.del(b"susy");
+      n.del(b"ricki");
+      n.del(b"john");
+    }
+    let ref_page = RefPage::new(page.as_ptr());
+    let node = NodeW::read_in(root_bucket, Some(n), &ref_page);
+    assert!(node.is_leaf);
+    assert_eq!(3, node.inodes.len());
+    let inodes = &node.inodes;
+    assert_eq!((b"john".as_slice(), b"johnson".as_slice()), (inodes[0].key(), inodes[0].value()));
+    assert_eq!((b"ricki".as_slice(), b"lake".as_slice()), (inodes[1].key(), inodes[1].value()));
+    assert_eq!((b"susy".as_slice(), b"que".as_slice()), (inodes[2].key(), inodes[2].value()));
+    Ok(())
   }
 
   #[test]

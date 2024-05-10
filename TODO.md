@@ -3,11 +3,6 @@ bbolt-rs
 
 # TODO
 
-## Before Release 1.38
-- [x] Most of the db tests
-- [ ] Node leaf tests
-- [ ] In memory test feature
-
 ## General
 - [ ] Quick Check analog
 - [ ] Logging capabilities
@@ -56,43 +51,16 @@ bbolt-rs
 - [ ] example_tx_copy_file
 - [ ] test_tx_truncate_before_write
 
-## src/nodes.rs
-- [ ] test_node_read_leaf_page
-- [ ] test_node_write_leaf_page
-
 ## src/db.rs
 - [ ] Rework page size determination functions
 - [ ] Log IO Errors
-- [x] test_open
-- [x] test_open_multiple_goroutines
-- [x] test_open_err_path_required
-- [x] test_open_err_not_exists
-- [x] test_open_err_invalid
-- [x] test_open_err_version_mismatch
-- [x] test_open_err_checksum
-- [x] test_open_read_page_size_from_meta1_os
-- [x] test_open_read_page_size_from_meta1_given
-- [x] test_open_size
-- [x] test_open_size_large
-- [x] test_open_check
-- [x] test_open_meta_init_write_error
-- [x] test_open_file_too_small
 - [ ] test_db_open_initial_mmap_size
-- [x] test_db_open_read_only
-- [x] test_open_big_page
 - [ ] test_open_recover_free_list
-- [x] test_db_begin_err_database_not_open
-- [x] test_db_begin_rw
 - [ ] test_db_concurrent_write_to
-- [x] test_db_begin_rw_closed
 - [ ] test_db_close_pending_tx_rw
 - [ ] test_db_close_pending_tx_ro
-- [x] test_db_update
-- [x] test_db_update_closed
 - [ ] test_db_update_panic
-- [x] test_db_view_error
 - [ ] test_db_view_panic
-- [x] test_db_consistency
 - [ ] test_db_batch_panic
 - [ ] test_db_batch_full
 - [ ] test_db_batch_time
