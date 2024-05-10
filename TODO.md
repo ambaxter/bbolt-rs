@@ -10,6 +10,7 @@ bbolt-rs
 - [ ] blag post
 - [ ] Power failure testing
 - [ ] Write failure testing (especially freelist reloading)
+- [ ] 1.3.9
 
 ## Open Questions
 - [ ] Why do we need so much memory on large commits? Almost 3x the Go version

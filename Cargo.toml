@@ -57,7 +57,6 @@ test-mem-backend = []
 ## Disables `RefCell` runtime memory guarantees. No performance gain.
 ##
 ## ⚠️Unit tests should prevent undefined behavior, but you're on your own!
-
 allgasnobrakes = []
 
 ## Enable `try` family of functions. Transactions wrapped in `Option` instead of blocking

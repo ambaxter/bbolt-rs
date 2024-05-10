@@ -50,7 +50,7 @@ impl TestDb {
   }
 
   pub(crate) fn with_options(options: BoltOptions) -> crate::Result<TestDb> {
-    if cfg!(not(any(miri, feature="test-mem-backend"))) {
+    if cfg!(any(miri, feature="test-mem-backend")) {
       Self::new_mem(options)
     } else {
       Self::new_tmp(options)
