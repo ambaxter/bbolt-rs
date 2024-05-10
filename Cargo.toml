@@ -10,8 +10,10 @@ rust-version = "1.75"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+aligners = "0.0.10"
 # Until the aligners miri fix is in crates.io depend on the git main branch
-aligners = {git = "https://github.com/V0ldek/aligners.git"}
+# Swap 0.0.10 for the git version to run the miri test
+# aligners = {git = "https://github.com/V0ldek/aligners.git"}
 bumpalo = { version = "3.16", features = ["collections", "allocator-api2"]}
 hashbrown = "0.14.5"
 memmap2 = "0.9.4"
