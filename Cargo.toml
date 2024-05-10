@@ -6,6 +6,7 @@ license-file = "LICENSE"
 categories = ["command-line-utilities", "database-implementations"]
 keywords = ["cli", "bbolt", "database", "db"]
 rust-version = "1.75"
+description = "A Rust port of the Bolt database"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
