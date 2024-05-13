@@ -1,4 +1,4 @@
-use crate::bucket::{BucketIApi, BucketRwCell, BucketRwIApi, MAX_FILL_PERCENT, MIN_FILL_PERCENT};
+use crate::bucket::{BucketIApi, BucketCell, BucketRwIApi, MAX_FILL_PERCENT, MIN_FILL_PERCENT};
 use crate::common::inode::INode;
 use crate::common::memory::{CodSlice, LCell, SplitArray, VecOrSplit};
 use crate::common::page::{CoerciblePage, MutPage, RefPage, MIN_KEYS_PER_PAGE, PAGE_HEADER_SIZE};
@@ -17,7 +17,7 @@ pub struct NodeW<'tx> {
   pub(crate) key: CodSlice<'tx, u8>,
   pub(crate) pgid: PgId,
   pub(crate) inodes: VecOrSplit<'tx, INode<'tx>>,
-  bucket: BucketRwCell<'tx>,
+  bucket: BucketCell<'tx>,
   parent: Option<NodeRwCell<'tx>>,
   is_unbalanced: bool,
   is_spilled: bool,
@@ -33,7 +33,7 @@ impl<'tx> PartialEq for NodeW<'tx> {
 impl<'tx> Eq for NodeW<'tx> {}
 
 impl<'tx> NodeW<'tx> {
-  fn new_parent_in(bucket: BucketRwCell<'tx>) -> NodeW<'tx> {
+  fn new_parent_in(bucket: BucketCell<'tx>) -> NodeW<'tx> {
     let bump = bucket.tx().bump();
     NodeW {
       is_leaf: false,
@@ -49,7 +49,7 @@ impl<'tx> NodeW<'tx> {
     }
   }
 
-  fn new_child_in(bucket: BucketRwCell<'tx>, is_leaf: bool, parent: NodeRwCell<'tx>) -> NodeW<'tx> {
+  fn new_child_in(bucket: BucketCell<'tx>, is_leaf: bool, parent: NodeRwCell<'tx>) -> NodeW<'tx> {
     let bump = bucket.tx().bump();
     NodeW {
       is_leaf,
@@ -66,7 +66,7 @@ impl<'tx> NodeW<'tx> {
   }
 
   pub(crate) fn read_in(
-    bucket: BucketRwCell<'tx>, parent: Option<NodeRwCell<'tx>>, page: &RefPage<'tx>,
+    bucket: BucketCell<'tx>, parent: Option<NodeRwCell<'tx>>, page: &RefPage<'tx>,
   ) -> NodeW<'tx> {
     assert!(page.is_leaf() || page.is_branch(), "Non-tree page read");
     let bump = bucket.tx().bump();
@@ -284,14 +284,14 @@ pub struct NodeRwCell<'tx> {
 }
 
 impl<'tx> NodeRwCell<'tx> {
-  fn new_parent_in(bucket: BucketRwCell<'tx>) -> NodeRwCell<'tx> {
+  fn new_parent_in(bucket: BucketCell<'tx>) -> NodeRwCell<'tx> {
     NodeRwCell {
       cell: LCell::new_in(NodeW::new_parent_in(bucket), bucket.tx().bump()),
     }
   }
 
   fn new_child_in(
-    bucket: BucketRwCell<'tx>, is_leaf: bool, parent: NodeRwCell<'tx>,
+    bucket: BucketCell<'tx>, is_leaf: bool, parent: NodeRwCell<'tx>,
   ) -> NodeRwCell<'tx> {
     NodeRwCell {
       cell: LCell::new_in(
@@ -302,7 +302,7 @@ impl<'tx> NodeRwCell<'tx> {
   }
 
   pub(crate) fn read_in(
-    bucket: BucketRwCell<'tx>, parent: Option<NodeRwCell<'tx>>, page: &RefPage<'tx>,
+    bucket: BucketCell<'tx>, parent: Option<NodeRwCell<'tx>>, page: &RefPage<'tx>,
   ) -> NodeRwCell<'tx> {
     NodeRwCell {
       cell: LCell::new_in(NodeW::read_in(bucket, parent, page), bucket.tx().bump()),
@@ -530,7 +530,7 @@ impl<'tx> NodeRwCell<'tx> {
   /// This should only be called from the spill() function.
   fn split(self, page_size: usize) -> NodeSplit<'tx> {
     // Determine the threshold before starting a new node.
-    let mut fill_percent = self.cell.borrow().bucket.cell.borrow().w.fill_percent;
+    let mut fill_percent = self.cell.borrow().bucket.cell.borrow().w.as_ref().unwrap().fill_percent;
     fill_percent = fill_percent.max(MIN_FILL_PERCENT).min(MAX_FILL_PERCENT);
     let threshold = (page_size as f64 * fill_percent) as usize;
 
@@ -586,14 +586,14 @@ impl<'tx> NodeRwCell<'tx> {
 
         // Reparent all child nodes being moved.
         for inode in self_borrow.inodes.get_vec() {
-          if let Some(child) = bucket.w.nodes.get_mut(&inode.pgid()) {
+          if let Some(child) = bucket.w.as_mut().unwrap().nodes.get_mut(&inode.pgid()) {
             child.cell.borrow_mut().parent = Some(self);
           }
         }
 
         // Remove old child.
         child_borrow.parent = None;
-        bucket.w.nodes.remove(&child_borrow.pgid);
+        bucket.w.as_mut().unwrap().nodes.remove(&child_borrow.pgid);
         drop(bucket);
         drop(child_borrow);
         child.free()
@@ -614,7 +614,7 @@ impl<'tx> NodeRwCell<'tx> {
       parent_borrow.remove_child(self);
       {
         let mut bucket_borrow = bucket.cell.borrow_mut();
-        bucket_borrow.w.nodes.remove(&pg_id);
+        bucket_borrow.w.as_mut().unwrap().nodes.remove(&pg_id);
       }
       self.free();
       // drop parent_borrow, and bucket to rebalance the parent
@@ -650,7 +650,7 @@ impl<'tx> NodeRwCell<'tx> {
         drop(target_borrow);
         // Reparent all child nodes being moved.
         for inode in inodes {
-          if let Some(child) = bucket.w.nodes.get(&inode.pgid()).cloned() {
+          if let Some(child) = bucket.w.as_ref().unwrap().nodes.get(&inode.pgid()).cloned() {
             let child_parent = child.cell.borrow().parent.unwrap();
             child_parent.cell.borrow_mut().remove_child(child);
             child.cell.borrow_mut().parent = Some(self);
@@ -671,7 +671,7 @@ impl<'tx> NodeRwCell<'tx> {
       drop(target_borrow);
       drop(self_borrow);
       parent.cell.borrow_mut().remove_child(target);
-      bucket.w.nodes.remove(&target_pgid);
+      bucket.w.as_mut().unwrap().nodes.remove(&target_pgid);
       target.free();
     } else {
       {
@@ -681,7 +681,7 @@ impl<'tx> NodeRwCell<'tx> {
         drop(self_borrow);
         // Reparent all child nodes being moved.
         for inode in inodes {
-          if let Some(child) = bucket.w.nodes.get(&inode.pgid()).cloned() {
+          if let Some(child) = bucket.w.as_ref().unwrap().nodes.get(&inode.pgid()).cloned() {
             let child_parent = child.cell.borrow().parent.unwrap();
             child_parent.cell.borrow_mut().remove_child(child);
             child.cell.borrow_mut().parent = Some(target);
@@ -701,7 +701,7 @@ impl<'tx> NodeRwCell<'tx> {
       drop(self_borrow);
       drop(target_borrow);
       parent.cell.borrow_mut().remove_child(self);
-      bucket.w.nodes.remove(&self_pgid);
+      bucket.w.as_mut().unwrap().nodes.remove(&self_pgid);
       self.free();
     }
     drop(bucket);
@@ -795,7 +795,7 @@ mod test {
     let txrw = tx.unseal_rw();
     let root_bucket = txrw.root_bucket_mut();
     root_bucket.materialize_root();
-    let n = root_bucket.cell.borrow_mut().w.root_node.unwrap();
+    let n = root_bucket.cell.borrow_mut().w.as_ref().unwrap().root_node.unwrap();
 
     let mut page = AlignedBytes::<alignment::Page>::new_zeroed(4096);
     {
@@ -834,7 +834,7 @@ mod test {
     let txrw = tx.unseal_rw();
     let root_bucket = txrw.root_bucket_mut();
     root_bucket.materialize_root();
-    let n = root_bucket.cell.borrow_mut().w.root_node.unwrap();
+    let n = root_bucket.cell.borrow_mut().w.as_ref().unwrap().root_node.unwrap();
     {
       n.put(b"susy", b"susy", b"que", pd(0), 0);
       n.put(b"ricki", b"ricki", b"lake", pd(0), 0);

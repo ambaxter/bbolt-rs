@@ -4,7 +4,7 @@ bbolt-rs
 # TODO
 
 ## 1.3.9 Release
-- [ ] 1.3.9 updates
+- [x] 1.3.9 updates
 - [ ] Copy file
 - [ ] test_tx_check_read_only
 - [ ] test_tx_copy_file

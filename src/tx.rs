@@ -1,6 +1,6 @@
 use crate::arch::size::MAX_ALLOC_SIZE;
 use crate::bucket::{
-  BucketCell, BucketIApi, BucketImpl, BucketR, BucketRW, BucketRwCell, BucketRwIApi, BucketRwImpl,
+  BucketIApi, BucketImpl, BucketR, BucketRW, BucketCell, BucketRwIApi, BucketRwImpl,
   BucketW,
 };
 use crate::common::bump::PinBump;
@@ -25,6 +25,7 @@ use parking_lot::{Mutex, RwLockReadGuard, RwLockUpgradableReadGuard};
 use std::alloc::Layout;
 use std::borrow::Cow;
 use std::fmt::{Debug, Formatter};
+use std::io::Write;
 use std::marker::PhantomData;
 use std::mem;
 use std::mem::MaybeUninit;
@@ -234,6 +235,7 @@ pub trait TxApi<'tx>: TxCheck<'tx> {
   /// }
   /// ```
   fn page(&self, id: PgId) -> Option<PageInfo>;
+
 }
 
 /// RW transaction API
@@ -699,7 +701,7 @@ impl Debug for TxStats {
 
 pub(crate) enum AnyPage<'a, 'tx: 'a> {
   Ref(RefPage<'tx>),
-  Pending(Ref<'a, RefPage<'tx>>),
+  Pending(RefPage<'a>),
 }
 
 impl<'a, 'tx: 'a> Deref for AnyPage<'tx, 'a> {
@@ -765,11 +767,10 @@ pub(crate) trait TxIApi<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
   }
 
   fn any_page<'a>(&'a self, id: PgId) -> AnyPage<'a, 'tx> {
-    if let Some(tx) = self.split_ow() {
-      if tx.pages.contains_key(&id) {
-        let page = Ref::map(tx, |t| t.pages.get(&id).unwrap().as_ref());
+    if let Some(ref tx) = self.split_ow().deref() {
+      if let Some(page) = tx.pages.get(&id).map(|p| p.as_ref()) {
         page.fast_check(id);
-        return AnyPage::Pending(page);
+        return AnyPage::Pending(*page);
       }
     }
     let page = self.split_r().db.page(id);
@@ -850,7 +851,7 @@ pub(crate) trait TxIApi<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
   }
 
   fn rollback(self) -> crate::Result<()> {
-    if let Some(mut w) = self.split_ow_mut() {
+    if let Some(mut w) = self.split_ow_mut().as_mut() {
       w.tx_closing_state = TxClosingState::ExplicitRollback;
     }
     Ok(())
@@ -888,7 +889,7 @@ pub(crate) trait TxIApi<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
 pub(crate) trait TxRwIApi<'tx>: TxIApi<'tx> + TxICheck<'tx> {
   fn freelist_free_page(self, txid: TxId, p: &PageHeader);
 
-  fn root_bucket_mut(self) -> BucketRwCell<'tx>;
+  fn root_bucket_mut(self) -> BucketCell<'tx>;
 
   fn allocate(
     self, count: usize,
@@ -913,8 +914,9 @@ pub(crate) trait TxRwIApi<'tx>: TxIApi<'tx> + TxICheck<'tx> {
   fn api_on_commit(self, f: Box<dyn FnOnce() + 'tx>);
 
   fn physical_rollback(self) -> crate::Result<()> {
-    let mut w = self.split_ow_mut().unwrap();
-    w.tx_closing_state = TxClosingState::PhysicalRollback;
+    if let Some(w) = self.split_ow_mut().as_mut() {
+      w.tx_closing_state = TxClosingState::PhysicalRollback;
+    }
     Ok(())
   }
 }
@@ -938,28 +940,26 @@ pub struct TxW<'tx> {
 
 pub struct TxRW<'tx> {
   pub(crate) r: TxR<'tx>,
-  w: TxW<'tx>,
+  w: Option<TxW<'tx>>,
 }
 
 #[derive(Copy, Clone)]
 pub struct TxCell<'tx> {
-  pub(crate) cell: BCell<'tx, TxR<'tx>, BucketCell<'tx>>,
+  pub(crate) cell: BCell<'tx, TxRW<'tx>, BucketCell<'tx>>,
 }
 
 impl<'tx> SplitRef<TxR<'tx>, BucketCell<'tx>, TxW<'tx>> for TxCell<'tx> {
-  #[inline]
   fn split_r(&self) -> Ref<TxR<'tx>> {
-    self.cell.borrow()
+    Ref::map(self.cell.borrow(), |c| &c.r)
   }
 
-  #[inline]
-  fn split_ref(&self) -> (Ref<TxR<'tx>>, Option<Ref<TxW<'tx>>>) {
-    (self.cell.borrow(), None)
+  fn split_ref(&self) -> (Ref<TxR<'tx>>, Ref<Option<TxW<'tx>>>) {
+    let (r, w) = Ref::map_split(self.cell.borrow(), |b| (&b.r, &b.w));
+    (r,w)
   }
 
-  #[inline]
-  fn split_ow(&self) -> Option<Ref<TxW<'tx>>> {
-    None
+  fn split_ow(&self) -> Ref<Option<TxW<'tx>>> {
+    Ref::map(self.cell.borrow(), |c| &c.w)
   }
 
   #[inline]
@@ -967,14 +967,12 @@ impl<'tx> SplitRef<TxR<'tx>, BucketCell<'tx>, TxW<'tx>> for TxCell<'tx> {
     self.cell.bound()
   }
 
-  #[inline]
   fn split_r_mut(&self) -> RefMut<TxR<'tx>> {
-    self.cell.borrow_mut()
+    RefMut::map(self.cell.borrow_mut(), |c| &mut c.r)
   }
 
-  #[inline]
-  fn split_ow_mut(&self) -> Option<RefMut<TxW<'tx>>> {
-    None
+  fn split_ow_mut(&self) -> RefMut<Option<TxW<'tx>>> {
+    RefMut::map(self.cell.borrow_mut(), |c| &mut c.w)
   }
 }
 
@@ -982,49 +980,12 @@ impl<'tx> TxIApi<'tx> for TxCell<'tx> {
   type BucketType = BucketCell<'tx>;
 }
 
-#[derive(Copy, Clone)]
-pub struct TxRwCell<'tx> {
-  pub(crate) cell: BCell<'tx, TxRW<'tx>, BucketRwCell<'tx>>,
-}
-
-impl<'tx> SplitRef<TxR<'tx>, BucketRwCell<'tx>, TxW<'tx>> for TxRwCell<'tx> {
-  fn split_r(&self) -> Ref<TxR<'tx>> {
-    Ref::map(self.cell.borrow(), |c| &c.r)
-  }
-
-  fn split_ref(&self) -> (Ref<TxR<'tx>>, Option<Ref<TxW<'tx>>>) {
-    let (r, w) = Ref::map_split(self.cell.borrow(), |b| (&b.r, &b.w));
-    (r, Some(w))
-  }
-
-  fn split_ow(&self) -> Option<Ref<TxW<'tx>>> {
-    Some(Ref::map(self.cell.borrow(), |c| &c.w))
-  }
-
-  #[inline]
-  fn split_bound(&self) -> BucketRwCell<'tx> {
-    self.cell.bound()
-  }
-
-  fn split_r_mut(&self) -> RefMut<TxR<'tx>> {
-    RefMut::map(self.cell.borrow_mut(), |c| &mut c.r)
-  }
-
-  fn split_ow_mut(&self) -> Option<RefMut<TxW<'tx>>> {
-    Some(RefMut::map(self.cell.borrow_mut(), |c| &mut c.w))
-  }
-}
-
-impl<'tx> TxIApi<'tx> for TxRwCell<'tx> {
-  type BucketType = BucketRwCell<'tx>;
-}
-
-impl<'tx> TxRwIApi<'tx> for TxRwCell<'tx> {
+impl<'tx> TxRwIApi<'tx> for TxCell<'tx> {
   fn freelist_free_page(self, txid: TxId, p: &PageHeader) {
     self.cell.borrow().r.db.free_page(txid, p)
   }
 
-  fn root_bucket_mut(self) -> BucketRwCell<'tx> {
+  fn root_bucket_mut(self) -> BucketCell<'tx> {
     self.split_bound()
   }
 
@@ -1045,7 +1006,7 @@ impl<'tx> TxRwIApi<'tx> for TxRwCell<'tx> {
 
   fn queue_page(self, page: SelfOwned<AlignedBytes<alignment::Page>, MutPage<'tx>>) {
     let mut tx = self.cell.borrow_mut();
-    if let Some(pending) = tx.w.pages.insert(page.id, page) {
+    if let Some(pending) = tx.w.as_mut().unwrap().pages.insert(page.id, page) {
       if pending.overflow == 0 {
         tx.r
           .db
@@ -1076,12 +1037,12 @@ impl<'tx> TxRwIApi<'tx> for TxRwCell<'tx> {
       let mut tx = self.cell.borrow_mut();
       let mut swap_pages = HashMap::with_capacity_in(0, tx.r.b);
       // Clear out page cache early.
-      mem::swap(&mut swap_pages, &mut tx.w.pages);
+      mem::swap(&mut swap_pages, &mut tx.w.as_mut().unwrap().pages);
       let mut pages = BVec::from_iter_in(swap_pages.into_iter().map(|(_, page)| page), tx.r.b);
 
       // Sort pages by id.
       pages.sort_by_key(|page| page.id);
-      (pages, tx.r.db, tx.r.page_size, tx.w.no_sync)
+      (pages, tx.r.db, tx.r.page_size, tx.w.as_ref().unwrap().no_sync)
     };
 
     let r = self.split_r();
@@ -1139,7 +1100,7 @@ impl<'tx> TxRwIApi<'tx> for TxRwCell<'tx> {
     let buf = unsafe { from_raw_parts_mut(ptr.as_ptr(), page_size) };
     db.write_all_at(buf, offset)?;
 
-    if !tx.w.no_sync || IGNORE_NO_SYNC {
+    if !tx.w.as_ref().unwrap().no_sync || IGNORE_NO_SYNC {
       db.fsync()?;
     }
 
@@ -1149,7 +1110,7 @@ impl<'tx> TxRwIApi<'tx> for TxRwCell<'tx> {
   }
 
   fn api_on_commit(self, f: Box<dyn FnOnce() + 'tx>) {
-    self.cell.borrow_mut().w.commit_handlers.push(f);
+    self.cell.borrow_mut().w.as_mut().unwrap().commit_handlers.push(f);
   }
 }
 
@@ -1186,13 +1147,13 @@ impl<'tx> TxImpl<'tx> {
           marker: Default::default(),
         };
 
-        let uninit_tx: MaybeUninit<(RefCell<TxR>, BucketCell<'tx>)> = MaybeUninit::uninit();
+        let uninit_tx: MaybeUninit<(RefCell<TxRW>, BucketCell<'tx>)> = MaybeUninit::uninit();
         let cell_tx = bump.alloc(uninit_tx);
         let cell_tx_ptr = cell_tx.as_ptr().cast_mut();
         let const_cell_ptr = cell_tx_ptr.cast_const();
 
-        addr_of_mut!((*cell_tx_ptr).0).write(RefCell::new(r));
-        addr_of_mut!((*cell_tx_ptr).1).write(BucketCell::new_in(
+        addr_of_mut!((*cell_tx_ptr).0).write(RefCell::new(TxRW{ r, w: None}));
+        addr_of_mut!((*cell_tx_ptr).1).write(BucketCell::new_r_in(
           bump,
           inline_bucket,
           TxCell {
@@ -1219,7 +1180,7 @@ impl<'tx> TxImpl<'tx> {
 impl<'tx> Drop for TxImpl<'tx> {
   fn drop(&mut self) {
     let tx_id = self.id();
-    let stats = self.tx.cell.borrow_mut().stats.take().unwrap();
+    let stats = self.tx.cell.borrow_mut().r.stats.take().unwrap();
     Pin::as_ref(&self.db).guard().remove_tx(tx_id, stats);
   }
 }
@@ -1311,13 +1272,13 @@ impl<'tx> TxApi<'tx> for TxRef<'tx> {
 pub struct TxRwImpl<'tx> {
   bump: SyncReusable<Pin<Box<PinBump>>>,
   db: Pin<AliasableBox<PinLockGuard<'tx, DbShared>>>,
-  pub(crate) tx: TxRwCell<'tx>,
+  pub(crate) tx: TxCell<'tx>,
 }
 
 impl<'tx> TxRwImpl<'tx> {
   pub(crate) fn get_ref(&self) -> TxRwRef<'tx> {
     TxRwRef {
-      tx: TxRwCell { cell: self.tx.cell },
+      tx: TxCell { cell: self.tx.cell },
     }
   }
 
@@ -1358,8 +1319,8 @@ impl<'tx> TxRwImpl<'tx> {
         let bucket_r = BucketR::new(inline_bucket);
         let bucket_w = BucketW::new_in(bump);
 
-        let uninit_tx: MaybeUninit<(RefCell<TxRW>, BucketRwCell<'tx>)> = MaybeUninit::uninit();
-        let uninit_bucket: MaybeUninit<(RefCell<BucketRW<'tx>>, TxRwCell<'tx>)> =
+        let uninit_tx: MaybeUninit<(RefCell<TxRW>, BucketCell<'tx>)> = MaybeUninit::uninit();
+        let uninit_bucket: MaybeUninit<(RefCell<BucketRW<'tx>>, TxCell<'tx>)> =
           MaybeUninit::uninit();
         let cell_tx = bump.alloc(uninit_tx);
         let cell_tx_ptr = cell_tx.as_mut_ptr();
@@ -1367,18 +1328,18 @@ impl<'tx> TxRwImpl<'tx> {
         let cell_bucket = bump.alloc(uninit_bucket);
         let cell_bucket_ptr = cell_bucket.as_mut_ptr();
 
-        addr_of_mut!((*cell_tx_ptr).0).write(RefCell::new(TxRW { r: tx_r, w: tx_w }));
+        addr_of_mut!((*cell_tx_ptr).0).write(RefCell::new(TxRW { r: tx_r, w: Some(tx_w) }));
         addr_of_mut!((*cell_bucket_ptr).0).write(RefCell::new(BucketRW {
           r: bucket_r,
-          w: bucket_w,
+          w: Some(bucket_w),
         }));
-        addr_of_mut!((*cell_bucket_ptr).1).write(TxRwCell {
+        addr_of_mut!((*cell_bucket_ptr).1).write(TxCell {
           cell: BCell(const_cell_tx_ptr, PhantomData),
         });
-        addr_of_mut!((*cell_tx_ptr).1).write(BucketRwCell {
+        addr_of_mut!((*cell_tx_ptr).1).write(BucketCell {
           cell: BCell(cell_bucket.assume_init_ref(), PhantomData),
         });
-        TxRwCell {
+        TxCell {
           cell: BCell(cell_tx.assume_init_ref(), PhantomData),
         }
       };
@@ -1404,7 +1365,7 @@ impl<'tx> TxRwImpl<'tx> {
     let pg_id = freelist_page.id;
     let mut tx = self.tx.cell.borrow_mut();
     tx.r.meta.set_free_list(pg_id);
-    tx.w.pages.insert(pg_id, freelist_page);
+    tx.w.as_mut().unwrap().pages.insert(pg_id, freelist_page);
     Ok(())
   }
 }
@@ -1412,7 +1373,7 @@ impl<'tx> TxRwImpl<'tx> {
 impl<'tx> Drop for TxRwImpl<'tx> {
   fn drop(&mut self) {
     let mut cell = self.tx.cell.borrow_mut();
-    let tx_closing_state = cell.w.tx_closing_state;
+    let tx_closing_state = cell.w.as_ref().unwrap().tx_closing_state;
     let tx_id = cell.r.meta.txid();
     let stats = cell.r.stats.take().unwrap();
     Pin::as_ref(&self.db)
@@ -1499,10 +1460,10 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
       let mut tx = self.tx.cell.borrow_mut();
 
       // Handle the case where the rollback is called within a managed transaction
-      if tx.w.tx_closing_state == TxClosingState::ExplicitRollback {
+      if tx.w.as_ref().unwrap().tx_closing_state == TxClosingState::ExplicitRollback {
         return Ok(());
       }
-      tx.w.tx_closing_state = TxClosingState::Commit;
+      tx.w.as_mut().unwrap().tx_closing_state = TxClosingState::Commit;
       tx.r.stats.as_ref().cloned().unwrap()
     };
 
@@ -1548,7 +1509,7 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
     let page_size = self.tx.meta().page_size();
     {
       let tx = self.tx.cell.borrow();
-      for page in tx.w.pages.values() {
+      for page in tx.w.as_ref().unwrap().pages.values() {
         assert!(page.id.0 > 1, "Invalid page id");
       }
     }
@@ -1586,7 +1547,7 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
 
     let mut tx = self.tx.cell.borrow_mut();
     let mut commit_handlers = BVec::with_capacity_in(0, tx.r.b);
-    mem::swap(&mut commit_handlers, &mut tx.w.commit_handlers);
+    mem::swap(&mut commit_handlers, &mut tx.w.as_mut().unwrap().commit_handlers);
     for f in commit_handlers.into_iter() {
       f();
     }
@@ -1596,7 +1557,7 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
 
 /// Read/Write Transaction reference used in managed transactions
 pub struct TxRwRef<'tx> {
-  pub(crate) tx: TxRwCell<'tx>,
+  pub(crate) tx: TxCell<'tx>,
 }
 
 impl<'tx> TxApi<'tx> for TxRwRef<'tx> {
@@ -1673,7 +1634,7 @@ pub(crate) mod check {
   use crate::common::tree::{MappedBranchPage, MappedLeafPage, TreePage};
   use crate::common::{BVec, HashMap, HashSet, PgId, ZERO_PGID};
   use crate::db::DbIApi;
-  use crate::tx::{TxCell, TxIApi, TxImpl, TxRef, TxRwCell, TxRwIApi, TxRwImpl, TxRwRef};
+  use crate::tx::{TxIApi, TxImpl, TxRef, TxCell, TxRwIApi, TxRwImpl, TxRwRef};
 
   pub(crate) trait UnsealTx<'tx> {
     fn unseal(&self) -> impl TxIApi<'tx> + TxICheck<'tx>;
@@ -1700,7 +1661,7 @@ pub(crate) mod check {
   impl<'tx> UnsealTx<'tx> for TxRwImpl<'tx> {
     #[inline]
     fn unseal(&self) -> impl TxIApi<'tx> + TxICheck<'tx> {
-      TxRwCell { cell: self.tx.cell }
+      TxCell { cell: self.tx.cell }
     }
   }
 
@@ -1714,7 +1675,7 @@ pub(crate) mod check {
   impl<'tx> UnsealRwTx<'tx> for TxRwImpl<'tx> {
     #[inline]
     fn unseal_rw(&self) -> impl TxRwIApi<'tx> {
-      TxRwCell { cell: self.tx.cell }
+      TxCell { cell: self.tx.cell }
     }
   }
 
@@ -1948,7 +1909,6 @@ pub(crate) mod check {
     }
   }
 
-  impl<'tx> TxICheck<'tx> for TxRwCell<'tx> {}
   impl<'tx> TxICheck<'tx> for TxCell<'tx> {}
 }
 

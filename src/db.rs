@@ -15,7 +15,7 @@ use crate::common::tree::MappedLeafPage;
 use crate::common::{BVec, PgId, SplitRef, TxId};
 use crate::freelist::{Freelist, MappedFreeListPage};
 use crate::tx::{
-  TxClosingState, TxIApi, TxImpl, TxRef, TxRwApi, TxRwCell, TxRwImpl, TxRwRef, TxStats,
+  TxClosingState, TxIApi, TxImpl, TxRef, TxRwApi, TxCell, TxRwImpl, TxRwRef, TxStats,
 };
 use crate::{Error, TxApi};
 use aligners::{alignment, AlignedBytes};
@@ -538,7 +538,7 @@ pub(crate) trait DBBackend: Send + Sync {
 
   /// mmap opens the underlying memory-mapped file and initializes the meta references.
   /// min_size is the minimum size that the new mmap can be.
-  fn mmap(&mut self, min_size: u64, tx: TxRwCell) -> crate::Result<()>;
+  fn mmap(&mut self, min_size: u64, tx: TxCell) -> crate::Result<()>;
 
   fn fsync(&self) -> crate::Result<()>;
   fn write_all_at(&self, buffer: &[u8], offset: u64) -> crate::Result<usize>;
@@ -573,7 +573,7 @@ impl DBBackend for ClosedBackend {
     unreachable!()
   }
 
-  fn mmap(&mut self, _min_size: u64, _tx: TxRwCell) -> crate::Result<()> {
+  fn mmap(&mut self, _min_size: u64, _tx: TxCell) -> crate::Result<()> {
     unreachable!()
   }
 
@@ -640,7 +640,7 @@ impl DBBackend for MemBackend {
   }
 
   //TODO: This is a mess, too
-  fn mmap(&mut self, min_size: u64, _tx: TxRwCell) -> crate::Result<()> {
+  fn mmap(&mut self, min_size: u64, _tx: TxCell) -> crate::Result<()> {
     let mut size = {
       let mmap = self.mmap.lock();
       if mmap.len() < self.page_size * 2 {
@@ -913,7 +913,7 @@ impl DBBackend for FileBackend {
 
   /// mmap opens the underlying memory-mapped file and initializes the meta references.
   /// min_size is the minimum size that the new mmap can be.
-  fn mmap(&mut self, min_size: u64, tx: TxRwCell) -> crate::Result<()> {
+  fn mmap(&mut self, min_size: u64, tx: TxCell) -> crate::Result<()> {
     let file_size = self.file_size()?;
     let mut size = file_size.max(min_size);
 
@@ -1004,7 +1004,7 @@ pub(crate) trait DbIApi<'tx>: 'tx {
   fn is_page_free(&self, pg_id: PgId) -> bool;
 
   fn remove_tx(&self, rem_tx: TxId, tx_stats: Arc<TxStats>);
-  fn allocate(&self, tx: TxRwCell, page_count: u64) -> AllocateResult<'tx>;
+  fn allocate(&self, tx: TxCell, page_count: u64) -> AllocateResult<'tx>;
 
   fn free_page(&self, txid: TxId, p: &PageHeader);
   fn free_pages(&self, state: &mut DbState);
@@ -1013,7 +1013,7 @@ pub(crate) trait DbIApi<'tx>: 'tx {
 
   fn freelist_copyall(&self, all: &mut BVec<PgId>);
 
-  fn commit_freelist(&self, tx: TxRwCell<'tx>) -> crate::Result<AllocateResult<'tx>>;
+  fn commit_freelist(&self, tx: TxCell<'tx>) -> crate::Result<AllocateResult<'tx>>;
 
   fn write_all_at(&self, buf: &[u8], offset: u64) -> crate::Result<usize>;
 
@@ -1025,7 +1025,7 @@ pub(crate) trait DbIApi<'tx>: 'tx {
   fn grow(&self, size: u64) -> crate::Result<()>;
 }
 pub(crate) trait DbMutIApi<'tx>: DbIApi<'tx> {
-  fn mmap_to_new_size(&mut self, min_size: u64, tx: TxRwCell) -> crate::Result<()>;
+  fn mmap_to_new_size(&mut self, min_size: u64, tx: TxCell) -> crate::Result<()>;
 }
 
 impl<'tx> DbIApi<'tx> for LockGuard<'tx, DbShared> {
@@ -1050,7 +1050,7 @@ impl<'tx> DbIApi<'tx> for LockGuard<'tx, DbShared> {
     }
   }
 
-  fn allocate(&self, tx: TxRwCell, page_count: u64) -> AllocateResult<'tx> {
+  fn allocate(&self, tx: TxCell, page_count: u64) -> AllocateResult<'tx> {
     match self {
       LockGuard::R(guard) => guard.allocate(tx, page_count),
       LockGuard::U(guard) => guard.borrow().allocate(tx, page_count),
@@ -1085,7 +1085,7 @@ impl<'tx> DbIApi<'tx> for LockGuard<'tx, DbShared> {
     }
   }
 
-  fn commit_freelist(&self, tx: TxRwCell<'tx>) -> crate::Result<AllocateResult<'tx>> {
+  fn commit_freelist(&self, tx: TxCell<'tx>) -> crate::Result<AllocateResult<'tx>> {
     match self {
       LockGuard::R(guard) => guard.commit_freelist(tx),
       LockGuard::U(guard) => guard.borrow().commit_freelist(tx),
@@ -1163,7 +1163,7 @@ impl<'tx> DbIApi<'tx> for DbShared {
     self.stats.tx_stats.add_assign(&tx_stats);
   }
 
-  fn allocate(&self, tx: TxRwCell, page_count: u64) -> AllocateResult<'tx> {
+  fn allocate(&self, tx: TxCell, page_count: u64) -> AllocateResult<'tx> {
     let tx_id = tx.api_id();
     let high_water = tx.meta().pgid();
     let bytes = if page_count == 1 && !self.page_pool.lock().is_empty() {
@@ -1235,7 +1235,7 @@ impl<'tx> DbIApi<'tx> for DbShared {
     self.backend.freelist().copy_all(all)
   }
 
-  fn commit_freelist(&self, tx: TxRwCell<'tx>) -> crate::Result<AllocateResult<'tx>> {
+  fn commit_freelist(&self, tx: TxCell<'tx>) -> crate::Result<AllocateResult<'tx>> {
     // Allocate new pages for the new free list. This will overestimate
     // the size of the freelist but not underestimate the size (which would be bad).
     let count = {
@@ -1310,7 +1310,7 @@ impl<'tx> DbIApi<'tx> for DbShared {
 }
 
 impl<'tx> DbMutIApi<'tx> for DbShared {
-  fn mmap_to_new_size(&mut self, min_size: u64, tx: TxRwCell) -> crate::Result<()> {
+  fn mmap_to_new_size(&mut self, min_size: u64, tx: TxCell) -> crate::Result<()> {
     self.backend.as_mut().mmap(min_size, tx)
   }
 }
