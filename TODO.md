@@ -3,14 +3,32 @@ bbolt-rs
 
 # TODO
 
+## 1.3.9 Release
+- [ ] 1.3.9 updates
+- [ ] Copy file
+- [ ] test_tx_check_read_only
+- [ ] test_tx_copy_file
+- [ ] test_tx_copy_file_error_meta
+- [ ] test_tx_copy_file_error_normal
+- [ ] example_tx_copy_file
+- [ ] compact.go
+- [ ] Refactor TxCell away from SplitRef
+- [ ] Refactor BucketCell away from SplitRef
+- [ ] Leaf key experiment
+
+## 1.3.10
+- [ ] 1.3.10 updates
+- [ ] Retire RwSlice
+- [ ] We have at least 3 different functions to write inodes
+- [ ] PGO + Bolt instructions, build system
+- [ ] Quick Check Analog
+
 ## General
-- [ ] Quick Check analog
 - [ ] Logging capabilities
 - [ ] Replace NodeW.inodes with BTreeMap because woof - it does not scale. (Note: Shared CodSlice key with RefCell)
-- [ ] blag post
 - [ ] Power failure testing
 - [ ] Write failure testing (especially freelist reloading)
-- [ ] 1.3.9
+
 
 ## Open Questions
 - [ ] Why do we need so much memory on large commits? Almost 3x the Go version
@@ -22,7 +40,6 @@ bbolt-rs
 - [ ] Move tx stats in db.allocate to tx.allocate
 
 ## src/nodes.rs
-- [ ] We have at least 3 different functions to write inodes
 - [ ] Rebalance could be a lot better
 
 ## src/db.rs
@@ -38,18 +55,11 @@ bbolt-rs
 - [ ] Make setting overflow unsafe
 
 ## src/common/memory.rs
-- [ ] Retire RWSlice
 - [ ] Use std IsAligned whenever it comes out
 
 # To Complete
 
 ## src/tx.rs
-- [ ] Copy file
-- [ ] test_tx_check_read_only
-- [ ] test_tx_copy_file
-- [ ] test_tx_copy_file_error_meta
-- [ ] test_tx_copy_file_error_normal
-- [ ] example_tx_copy_file
 - [ ] test_tx_truncate_before_write
 
 ## src/db.rs
@@ -76,7 +86,6 @@ bbolt-rs
 
 ## src/cursor.rs
 - [ ] Internal api call for getting the root page id and its page_node
-- [ ] Return cursor's bucket
 - [ ] test_cursor_quick_check
 - [ ] test_cursor_quick_check_reverse
 - [ ] test_cursor_quick_check_buckets_only
@@ -91,10 +100,8 @@ bbolt-rs
 - [ ] tx_stats_test.go
 - [ ] simulation_test.go
 - [ ] simulation_no_freelist_sync_test.go
-- [ ] quick_test.go
 - [ ] manydbs_test.go
 - [ ] db_whitebox_test.go
-- [ ] compact.go
 - [ ] allocate_test.go
 - [ ] tests/failpoint/db_failpoint_test.go
 - [ ] internal/tests/tx_check_test.go
