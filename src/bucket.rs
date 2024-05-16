@@ -10,7 +10,7 @@ use crate::common::tree::{
 use crate::common::{BVec, HashMap, PgId, SplitRef, ZERO_PGID};
 use crate::cursor::{CursorIApi, CursorImpl, CursorRwIApi, CursorRwImpl, InnerCursor, PageNode};
 use crate::node::NodeRwCell;
-use crate::tx::{TxIApi, TxCell, TxRwIApi};
+use crate::tx::{TxCell, TxIApi, TxRwIApi};
 use crate::Error::{
   BucketExists, BucketNameRequired, BucketNotFound, IncompatibleValue, KeyRequired, KeyTooLarge,
   ValueTooLarge,
@@ -872,8 +872,8 @@ impl Default for InlineBucket {
 pub(crate) trait BucketIApi<'tx, T: TxIApi<'tx>>:
   SplitRef<BucketR<'tx>, T, InnerBucketW<'tx, T, Self>>
 {
-
-  fn new_r_in(bump: &'tx Bump, bucket_header: BucketHeader, tx: T, inline_page: Option<RefPage<'tx>>,
+  fn new_r_in(
+    bump: &'tx Bump, bucket_header: BucketHeader, tx: T, inline_page: Option<RefPage<'tx>>,
   ) -> Self;
 
   fn new_rw_in(
@@ -966,7 +966,6 @@ pub(crate) trait BucketIApi<'tx, T: TxIApi<'tx>>:
     } else {
       Self::new_r_in(bump, bucket_header, tx, ref_page)
     }
-
   }
 
   /// See [BucketApi::get]
@@ -1333,7 +1332,6 @@ impl<'tx> SplitRef<BucketR<'tx>, TxCell<'tx>, BucketW<'tx>> for BucketCell<'tx> 
 }
 
 impl<'tx> BucketIApi<'tx, TxCell<'tx>> for BucketCell<'tx> {
-
   fn new_r_in(
     bump: &'tx Bump, bucket_header: BucketHeader, tx: TxCell<'tx>,
     inline_page: Option<RefPage<'tx>>,
@@ -1459,7 +1457,7 @@ impl<'tx> BucketRwIApi<'tx> for BucketCell<'tx> {
       let self_w = self_mut.w.as_mut().unwrap();
       self_w.buckets.remove(key);
       let mut child_mut = child.cell.borrow_mut();
-      let child_w =  child_mut.w.as_mut().unwrap();
+      let child_w = child_mut.w.as_mut().unwrap();
       child_w.nodes.clear();
       child_w.root_node = None;
     }

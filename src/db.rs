@@ -15,7 +15,7 @@ use crate::common::tree::MappedLeafPage;
 use crate::common::{BVec, PgId, SplitRef, TxId};
 use crate::freelist::{Freelist, MappedFreeListPage};
 use crate::tx::{
-  TxClosingState, TxIApi, TxImpl, TxRef, TxRwApi, TxCell, TxRwImpl, TxRwRef, TxStats,
+  TxCell, TxClosingState, TxIApi, TxImpl, TxRef, TxRwApi, TxRwImpl, TxRwRef, TxStats,
 };
 use crate::{Error, TxApi};
 use aligners::{alignment, AlignedBytes};

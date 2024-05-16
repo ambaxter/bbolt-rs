@@ -1,4 +1,4 @@
-use crate::bucket::{BucketIApi, BucketCell, BucketRwIApi, MAX_FILL_PERCENT, MIN_FILL_PERCENT};
+use crate::bucket::{BucketCell, BucketIApi, BucketRwIApi, MAX_FILL_PERCENT, MIN_FILL_PERCENT};
 use crate::common::inode::INode;
 use crate::common::memory::{CodSlice, LCell, SplitArray, VecOrSplit};
 use crate::common::page::{CoerciblePage, MutPage, RefPage, MIN_KEYS_PER_PAGE, PAGE_HEADER_SIZE};
@@ -530,7 +530,16 @@ impl<'tx> NodeRwCell<'tx> {
   /// This should only be called from the spill() function.
   fn split(self, page_size: usize) -> NodeSplit<'tx> {
     // Determine the threshold before starting a new node.
-    let mut fill_percent = self.cell.borrow().bucket.cell.borrow().w.as_ref().unwrap().fill_percent;
+    let mut fill_percent = self
+      .cell
+      .borrow()
+      .bucket
+      .cell
+      .borrow()
+      .w
+      .as_ref()
+      .unwrap()
+      .fill_percent;
     fill_percent = fill_percent.max(MIN_FILL_PERCENT).min(MAX_FILL_PERCENT);
     let threshold = (page_size as f64 * fill_percent) as usize;
 
@@ -795,7 +804,14 @@ mod test {
     let txrw = tx.unseal_rw();
     let root_bucket = txrw.root_bucket_mut();
     root_bucket.materialize_root();
-    let n = root_bucket.cell.borrow_mut().w.as_ref().unwrap().root_node.unwrap();
+    let n = root_bucket
+      .cell
+      .borrow_mut()
+      .w
+      .as_ref()
+      .unwrap()
+      .root_node
+      .unwrap();
 
     let mut page = AlignedBytes::<alignment::Page>::new_zeroed(4096);
     {
@@ -834,7 +850,14 @@ mod test {
     let txrw = tx.unseal_rw();
     let root_bucket = txrw.root_bucket_mut();
     root_bucket.materialize_root();
-    let n = root_bucket.cell.borrow_mut().w.as_ref().unwrap().root_node.unwrap();
+    let n = root_bucket
+      .cell
+      .borrow_mut()
+      .w
+      .as_ref()
+      .unwrap()
+      .root_node
+      .unwrap();
     {
       n.put(b"susy", b"susy", b"que", pd(0), 0);
       n.put(b"ricki", b"ricki", b"lake", pd(0), 0);

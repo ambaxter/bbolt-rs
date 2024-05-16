@@ -1,9 +1,9 @@
-use crate::bucket::{BucketIApi, BucketCell, BucketRwIApi};
+use crate::bucket::{BucketCell, BucketIApi, BucketRwIApi};
 use crate::common::page::{CoerciblePage, RefPage, BUCKET_LEAF_FLAG};
 use crate::common::tree::{MappedBranchPage, MappedLeafPage, TreePage};
 use crate::common::{BVec, PgId};
 use crate::node::NodeRwCell;
-use crate::tx::{TxIApi, TxCell};
+use crate::tx::{TxCell, TxIApi};
 use crate::Error::IncompatibleValue;
 use bumpalo::Bump;
 use std::marker::PhantomData;

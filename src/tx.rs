@@ -1,7 +1,6 @@
 use crate::arch::size::MAX_ALLOC_SIZE;
 use crate::bucket::{
-  BucketIApi, BucketImpl, BucketR, BucketRW, BucketCell, BucketRwIApi, BucketRwImpl,
-  BucketW,
+  BucketCell, BucketIApi, BucketImpl, BucketR, BucketRW, BucketRwIApi, BucketRwImpl, BucketW,
 };
 use crate::common::bump::PinBump;
 use crate::common::cell::{Ref, RefCell, RefMut};
@@ -235,7 +234,6 @@ pub trait TxApi<'tx>: TxCheck<'tx> {
   /// }
   /// ```
   fn page(&self, id: PgId) -> Option<PageInfo>;
-
 }
 
 /// RW transaction API
@@ -955,7 +953,7 @@ impl<'tx> SplitRef<TxR<'tx>, BucketCell<'tx>, TxW<'tx>> for TxCell<'tx> {
 
   fn split_ref(&self) -> (Ref<TxR<'tx>>, Ref<Option<TxW<'tx>>>) {
     let (r, w) = Ref::map_split(self.cell.borrow(), |b| (&b.r, &b.w));
-    (r,w)
+    (r, w)
   }
 
   fn split_ow(&self) -> Ref<Option<TxW<'tx>>> {
@@ -1042,7 +1040,12 @@ impl<'tx> TxRwIApi<'tx> for TxCell<'tx> {
 
       // Sort pages by id.
       pages.sort_by_key(|page| page.id);
-      (pages, tx.r.db, tx.r.page_size, tx.w.as_ref().unwrap().no_sync)
+      (
+        pages,
+        tx.r.db,
+        tx.r.page_size,
+        tx.w.as_ref().unwrap().no_sync,
+      )
     };
 
     let r = self.split_r();
@@ -1110,7 +1113,14 @@ impl<'tx> TxRwIApi<'tx> for TxCell<'tx> {
   }
 
   fn api_on_commit(self, f: Box<dyn FnOnce() + 'tx>) {
-    self.cell.borrow_mut().w.as_mut().unwrap().commit_handlers.push(f);
+    self
+      .cell
+      .borrow_mut()
+      .w
+      .as_mut()
+      .unwrap()
+      .commit_handlers
+      .push(f);
   }
 }
 
@@ -1152,7 +1162,7 @@ impl<'tx> TxImpl<'tx> {
         let cell_tx_ptr = cell_tx.as_ptr().cast_mut();
         let const_cell_ptr = cell_tx_ptr.cast_const();
 
-        addr_of_mut!((*cell_tx_ptr).0).write(RefCell::new(TxRW{ r, w: None}));
+        addr_of_mut!((*cell_tx_ptr).0).write(RefCell::new(TxRW { r, w: None }));
         addr_of_mut!((*cell_tx_ptr).1).write(BucketCell::new_r_in(
           bump,
           inline_bucket,
@@ -1328,7 +1338,10 @@ impl<'tx> TxRwImpl<'tx> {
         let cell_bucket = bump.alloc(uninit_bucket);
         let cell_bucket_ptr = cell_bucket.as_mut_ptr();
 
-        addr_of_mut!((*cell_tx_ptr).0).write(RefCell::new(TxRW { r: tx_r, w: Some(tx_w) }));
+        addr_of_mut!((*cell_tx_ptr).0).write(RefCell::new(TxRW {
+          r: tx_r,
+          w: Some(tx_w),
+        }));
         addr_of_mut!((*cell_bucket_ptr).0).write(RefCell::new(BucketRW {
           r: bucket_r,
           w: Some(bucket_w),
@@ -1547,7 +1560,10 @@ impl<'tx> TxRwApi<'tx> for TxRwImpl<'tx> {
 
     let mut tx = self.tx.cell.borrow_mut();
     let mut commit_handlers = BVec::with_capacity_in(0, tx.r.b);
-    mem::swap(&mut commit_handlers, &mut tx.w.as_mut().unwrap().commit_handlers);
+    mem::swap(
+      &mut commit_handlers,
+      &mut tx.w.as_mut().unwrap().commit_handlers,
+    );
     for f in commit_handlers.into_iter() {
       f();
     }
@@ -1634,7 +1650,7 @@ pub(crate) mod check {
   use crate::common::tree::{MappedBranchPage, MappedLeafPage, TreePage};
   use crate::common::{BVec, HashMap, HashSet, PgId, ZERO_PGID};
   use crate::db::DbIApi;
-  use crate::tx::{TxIApi, TxImpl, TxRef, TxCell, TxRwIApi, TxRwImpl, TxRwRef};
+  use crate::tx::{TxCell, TxIApi, TxImpl, TxRef, TxRwIApi, TxRwImpl, TxRwRef};
 
   pub(crate) trait UnsealTx<'tx> {
     fn unseal(&self) -> impl TxIApi<'tx> + TxICheck<'tx>;
