@@ -1,10 +1,10 @@
 use crate::bucket::{BucketCell, BucketIApi, BucketRwIApi, MAX_FILL_PERCENT, MIN_FILL_PERCENT};
 use crate::common::inode::INode;
 use crate::common::memory::{CodSlice, LCell, SplitArray, VecOrSplit};
-use crate::common::page::{CoerciblePage, MutPage, RefPage, MIN_KEYS_PER_PAGE, PAGE_HEADER_SIZE};
-use crate::common::tree::{
-  MappedBranchPage, MappedLeafPage, TreePage, BRANCH_PAGE_ELEMENT_SIZE, LEAF_PAGE_ELEMENT_SIZE,
-};
+use crate::common::page::tree::branch::{MappedBranchPage, BRANCH_PAGE_ELEMENT_SIZE};
+use crate::common::page::tree::leaf::{MappedLeafPage, LEAF_PAGE_ELEMENT_SIZE};
+use crate::common::page::tree::{TreePage, MIN_KEYS_PER_PAGE};
+use crate::common::page::{CoerciblePage, MutPage, RefPage, PAGE_HEADER_SIZE};
 use crate::common::{BVec, PgId, SplitRef, ZERO_PGID};
 use crate::tx::{TxIApi, TxRwIApi};
 use bumpalo::Bump;
@@ -764,8 +764,11 @@ impl<'tx> NodeRwCell<'tx> {
 mod test {
   use crate::bucket::BucketRwIApi;
   use crate::common::ids::pd;
-  use crate::common::page::{CoerciblePage, MutPage, RefPage, LEAF_PAGE_FLAG, PAGE_HEADER_SIZE};
-  use crate::common::tree::{LeafPageElement, MappedLeafPage, TreePage, LEAF_PAGE_ELEMENT_SIZE};
+  use crate::common::page::tree::leaf::{
+    LeafPageElement, MappedLeafPage, LEAF_PAGE_ELEMENT_SIZE, LEAF_PAGE_FLAG,
+  };
+  use crate::common::page::tree::TreePage;
+  use crate::common::page::{CoerciblePage, MutPage, RefPage, PAGE_HEADER_SIZE};
   use crate::common::ZERO_PGID;
   use crate::node::NodeW;
   use crate::test_support::TestDb;

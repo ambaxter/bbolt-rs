@@ -7,10 +7,8 @@ pub mod defaults;
 pub mod errors;
 pub mod inode;
 pub mod memory;
-pub mod meta;
 pub mod page;
 pub mod self_owned;
-pub mod tree;
 pub mod utility;
 
 pub mod bump;
@@ -19,6 +17,7 @@ pub mod cell;
 pub mod ids;
 pub mod lock;
 pub mod pool;
+pub mod refstack;
 
 pub use ids::{PgId, TxId};
 

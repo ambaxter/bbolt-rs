@@ -1,27 +1,28 @@
 use crate::common::bucket::{BucketHeader, BUCKET_HEADER_SIZE};
 use crate::common::cell::{Ref, RefMut};
 use crate::common::memory::{BCell, IsAligned};
-use crate::common::page::{
-  CoerciblePage, MutPage, PageHeader, RefPage, BUCKET_LEAF_FLAG, LEAF_PAGE_FLAG, PAGE_HEADER_SIZE,
+use crate::common::page::tree::branch::{MappedBranchPage, BRANCH_PAGE_ELEMENT_SIZE};
+use crate::common::page::tree::leaf::{
+  MappedLeafPage, BUCKET_LEAF_FLAG, LEAF_PAGE_ELEMENT_SIZE, LEAF_PAGE_FLAG,
 };
-use crate::common::tree::{
-  MappedBranchPage, MappedLeafPage, TreePage, BRANCH_PAGE_ELEMENT_SIZE, LEAF_PAGE_ELEMENT_SIZE,
-};
+use crate::common::page::tree::TreePage;
+use crate::common::page::{CoerciblePage, MutPage, PageHeader, RefPage, PAGE_HEADER_SIZE};
 use crate::common::{BVec, HashMap, PgId, SplitRef, ZERO_PGID};
 use crate::cursor::{CursorIApi, CursorImpl, CursorRwIApi, CursorRwImpl, InnerCursor, PageNode};
+use crate::iter::{BucketIter, BucketIterMut, EntryIter};
 use crate::node::NodeRwCell;
 use crate::tx::{TxCell, TxIApi, TxRwIApi};
+use crate::Error;
 use crate::Error::{
   BucketExists, BucketNameRequired, BucketNotFound, IncompatibleValue, KeyRequired, KeyTooLarge,
   ValueTooLarge,
 };
-use crate::{CursorRwApi, Error};
 use bumpalo::Bump;
 use bytemuck::{Pod, Zeroable};
 use getset::CopyGetters;
 use std::alloc::Layout;
 use std::marker::PhantomData;
-use std::ops::{AddAssign, Deref, DerefMut};
+use std::ops::{AddAssign, Deref};
 use std::ptr::slice_from_raw_parts_mut;
 use std::slice::{from_raw_parts, from_raw_parts_mut};
 use std::{mem, ptr};
@@ -108,7 +109,7 @@ where
   ///   Ok(())
   /// }
   /// ```
-  fn cursor(&self) -> CursorImpl<'tx>;
+  fn cursor<'a>(&'a self) -> CursorImpl<'a, 'tx>;
 
   /// Retrieves a nested bucket by name.
   ///
@@ -137,7 +138,7 @@ where
   ///   Ok(())
   /// }
   /// ```
-  fn bucket<T: AsRef<[u8]>>(&self, name: T) -> Option<BucketImpl<'tx>>;
+  fn bucket<'a, T: AsRef<[u8]>>(&'a self, name: T) -> Option<BucketImpl<'a, 'tx>>;
 
   /// Retrieves the value for a key in the bucket.
   ///
@@ -195,6 +196,7 @@ where
   /// ```
   fn sequence(&self) -> u64;
 
+  #[deprecated(since = "1.3.9", note = "please use `iter_*` methods instead")]
   /// Executes a function for each key/value pair in a bucket.
   /// Because this uses a [`crate::CursorApi`], the iteration over keys is in lexicographical order.
   ///
@@ -231,6 +233,7 @@ where
     &self, f: F,
   ) -> crate::Result<()>;
 
+  #[deprecated(since = "1.3.9", note = "please use `iter_*` methods instead")]
   /// Executes a function for each bucket in a bucket.
   /// Because this function uses a [`crate::CursorApi`], the iteration over keys is in lexicographical order.
   ///
@@ -292,6 +295,10 @@ where
   /// }
   /// ```
   fn stats(&self) -> BucketStats;
+
+  fn iter_entries<'a>(&'a self) -> EntryIter<'a, 'tx>;
+
+  fn iter_buckets<'a>(&'a self) -> BucketIter<'a, 'tx>;
 }
 
 /// RW Bucket API
@@ -322,7 +329,7 @@ pub trait BucketRwApi<'tx>: BucketApi<'tx> {
   ///   Ok(())
   /// }
   /// ```
-  fn bucket_mut<T: AsRef<[u8]>>(&mut self, name: T) -> Option<impl BucketRwApi<'tx>>;
+  fn bucket_mut<'a, T: AsRef<[u8]>>(&'a mut self, name: T) -> Option<BucketRwImpl<'a, 'tx>>;
 
   /// Creates a new bucket at the given key and returns the new bucket.
   ///
@@ -349,7 +356,9 @@ pub trait BucketRwApi<'tx>: BucketApi<'tx> {
   ///   Ok(())
   /// }
   /// ```
-  fn create_bucket<T: AsRef<[u8]>>(&mut self, key: T) -> crate::Result<impl BucketRwApi<'tx>>;
+  fn create_bucket<'a, T: AsRef<[u8]>>(
+    &'a mut self, key: T,
+  ) -> crate::Result<BucketRwImpl<'a, 'tx>>;
 
   /// CreateBucketIfNotExists creates a new bucket if it doesn't already exist and returns a reference to it.
   ///
@@ -376,9 +385,9 @@ pub trait BucketRwApi<'tx>: BucketApi<'tx> {
   ///   Ok(())
   /// }
   /// ```
-  fn create_bucket_if_not_exists<T: AsRef<[u8]>>(
-    &mut self, key: T,
-  ) -> crate::Result<impl BucketRwApi<'tx>>;
+  fn create_bucket_if_not_exists<'a, T: AsRef<[u8]>>(
+    &'a mut self, key: T,
+  ) -> crate::Result<BucketRwImpl<'a, 'tx>>;
 
   /// Cursor creates a cursor associated with the bucket.
   ///
@@ -415,7 +424,7 @@ pub trait BucketRwApi<'tx>: BucketApi<'tx> {
   ///   Ok(())
   /// }
   /// ```
-  fn cursor_mut(&self) -> impl CursorRwApi<'tx>;
+  fn cursor_mut<'a>(&'a self) -> CursorRwImpl<'a, 'tx>;
 
   /// Deletes a bucket at the given key.
   ///
@@ -591,94 +600,26 @@ pub trait BucketRwApi<'tx>: BucketApi<'tx> {
   /// }
   /// ```
   fn set_fill_percent(&mut self, fill_percent: f64);
+
+  fn iter_mut_buckets<'a>(&'a mut self) -> BucketIterMut<'a, 'tx>;
 }
 
 /// Read-only Bucket
-pub struct BucketImpl<'tx> {
-  b: BucketWrapper<'tx>,
-}
-pub enum BucketWrapper<'tx> {
-  RW(BucketCell<'tx>),
+pub struct BucketImpl<'p, 'tx: 'p> {
+  pub(crate) b: BucketCell<'tx>,
+  p: PhantomData<&'p u8>,
 }
 
-impl<'tx> From<BucketCell<'tx>> for BucketImpl<'tx> {
+impl<'p, 'tx> From<BucketCell<'tx>> for BucketImpl<'p, 'tx> {
   fn from(value: BucketCell<'tx>) -> Self {
     BucketImpl {
-      b: BucketWrapper::RW(value),
+      b: value,
+      p: PhantomData,
     }
   }
 }
 
-impl<'tx> BucketApi<'tx> for BucketImpl<'tx> {
-  fn root(&self) -> PgId {
-    match &self.b {
-      BucketWrapper::RW(rw) => rw.root(),
-    }
-  }
-
-  fn writable(&self) -> bool {
-    match &self.b {
-      BucketWrapper::RW(rw) => rw.is_writeable(),
-    }
-  }
-
-  fn cursor(&self) -> CursorImpl<'tx> {
-    match &self.b {
-      BucketWrapper::RW(rw) => InnerCursor::new(*rw, rw.tx().bump()).into(),
-    }
-  }
-
-  fn bucket<T: AsRef<[u8]>>(&self, name: T) -> Option<BucketImpl<'tx>> {
-    match &self.b {
-      BucketWrapper::RW(rw) => rw.api_bucket(name.as_ref()).map(BucketImpl::from),
-    }
-  }
-
-  fn get<T: AsRef<[u8]>>(&self, key: T) -> Option<&[u8]> {
-    match &self.b {
-      BucketWrapper::RW(rw) => rw.api_get(key.as_ref()),
-    }
-  }
-
-  fn sequence(&self) -> u64 {
-    match &self.b {
-      BucketWrapper::RW(rw) => rw.api_sequence(),
-    }
-  }
-
-  fn for_each<F: FnMut(&'tx [u8], Option<&'tx [u8]>) -> crate::Result<()>>(
-    &self, f: F,
-  ) -> crate::Result<()> {
-    match &self.b {
-      BucketWrapper::RW(rw) => rw.api_for_each(f),
-    }
-  }
-
-  fn for_each_bucket<F: FnMut(&'tx [u8]) -> crate::Result<()>>(&self, f: F) -> crate::Result<()> {
-    match &self.b {
-      BucketWrapper::RW(rw) => rw.api_for_each_bucket(f),
-    }
-  }
-
-  fn stats(&self) -> BucketStats {
-    match &self.b {
-      BucketWrapper::RW(rw) => rw.api_stats(),
-    }
-  }
-}
-
-/// Read/Write Bucket
-pub struct BucketRwImpl<'tx> {
-  b: BucketCell<'tx>,
-}
-
-impl<'tx> From<BucketCell<'tx>> for BucketRwImpl<'tx> {
-  fn from(value: BucketCell<'tx>) -> Self {
-    BucketRwImpl { b: value }
-  }
-}
-
-impl<'tx> BucketApi<'tx> for BucketRwImpl<'tx> {
+impl<'p, 'tx> BucketApi<'tx> for BucketImpl<'p, 'tx> {
   fn root(&self) -> PgId {
     self.b.root()
   }
@@ -687,11 +628,11 @@ impl<'tx> BucketApi<'tx> for BucketRwImpl<'tx> {
     self.b.is_writeable()
   }
 
-  fn cursor(&self) -> CursorImpl<'tx> {
+  fn cursor<'a>(&'a self) -> CursorImpl<'a, 'tx> {
     InnerCursor::new(self.b, self.b.tx().bump()).into()
   }
 
-  fn bucket<T: AsRef<[u8]>>(&self, name: T) -> Option<BucketImpl<'tx>> {
+  fn bucket<'a, T: AsRef<[u8]>>(&'a self, name: T) -> Option<BucketImpl<'a, 'tx>> {
     self.b.api_bucket(name.as_ref()).map(BucketImpl::from)
   }
 
@@ -716,30 +657,103 @@ impl<'tx> BucketApi<'tx> for BucketRwImpl<'tx> {
   fn stats(&self) -> BucketStats {
     self.b.api_stats()
   }
+
+  fn iter_entries<'a>(&'a self) -> EntryIter<'a, 'tx> {
+    EntryIter::new(self.b.i_cursor())
+  }
+
+  fn iter_buckets<'a>(&'a self) -> BucketIter<'a, 'tx> {
+    BucketIter::new(self.b.i_cursor())
+  }
 }
 
-impl<'tx> BucketRwApi<'tx> for BucketRwImpl<'tx> {
-  fn bucket_mut<T: AsRef<[u8]>>(&mut self, name: T) -> Option<impl BucketRwApi<'tx>> {
+/// Read/Write Bucket
+pub struct BucketRwImpl<'p, 'tx: 'p> {
+  b: BucketCell<'tx>,
+  p: PhantomData<&'p u8>,
+}
+
+impl<'p, 'tx> From<BucketCell<'tx>> for BucketRwImpl<'p, 'tx> {
+  fn from(value: BucketCell<'tx>) -> Self {
+    BucketRwImpl {
+      b: value,
+      p: PhantomData,
+    }
+  }
+}
+
+impl<'p, 'tx> BucketApi<'tx> for BucketRwImpl<'p, 'tx> {
+  fn root(&self) -> PgId {
+    self.b.root()
+  }
+
+  fn writable(&self) -> bool {
+    self.b.is_writeable()
+  }
+
+  fn cursor<'a>(&'a self) -> CursorImpl<'a, 'tx> {
+    InnerCursor::new(self.b, self.b.tx().bump()).into()
+  }
+
+  fn bucket<'a, T: AsRef<[u8]>>(&'a self, name: T) -> Option<BucketImpl<'a, 'tx>> {
+    self.b.api_bucket(name.as_ref()).map(BucketImpl::from)
+  }
+
+  fn get<T: AsRef<[u8]>>(&self, key: T) -> Option<&[u8]> {
+    self.b.api_get(key.as_ref())
+  }
+
+  fn sequence(&self) -> u64 {
+    self.b.api_sequence()
+  }
+
+  fn for_each<F: FnMut(&'tx [u8], Option<&'tx [u8]>) -> crate::Result<()>>(
+    &self, f: F,
+  ) -> crate::Result<()> {
+    self.b.api_for_each(f)
+  }
+
+  fn for_each_bucket<F: FnMut(&'tx [u8]) -> crate::Result<()>>(&self, f: F) -> crate::Result<()> {
+    self.b.api_for_each_bucket(f)
+  }
+
+  fn stats(&self) -> BucketStats {
+    self.b.api_stats()
+  }
+
+  fn iter_entries<'a>(&'a self) -> EntryIter<'a, 'tx> {
+    EntryIter::new(self.b.i_cursor())
+  }
+
+  fn iter_buckets<'a>(&'a self) -> BucketIter<'a, 'tx> {
+    BucketIter::new(self.b.i_cursor())
+  }
+}
+
+impl<'p, 'tx> BucketRwApi<'tx> for BucketRwImpl<'p, 'tx> {
+  fn bucket_mut<'a, T: AsRef<[u8]>>(&'a mut self, name: T) -> Option<BucketRwImpl<'a, 'tx>> {
     self.b.api_bucket(name.as_ref()).map(BucketRwImpl::from)
   }
 
-  fn create_bucket<T: AsRef<[u8]>>(&mut self, key: T) -> crate::Result<impl BucketRwApi<'tx>> {
+  fn create_bucket<'a, T: AsRef<[u8]>>(
+    &'a mut self, key: T,
+  ) -> crate::Result<BucketRwImpl<'a, 'tx>> {
     self
       .b
       .api_create_bucket(key.as_ref())
       .map(BucketRwImpl::from)
   }
 
-  fn create_bucket_if_not_exists<T: AsRef<[u8]>>(
-    &mut self, key: T,
-  ) -> crate::Result<impl BucketRwApi<'tx>> {
+  fn create_bucket_if_not_exists<'a, T: AsRef<[u8]>>(
+    &'a mut self, key: T,
+  ) -> crate::Result<BucketRwImpl<'a, 'tx>> {
     self
       .b
       .api_create_bucket_if_not_exists(key.as_ref())
       .map(BucketRwImpl::from)
   }
 
-  fn cursor_mut(&self) -> impl CursorRwApi<'tx> {
+  fn cursor_mut<'a>(&'a self) -> CursorRwImpl<'a, 'tx> {
     CursorRwImpl::new(InnerCursor::new(self.b, self.b.tx().bump()))
   }
 
@@ -766,6 +780,10 @@ impl<'tx> BucketRwApi<'tx> for BucketRwImpl<'tx> {
   fn set_fill_percent(&mut self, fill_percent: f64) {
     // TODO: Move to cell api call
     self.b.cell.borrow_mut().w.as_mut().unwrap().fill_percent = fill_percent;
+  }
+
+  fn iter_mut_buckets<'a>(&'a mut self) -> BucketIterMut<'a, 'tx> {
+    BucketIterMut::new(self.b.i_cursor())
   }
 }
 
@@ -869,22 +887,245 @@ impl Default for InlineBucket {
 }
 
 /// The internal Bucket API
-pub(crate) trait BucketIApi<'tx, T: TxIApi<'tx>>:
-  SplitRef<BucketR<'tx>, T, InnerBucketW<'tx, T, Self>>
-{
+pub(crate) trait BucketIApi<'tx> {
   fn new_r_in(
-    bump: &'tx Bump, bucket_header: BucketHeader, tx: T, inline_page: Option<RefPage<'tx>>,
-  ) -> Self;
+    bump: &'tx Bump, bucket_header: BucketHeader, tx: TxCell<'tx>,
+    inline_page: Option<RefPage<'tx>>,
+  ) -> BucketCell<'tx>;
 
   fn new_rw_in(
-    bump: &'tx Bump, bucket_header: BucketHeader, tx: T, inline_page: Option<RefPage<'tx>>,
-  ) -> Self;
+    bump: &'tx Bump, bucket_header: BucketHeader, tx: TxCell<'tx>,
+    inline_page: Option<RefPage<'tx>>,
+  ) -> BucketCell<'tx>;
 
   /// Returns whether the bucket is writable.
   fn is_writeable(&self) -> bool;
 
   /// Returns the rc ptr Tx of the bucket
-  fn tx(self) -> T {
+  fn tx(self) -> TxCell<'tx>;
+
+  /// Returns the root page id of the bucket
+  fn root(self) -> PgId;
+
+  /// Create a new cursor for this Bucket
+  fn i_cursor(self) -> InnerCursor<'tx>;
+
+  /// See [BucketApi::bucket]
+  fn api_bucket(self, name: &[u8]) -> Option<BucketCell<'tx>>;
+
+  /// Helper method that re-interprets a sub-bucket value
+  /// from a parent into a Bucket
+  fn open_bucket(self, value: &[u8]) -> BucketCell<'tx>;
+
+  /// See [BucketApi::get]
+  fn api_get(self, key: &[u8]) -> Option<&'tx [u8]>;
+
+  /// See [BucketApi::for_each]
+  fn api_for_each<F: FnMut(&'tx [u8], Option<&'tx [u8]>) -> crate::Result<()>>(
+    self, f: F,
+  ) -> crate::Result<()>;
+
+  /// See [BucketApi::for_each_bucket]
+  fn api_for_each_bucket<F: FnMut(&'tx [u8]) -> crate::Result<()>>(self, f: F)
+    -> crate::Result<()>;
+
+  /// forEachPage iterates over every page in a bucket, including inline pages.
+  fn for_each_page<F: FnMut(&RefPage<'tx>, usize, &mut BVec<PgId>)>(self, f: &mut F);
+
+  /// forEachPageNode iterates over every page (or node) in a bucket.
+  /// This also includes inline pages.
+  fn for_each_page_node<F: FnMut(&PageNode<'tx>, usize) + Copy>(self, f: F);
+
+  fn _for_each_page_node<F: FnMut(&PageNode<'tx>, usize) + Copy>(
+    self, root: PgId, depth: usize, f: F,
+  );
+
+  fn page_node(self, id: PgId) -> PageNode<'tx>;
+
+  /// See [BucketApi::sequence]
+  fn api_sequence(self) -> u64;
+
+  /// Returns the maximum total size of a bucket to make it a candidate for inlining.
+  fn max_inline_bucket_size(self) -> usize;
+
+  /// See [BucketApi::stats]
+  fn api_stats(self) -> BucketStats;
+
+  fn into_impl<'a>(self) -> BucketImpl<'a, 'tx>;
+}
+
+pub(crate) trait BucketRwIApi<'tx>: BucketIApi<'tx> {
+  /// Explicitly materialize the root node
+  fn materialize_root(self) -> NodeRwCell<'tx>;
+
+  /// See [BucketRwApi::create_bucket]
+  fn api_create_bucket(self, key: &[u8]) -> crate::Result<Self>
+  where
+    Self: Sized;
+
+  /// See [BucketRwApi::create_bucket_if_not_exists]
+  fn api_create_bucket_if_not_exists(self, key: &[u8]) -> crate::Result<Self>
+  where
+    Self: Sized;
+
+  /// See [BucketRwApi::delete_bucket]
+  fn api_delete_bucket(self, key: &[u8]) -> crate::Result<()>;
+
+  /// See [BucketRwApi::put]
+  fn api_put(self, key: &[u8], value: &[u8]) -> crate::Result<()>;
+
+  /// See [BucketRwApi::delete]
+  fn api_delete(self, key: &[u8]) -> crate::Result<()>;
+
+  /// See [BucketRwApi::set_sequence]
+  fn api_set_sequence(self, v: u64) -> crate::Result<()>;
+
+  /// See [BucketRwApi::next_sequence]
+  fn api_next_sequence(self) -> crate::Result<u64>;
+
+  /// free recursively frees all pages in the bucket.
+  fn free(self);
+
+  /// spill writes all the nodes for this bucket to dirty pages.
+  fn spill(self, bump: &'tx Bump) -> crate::Result<()>;
+
+  fn write(self, bump: &'tx Bump) -> &'tx [u8];
+
+  /// inlineable returns true if a bucket is small enough to be written inline
+  /// and if it contains no subbuckets. Otherwise returns false.
+  fn inlineable(self) -> bool;
+
+  /// own_in removes all references to the old mmap.
+  fn own_in(self);
+
+  /// node creates a node from a page and associates it with a given parent.
+  fn node(self, pgid: PgId, parent: Option<NodeRwCell<'tx>>) -> NodeRwCell<'tx>;
+
+  /// rebalance attempts to balance all nodes.
+  fn rebalance(self);
+}
+
+pub struct BucketR<'tx> {
+  pub(crate) bucket_header: BucketHeader,
+  /// inline page reference
+  pub(crate) inline_page: Option<RefPage<'tx>>,
+  p: PhantomData<&'tx u8>,
+}
+
+impl<'tx> BucketR<'tx> {
+  pub fn new(in_bucket: BucketHeader) -> BucketR<'tx> {
+    BucketR {
+      bucket_header: in_bucket,
+      inline_page: None,
+      p: Default::default(),
+    }
+  }
+}
+
+pub struct BucketW<'tx> {
+  /// materialized node for the root page.
+  pub(crate) root_node: Option<NodeRwCell<'tx>>,
+  /// subbucket cache
+  buckets: HashMap<'tx, &'tx [u8], BucketCell<'tx>>,
+  /// node cache
+  pub(crate) nodes: HashMap<'tx, PgId, NodeRwCell<'tx>>,
+
+  /// Sets the threshold for filling nodes when they split. By default,
+  /// the bucket will fill to 50% but it can be useful to increase this
+  /// amount if you know that your write workloads are mostly append-only.
+  ///
+  /// This is non-persisted across transactions so it must be set in every Tx.
+  pub(crate) fill_percent: f64,
+}
+
+impl<'tx> BucketW<'tx> {
+  pub fn new_in(bump: &'tx Bump) -> BucketW<'tx> {
+    BucketW {
+      root_node: None,
+      buckets: HashMap::with_capacity_in(0, bump),
+      nodes: HashMap::with_capacity_in(0, bump),
+      fill_percent: DEFAULT_FILL_PERCENT,
+    }
+  }
+}
+
+pub struct BucketRW<'tx> {
+  pub(crate) r: BucketR<'tx>,
+  pub(crate) w: Option<BucketW<'tx>>,
+}
+
+#[derive(Copy, Clone)]
+pub(crate) struct BucketCell<'tx> {
+  pub(crate) cell: BCell<'tx, BucketRW<'tx>, TxCell<'tx>>,
+}
+
+impl<'tx> SplitRef<BucketR<'tx>, TxCell<'tx>, BucketW<'tx>> for BucketCell<'tx> {
+  fn split_r(&self) -> Ref<BucketR<'tx>> {
+    Ref::map(self.cell.borrow(), |b| &b.r)
+  }
+
+  fn split_ref(&self) -> (Ref<BucketR<'tx>>, Ref<Option<BucketW<'tx>>>) {
+    let (r, w) = Ref::map_split(self.cell.borrow(), |b| (&b.r, &b.w));
+    (r, w)
+  }
+
+  fn split_ow(&self) -> Ref<Option<BucketW<'tx>>> {
+    Ref::map(self.cell.borrow(), |b| &b.w)
+  }
+
+  fn split_bound(&self) -> TxCell<'tx> {
+    self.cell.bound()
+  }
+
+  fn split_r_mut(&self) -> RefMut<BucketR<'tx>> {
+    RefMut::map(self.cell.borrow_mut(), |b| &mut b.r)
+  }
+
+  fn split_ow_mut(&self) -> RefMut<Option<BucketW<'tx>>> {
+    RefMut::map(self.cell.borrow_mut(), |b| &mut b.w)
+  }
+}
+
+impl<'tx> BucketIApi<'tx> for BucketCell<'tx> {
+  fn new_r_in(
+    bump: &'tx Bump, bucket_header: BucketHeader, tx: TxCell<'tx>,
+    inline_page: Option<RefPage<'tx>>,
+  ) -> BucketCell<'tx> {
+    let r = BucketR {
+      bucket_header,
+      inline_page,
+      p: Default::default(),
+    };
+
+    BucketCell {
+      cell: BCell::new_in(BucketRW { r, w: None }, tx, bump),
+    }
+  }
+
+  fn new_rw_in(
+    bump: &'tx Bump, bucket_header: BucketHeader, tx: TxCell<'tx>,
+    inline_page: Option<RefPage<'tx>>,
+  ) -> BucketCell<'tx> {
+    let r = BucketR {
+      bucket_header,
+      inline_page,
+      p: Default::default(),
+    };
+
+    let w = BucketW::new_in(bump);
+
+    BucketCell {
+      cell: BCell::new_in(BucketRW { r, w: Some(w) }, tx, bump),
+    }
+  }
+
+  #[inline(always)]
+  fn is_writeable(&self) -> bool {
+    self.cell.borrow().w.is_some()
+  }
+
+  /// Returns the rc ptr Tx of the bucket
+  fn tx(self) -> TxCell<'tx> {
     self.split_bound()
   }
 
@@ -893,16 +1134,15 @@ pub(crate) trait BucketIApi<'tx, T: TxIApi<'tx>>:
     self.split_r().bucket_header.root()
   }
 
-  /// Create a new cursor for this Bucket
-  fn i_cursor(self) -> InnerCursor<'tx, T, Self> {
+  fn i_cursor(self) -> InnerCursor<'tx> {
     let tx = self.tx();
     tx.split_r().stats.as_ref().unwrap().inc_cursor_count(1);
     InnerCursor::new(self, tx.bump())
   }
 
   /// See [BucketApi::bucket]
-  fn api_bucket(self, name: &[u8]) -> Option<Self> {
-    if let Some(w) = self.split_ow().deref() {
+  fn api_bucket(self, name: &[u8]) -> Option<BucketCell<'tx>> {
+    if let Some(w) = self.split_ow().as_ref() {
       if let Some(child) = w.buckets.get(name) {
         return Some(*child);
       }
@@ -917,7 +1157,7 @@ pub(crate) trait BucketIApi<'tx, T: TxIApi<'tx>>:
 
     // Otherwise create a bucket and cache it.
     let child = self.open_bucket(v);
-    if let Some(ref mut w) = self.split_ow_mut().deref_mut() {
+    if let Some(w) = self.split_ow_mut().as_mut() {
       let tx = self.split_bound();
       let bump = tx.bump();
       let name = bump.alloc_slice_copy(name);
@@ -929,7 +1169,7 @@ pub(crate) trait BucketIApi<'tx, T: TxIApi<'tx>>:
 
   /// Helper method that re-interprets a sub-bucket value
   /// from a parent into a Bucket
-  fn open_bucket(self, mut value: &[u8]) -> Self {
+  fn open_bucket(self, mut value: &[u8]) -> BucketCell<'tx> {
     let tx = self.tx();
     let bump = tx.bump();
     // Unaligned access requires a copy to be made.
@@ -1089,7 +1329,7 @@ pub(crate) trait BucketIApi<'tx, T: TxIApi<'tx>>:
       if id != ZERO_PGID {
         panic!("inline bucket non-zero page access(2): {} != 0", id)
       }
-      return if let Some(root_node) = w.as_ref().map(|wb| wb.root_node).flatten() {
+      return if let Some(root_node) = w.as_ref().and_then(|wb| wb.root_node) {
         PageNode::Node(root_node)
       } else {
         PageNode::Page(r.inline_page.unwrap())
@@ -1097,7 +1337,7 @@ pub(crate) trait BucketIApi<'tx, T: TxIApi<'tx>>:
     }
 
     // Check the node cache for non-inline buckets.
-    if let Some(wb) = w.deref() {
+    if let Some(wb) = w.as_ref() {
       if let Some(node) = wb.nodes.get(&id) {
         return PageNode::Node(*node);
       }
@@ -1196,180 +1436,7 @@ pub(crate) trait BucketIApi<'tx, T: TxIApi<'tx>>:
     s
   }
 
-  fn into_impl(self) -> BucketImpl<'tx>;
-}
-
-pub(crate) trait BucketRwIApi<'tx>: BucketIApi<'tx, TxCell<'tx>> {
-  /// Explicitly materialize the root node
-  fn materialize_root(self) -> NodeRwCell<'tx>;
-
-  /// See [BucketRwApi::create_bucket]
-  fn api_create_bucket(self, key: &[u8]) -> crate::Result<Self>;
-
-  /// See [BucketRwApi::create_bucket_if_not_exists]
-  fn api_create_bucket_if_not_exists(self, key: &[u8]) -> crate::Result<Self>;
-
-  /// See [BucketRwApi::delete_bucket]
-  fn api_delete_bucket(self, key: &[u8]) -> crate::Result<()>;
-
-  /// See [BucketRwApi::put]
-  fn api_put(self, key: &[u8], value: &[u8]) -> crate::Result<()>;
-
-  /// See [BucketRwApi::delete]
-  fn api_delete(self, key: &[u8]) -> crate::Result<()>;
-
-  /// See [BucketRwApi::set_sequence]
-  fn api_set_sequence(self, v: u64) -> crate::Result<()>;
-
-  /// See [BucketRwApi::next_sequence]
-  fn api_next_sequence(self) -> crate::Result<u64>;
-
-  /// free recursively frees all pages in the bucket.
-  fn free(self);
-
-  /// spill writes all the nodes for this bucket to dirty pages.
-  fn spill(self, bump: &'tx Bump) -> crate::Result<()>;
-
-  fn write(self, bump: &'tx Bump) -> &'tx [u8];
-
-  /// inlineable returns true if a bucket is small enough to be written inline
-  /// and if it contains no subbuckets. Otherwise returns false.
-  fn inlineable(self) -> bool;
-
-  /// own_in removes all references to the old mmap.
-  fn own_in(self);
-
-  /// node creates a node from a page and associates it with a given parent.
-  fn node(self, pgid: PgId, parent: Option<NodeRwCell<'tx>>) -> NodeRwCell<'tx>;
-
-  /// rebalance attempts to balance all nodes.
-  fn rebalance(self);
-}
-
-pub struct BucketR<'tx> {
-  pub(crate) bucket_header: BucketHeader,
-  /// inline page reference
-  pub(crate) inline_page: Option<RefPage<'tx>>,
-  p: PhantomData<&'tx u8>,
-}
-
-impl<'tx> BucketR<'tx> {
-  pub fn new(in_bucket: BucketHeader) -> BucketR<'tx> {
-    BucketR {
-      bucket_header: in_bucket,
-      inline_page: None,
-      p: Default::default(),
-    }
-  }
-}
-
-pub struct InnerBucketW<'tx, T: TxIApi<'tx>, B: BucketIApi<'tx, T>> {
-  /// materialized node for the root page.
-  pub(crate) root_node: Option<NodeRwCell<'tx>>,
-  /// subbucket cache
-  buckets: HashMap<'tx, &'tx [u8], B>,
-  /// node cache
-  pub(crate) nodes: HashMap<'tx, PgId, NodeRwCell<'tx>>,
-
-  /// Sets the threshold for filling nodes when they split. By default,
-  /// the bucket will fill to 50% but it can be useful to increase this
-  /// amount if you know that your write workloads are mostly append-only.
-  ///
-  /// This is non-persisted across transactions so it must be set in every Tx.
-  pub(crate) fill_percent: f64,
-  phantom_t: PhantomData<T>,
-}
-
-impl<'tx, T: TxIApi<'tx>, B: BucketIApi<'tx, T>> InnerBucketW<'tx, T, B> {
-  pub fn new_in(bump: &'tx Bump) -> InnerBucketW<'tx, T, B> {
-    InnerBucketW {
-      root_node: None,
-      buckets: HashMap::with_capacity_in(0, bump),
-      nodes: HashMap::with_capacity_in(0, bump),
-      fill_percent: DEFAULT_FILL_PERCENT,
-      phantom_t: PhantomData,
-    }
-  }
-}
-
-pub type BucketW<'tx> = InnerBucketW<'tx, TxCell<'tx>, BucketCell<'tx>>;
-
-pub struct BucketRW<'tx> {
-  pub(crate) r: BucketR<'tx>,
-  pub(crate) w: Option<BucketW<'tx>>,
-}
-
-#[derive(Copy, Clone)]
-pub(crate) struct BucketCell<'tx> {
-  pub(crate) cell: BCell<'tx, BucketRW<'tx>, TxCell<'tx>>,
-}
-
-impl<'tx> SplitRef<BucketR<'tx>, TxCell<'tx>, BucketW<'tx>> for BucketCell<'tx> {
-  fn split_r(&self) -> Ref<BucketR<'tx>> {
-    Ref::map(self.cell.borrow(), |b| &b.r)
-  }
-
-  fn split_ref(&self) -> (Ref<BucketR<'tx>>, Ref<Option<BucketW<'tx>>>) {
-    let (r, w) = Ref::map_split(self.cell.borrow(), |b| (&b.r, &b.w));
-    (r, w)
-  }
-
-  fn split_ow(&self) -> Ref<Option<BucketW<'tx>>> {
-    Ref::map(self.cell.borrow(), |b| &b.w)
-  }
-
-  fn split_bound(&self) -> TxCell<'tx> {
-    self.cell.bound()
-  }
-
-  fn split_r_mut(&self) -> RefMut<BucketR<'tx>> {
-    RefMut::map(self.cell.borrow_mut(), |b| &mut b.r)
-  }
-
-  fn split_ow_mut(&self) -> RefMut<Option<BucketW<'tx>>> {
-    RefMut::map(self.cell.borrow_mut(), |b| &mut b.w)
-  }
-}
-
-impl<'tx> BucketIApi<'tx, TxCell<'tx>> for BucketCell<'tx> {
-  fn new_r_in(
-    bump: &'tx Bump, bucket_header: BucketHeader, tx: TxCell<'tx>,
-    inline_page: Option<RefPage<'tx>>,
-  ) -> Self {
-    let r = BucketR {
-      bucket_header,
-      inline_page,
-      p: Default::default(),
-    };
-
-    BucketCell {
-      cell: BCell::new_in(BucketRW { r, w: None }, tx, bump),
-    }
-  }
-
-  fn new_rw_in(
-    bump: &'tx Bump, bucket_header: BucketHeader, tx: TxCell<'tx>,
-    inline_page: Option<RefPage<'tx>>,
-  ) -> Self {
-    let r = BucketR {
-      bucket_header,
-      inline_page,
-      p: Default::default(),
-    };
-
-    let w = BucketW::new_in(bump);
-
-    BucketCell {
-      cell: BCell::new_in(BucketRW { r, w: Some(w) }, tx, bump),
-    }
-  }
-
-  #[inline(always)]
-  fn is_writeable(&self) -> bool {
-    self.cell.borrow().w.is_some()
-  }
-
-  fn into_impl(self) -> BucketImpl<'tx> {
+  fn into_impl<'a>(self) -> BucketImpl<'a, 'tx> {
     self.into()
   }
 }
@@ -1730,14 +1797,8 @@ impl<'tx> BucketRwIApi<'tx> for BucketCell<'tx> {
 mod tests {
   use crate::bucket::MAX_VALUE_SIZE;
   use crate::test_support::TestDb;
-  use crate::{
-    BucketApi, BucketRwApi, BucketStats, CursorApi, DbApi, DbRwAPI, Error, TxApi, TxRwRefApi,
-  };
+  use crate::{BucketApi, BucketRwApi, CursorApi, DbApi, DbRwAPI, Error, TxApi, TxRwRefApi};
   use anyhow::anyhow;
-  use itertools::Itertools;
-  use rand::rngs::StdRng;
-  use rand::seq::SliceRandom;
-  use rand::SeedableRng;
   use std::sync::atomic::{AtomicU32, Ordering};
 
   #[test]

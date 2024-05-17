@@ -11,9 +11,11 @@ use itertools::Itertools;
 
 use crate::common::ids::td;
 use crate::common::page::PageHeader;
-use crate::common::page::{CoerciblePage, FREE_LIST_PAGE_FLAG, PAGE_HEADER_SIZE};
+use crate::common::page::{CoerciblePage, PAGE_HEADER_SIZE};
 use crate::common::utility::is_sorted;
 use crate::common::{PgId, TxId};
+
+pub const FREE_LIST_PAGE_FLAG: u16 = 0x10;
 
 pub struct MappedFreeListPage {
   bytes: *mut u8,
@@ -544,9 +546,9 @@ mod tests {
   use itertools::Itertools;
 
   use crate::common::ids::{pd, td};
+  use crate::common::page::freelist::{Freelist, MappedFreeListPage, TxPending};
   use crate::common::page::PageHeader;
   use crate::common::{PgId, TxId};
-  use crate::freelist::{Freelist, MappedFreeListPage, TxPending};
   use crate::test_support::mapped_page;
 
   fn hashset(ids: &[u64]) -> HashSet<PgId> {

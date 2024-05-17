@@ -1,21 +1,20 @@
 use crate::common::PgId;
 use bytemuck::{Pod, Zeroable};
+use freelist::FREE_LIST_PAGE_FLAG;
+use meta::META_PAGE_FLAG;
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::marker::PhantomData;
 use std::mem;
 use std::ops::{Deref, DerefMut};
+use tree::branch::BRANCH_PAGE_FLAG;
+use tree::leaf::LEAF_PAGE_FLAG;
 
-pub const MIN_KEYS_PER_PAGE: usize = 2;
+pub mod freelist;
+pub mod meta;
+pub mod tree;
 
 pub const PAGE_HEADER_SIZE: usize = mem::size_of::<PageHeader>();
-
-pub const BRANCH_PAGE_FLAG: u16 = 0x01;
-pub const LEAF_PAGE_FLAG: u16 = 0x02;
-pub const META_PAGE_FLAG: u16 = 0x04;
-pub const FREE_LIST_PAGE_FLAG: u16 = 0x10;
-
-pub const BUCKET_LEAF_FLAG: u32 = 0x01;
 
 //TODO: This needs to be cleaned up.
 /// Represents a page type that can be coerced or mutated from a [RefPage] or [MutPage]

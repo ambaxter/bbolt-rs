@@ -5,6 +5,8 @@ bbolt-rs
 
 ## 1.3.9 Release
 - [x] 1.3.9 updates
+- [x] Retire RwSlice
+- [x] Remove unused RefPool
 - [ ] Copy file
 - [ ] test_tx_check_read_only
 - [ ] test_tx_copy_file
@@ -18,7 +20,6 @@ bbolt-rs
 
 ## 1.3.10
 - [ ] 1.3.10 updates
-- [ ] Retire RwSlice
 - [ ] We have at least 3 different functions to write inodes
 - [ ] PGO + Bolt instructions, build system
 - [ ] Quick Check Analog

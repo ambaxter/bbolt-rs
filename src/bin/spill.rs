@@ -10,22 +10,23 @@ struct Spill {
 fn main() -> Result<()> {
   let spill = Spill::parse();
   let db = Bolt::open_ro(&spill.path)?;
-  db.view(|tx| tx.for_each(|key, bucket| display_bucket(0, key, &bucket)))
+  db.view(|tx| {
+    for (key, bucket) in tx.iter_buckets() {
+      display_bucket(0, key, &bucket)?;
+    }
+    Ok(())
+  })
 }
 
 fn display_bucket(depth: usize, key: &[u8], bucket: &BucketImpl) -> Result<()> {
   let mut d = "  ".repeat(depth);
   println!("{}bucket: {} ", d, String::from_utf8_lossy(key));
   d.push_str("  ");
-  bucket.for_each(|k, v| {
-    println!("{}k: {:?}, len: {:?} ", d, k, v.map(|v| v.len()));
-    Ok(())
-  })?;
-  bucket.for_each_bucket(|bk| {
-    let b = bucket.bucket(bk).unwrap();
+  for (k, v) in bucket.iter_entries() {
+    println!("{}k: {:?}, len: {:?} ", d, k, v.len());
+  }
+  for (bk, b) in bucket.iter_buckets() {
     display_bucket(depth + 1, bk, &b)?;
-    Ok(())
-  })?;
-
+  }
   Ok(())
 }

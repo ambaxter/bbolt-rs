@@ -1,17 +1,19 @@
+use std::cell::RefCell;
+use std::fmt::{Display, Formatter};
+use std::rc::Rc;
+use std::time::{Duration, Instant};
+
 use anyhow::anyhow;
-use bbolt_rs::{
-  Bolt, BoltOptions, BucketApi, BucketRwApi, CursorApi, DbApi, DbRwAPI, Error, TxApi, TxRwRefApi,
-};
 use byteorder::{BigEndian, ByteOrder};
 use clap::{Parser, ValueEnum};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{RngCore, SeedableRng};
-use std::cell::RefCell;
-use std::fmt::{Display, Formatter};
-use std::rc::Rc;
-use std::time::{Duration, Instant};
 use tempfile::Builder;
+
+use bbolt_rs::{
+  Bolt, BoltOptions, BucketApi, BucketRwApi, DbApi, DbRwAPI, Error, TxApi, TxRwRefApi,
+};
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -289,12 +291,9 @@ fn run_reads_sequential(db: &Bolt, options: &Bench) -> bbolt_rs::Result<u64> {
     let t = Instant::now();
     loop {
       let mut count = 0;
-      let mut c = tx.bucket(BENCH_BUCKET_NAME).unwrap().cursor();
-      let mut pos = c.first();
-      while let Some((_, v)) = pos {
-        v.ok_or_else(|| anyhow!("invalid value"))?;
+      let b = tx.bucket(BENCH_BUCKET_NAME).unwrap();
+      for (_k, _v) in b.iter_entries() {
         count += 1;
-        pos = c.next();
       }
 
       if options.write_mode == WriteMode::Seq && count != options.count {
@@ -354,16 +353,11 @@ fn run_reads_sequential_nested(db: &Bolt, options: &Bench) -> bbolt_rs::Result<u
     loop {
       let top = tx.bucket(BENCH_BUCKET_NAME).unwrap();
       let mut count = 0u64;
-      top.for_each_bucket(|name| {
-        let mut c = top.bucket(name).unwrap().cursor();
-        let mut pos = c.first();
-        while let Some((_, v)) = pos {
-          v.ok_or_else(|| anyhow!("invalid value"))?;
+      for (_k, b) in top.iter_buckets() {
+        for (_k, _v) in b.iter_entries() {
           count += 1;
-          pos = c.next();
         }
-        Ok(())
-      })?;
+      }
 
       if options.write_mode == WriteMode::Seq && count != options.count {
         return Err(Error::Other(anyhow!(

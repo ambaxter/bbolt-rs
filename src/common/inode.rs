@@ -1,8 +1,8 @@
 use crate::common::memory::{CodSlice, PhantomUnsend};
+use crate::common::page::tree::branch::{BranchElementRef, MappedBranchPage};
+use crate::common::page::tree::leaf::{LeafElementRef, MappedLeafPage};
+use crate::common::page::tree::TreePage;
 use crate::common::page::{CoerciblePage, RefPage};
-use crate::common::tree::{
-  BranchElementRef, LeafElementRef, MappedBranchPage, MappedLeafPage, TreePage,
-};
 use crate::common::PgId;
 use bumpalo::collections::Vec as BVec;
 use bumpalo::Bump;

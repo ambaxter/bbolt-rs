@@ -7,13 +7,13 @@ use crate::common::defaults::{
   MAX_MMAP_STEP, PGID_NO_FREE_LIST, VERSION,
 };
 use crate::common::lock::LockGuard;
-use crate::common::meta::{MappedMetaPage, Meta};
+use crate::common::page::freelist::{Freelist, MappedFreeListPage};
+use crate::common::page::meta::{MappedMetaPage, Meta};
+use crate::common::page::tree::leaf::MappedLeafPage;
 use crate::common::page::{CoerciblePage, MutPage, PageHeader, RefPage};
 use crate::common::pool::{SyncPool, SyncReusable};
 use crate::common::self_owned::SelfOwned;
-use crate::common::tree::MappedLeafPage;
 use crate::common::{BVec, PgId, SplitRef, TxId};
-use crate::freelist::{Freelist, MappedFreeListPage};
 use crate::tx::{
   TxCell, TxClosingState, TxIApi, TxImpl, TxRef, TxRwApi, TxRwImpl, TxRwRef, TxStats,
 };
@@ -116,7 +116,7 @@ where
   ///   Ok(())
   /// }
   /// ```
-  fn view<'tx, F: Fn(TxRef<'tx>) -> crate::Result<()>>(&'tx self, f: F) -> crate::Result<()>;
+  fn view<'tx, F: FnMut(TxRef<'tx>) -> crate::Result<()>>(&'tx self, f: F) -> crate::Result<()>;
 
   /// Stats retrieves ongoing performance stats for the database.
   ///
@@ -398,7 +398,7 @@ impl DbStats {
   }
 
   pub(crate) fn inc_tx_n(&self, delta: i64) {
-    self.tx_n.fetch_add(delta, Ordering::AcqRel);
+    self.tx_n.fetch_add(delta, Ordering::Relaxed);
   }
 
   /// number of currently open read transactions
@@ -2086,7 +2086,7 @@ impl DbRwAPI for Bolt {
 #[cfg(test)]
 mod test {
   use crate::common::defaults::DEFAULT_PAGE_SIZE;
-  use crate::common::meta::MappedMetaPage;
+  use crate::common::page::meta::MappedMetaPage;
   use crate::db::DbStats;
   use crate::test_support::{temp_file, TestDb};
   use crate::{

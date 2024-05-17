@@ -1,6 +1,6 @@
 use crate::common::bucket::BucketHeader;
 use crate::common::defaults::{MAGIC, PGID_NO_FREE_LIST, VERSION};
-use crate::common::page::{CoerciblePage, PageHeader, META_PAGE_FLAG};
+use crate::common::page::{CoerciblePage, PageHeader};
 use crate::common::{PgId, TxId};
 use crate::Error::{ChecksumMismatch, InvalidDatabase, VersionMismatch};
 use bytemuck::{Pod, Zeroable};
@@ -11,6 +11,7 @@ use std::marker::PhantomData;
 use std::mem;
 use std::ops::{Deref, DerefMut};
 
+pub const META_PAGE_FLAG: u16 = 0x04;
 pub const META_HEADER_SIZE: usize = mem::size_of::<Meta>();
 
 /// `Meta` represents the on-file layout of a database's metadata
@@ -80,8 +81,7 @@ impl Meta {
   /// generates the checksum for the meta.
   pub fn sum64(&self) -> u64 {
     let mut h = Fnv64::new();
-    let (left, _) =
-      bytemuck::bytes_of(self).split_at(mem::size_of::<Meta>() - mem::size_of::<u64>());
+    let (left, _) = bytemuck::bytes_of(self).split_at(META_HEADER_SIZE - mem::size_of::<u64>());
     h.update(left);
     h.finish()
   }

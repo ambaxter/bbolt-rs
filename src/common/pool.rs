@@ -1,9 +1,7 @@
-use crate::common::cell::RefCell;
 use parking_lot::Mutex;
 use std::mem::{forget, ManuallyDrop};
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
-use std::rc::Rc;
 use std::sync::Arc;
 
 // SyncPool and RcPool are modified forms of the excellent https://github.com/CJP10/object-pool
@@ -97,60 +95,6 @@ where
 unsafe impl<T> Send for SyncPool<T> {}
 unsafe impl<T> Sync for SyncPool<T> {}
 
-pub struct RefPool<T> {
-  objects: RefCell<Vec<T>>,
-  init: Box<dyn Fn() -> T>,
-  reset: Box<dyn Fn(&mut T)>,
-}
-
-impl<T> RefPool<T> {
-  pub fn new<I: Fn() -> T + 'static, R: Fn(&mut T) + 'static>(init: I, reset: R) -> Rc<RefPool<T>> {
-    let init = Box::new(init);
-    let reset = Box::new(reset);
-    let objects = Vec::new();
-
-    Rc::new(RefPool {
-      objects: RefCell::new(objects),
-      init,
-      reset,
-    })
-  }
-
-  pub fn with_capacity<I: Fn() -> T + 'static, R: Fn(&mut T) + 'static>(
-    cap: usize, init: I, reset: R,
-  ) -> Rc<RefPool<T>> {
-    let init = Box::new(init);
-    let reset = Box::new(reset);
-    let mut objects = Vec::with_capacity(cap);
-    for _ in 0..cap {
-      objects.push(init());
-    }
-    Rc::new(RefPool {
-      objects: RefCell::new(objects),
-      init,
-      reset,
-    })
-  }
-
-  pub fn len(&self) -> usize {
-    self.objects.borrow().len()
-  }
-
-  pub fn is_empty(&self) -> bool {
-    self.objects.borrow().is_empty()
-  }
-
-  pub fn attach(&self, mut t: T) {
-    (self.reset)(&mut t);
-    self.objects.borrow_mut().push(t)
-  }
-
-  pub fn pull(self: &Rc<Self>) -> RefReusable<T> {
-    let object = self.objects.borrow_mut().pop().unwrap_or_else(&self.init);
-    RefReusable::new(self.clone(), object)
-  }
-}
-
 pub struct SyncReusable<T> {
   pool: ManuallyDrop<Arc<SyncPool<T>>>,
   data: ManuallyDrop<T>,
@@ -200,76 +144,15 @@ impl<T> Drop for SyncReusable<T> {
   }
 }
 
-pub struct RefReusable<T> {
-  pool: ManuallyDrop<Rc<RefPool<T>>>,
-  data: ManuallyDrop<T>,
-}
-
-impl<T> RefReusable<T> {
-  pub fn new(pool: Rc<RefPool<T>>, t: T) -> RefReusable<T> {
-    RefReusable {
-      pool: ManuallyDrop::new(pool),
-      data: ManuallyDrop::new(t),
-    }
-  }
-
-  pub fn detach(mut self) -> T {
-    let (pool, object) = unsafe { self.take() };
-    drop(pool);
-    forget(self);
-    object
-  }
-
-  unsafe fn take(&mut self) -> (Rc<RefPool<T>>, T) {
-    (
-      ManuallyDrop::take(&mut self.pool),
-      ManuallyDrop::take(&mut self.data),
-    )
-  }
-}
-
-impl<T> Deref for RefReusable<T> {
-  type Target = T;
-
-  fn deref(&self) -> &Self::Target {
-    &self.data
-  }
-}
-
-impl<T> DerefMut for RefReusable<T> {
-  fn deref_mut(&mut self) -> &mut Self::Target {
-    &mut self.data
-  }
-}
-
-impl<T> Drop for RefReusable<T> {
-  fn drop(&mut self) {
-    let (pool, object) = unsafe { self.take() };
-    pool.attach(object);
-  }
-}
-
 #[cfg(test)]
 mod tests {
-  use crate::common::pool::{RefPool, SyncPool};
+  use crate::common::pool::SyncPool;
   use std::rc::Rc;
   use std::sync::Arc;
 
   #[test]
   fn test_arc() {
     let pool: Arc<SyncPool<Vec<u8>>> = SyncPool::new(Default::default, |_| {});
-    assert_eq!(0, pool.len());
-    let mut object = pool.pull().detach();
-    assert_eq!(0, pool.len());
-    object.push(8);
-    pool.attach(object);
-
-    assert_eq!(1, pool.len());
-  }
-
-  #[test]
-  fn test_rc() {
-    let pool: Rc<RefPool<Vec<u8>>> = RefPool::new(Default::default, |_| {});
     assert_eq!(0, pool.len());
     let mut object = pool.pull().detach();
     assert_eq!(0, pool.len());

@@ -1,15 +1,16 @@
 use crate::bucket::{BucketCell, BucketIApi, BucketRwIApi};
-use crate::common::page::{CoerciblePage, RefPage, BUCKET_LEAF_FLAG};
-use crate::common::tree::{MappedBranchPage, MappedLeafPage, TreePage};
-use crate::common::{BVec, PgId};
+use crate::common::page::tree::branch::MappedBranchPage;
+use crate::common::page::tree::leaf::{MappedLeafPage, BUCKET_LEAF_FLAG};
+use crate::common::page::tree::TreePage;
+use crate::common::page::{CoerciblePage, RefPage};
+use crate::common::{BVec, PgId, SplitRef};
 use crate::node::NodeRwCell;
-use crate::tx::{TxCell, TxIApi};
 use crate::Error::IncompatibleValue;
 use bumpalo::Bump;
 use std::marker::PhantomData;
 
 /// Read-only Cursor API
-pub trait CursorApi<'tx> {
+pub trait CursorApi {
   /// Moves the cursor to the first item in the bucket and returns its key and value.
   ///
   /// If the bucket is empty then None is returned.
@@ -39,7 +40,7 @@ pub trait CursorApi<'tx> {
   ///   Ok(())
   /// }
   /// ```
-  fn first(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)>;
+  fn first(&mut self) -> Option<(&[u8], Option<&[u8]>)>;
 
   /// Moves the cursor to the last item in the bucket and returns its key and value.
   ///
@@ -70,7 +71,7 @@ pub trait CursorApi<'tx> {
   ///   Ok(())
   /// }
   /// ```
-  fn last(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)>;
+  fn last(&mut self) -> Option<(&[u8], Option<&[u8]>)>;
 
   /// Moves the cursor to the next item in the bucket and returns its key and value.
   ///
@@ -102,7 +103,7 @@ pub trait CursorApi<'tx> {
   ///   Ok(())
   /// }
   /// ```
-  fn next(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)>;
+  fn next(&mut self) -> Option<(&[u8], Option<&[u8]>)>;
 
   /// Moves the cursor to the previous item in the bucket and returns its key and value.
   /// If the cursor is at the beginning of the bucket then None is returned.
@@ -133,7 +134,7 @@ pub trait CursorApi<'tx> {
   ///   Ok(())
   /// }
   /// ```
-  fn prev(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)>;
+  fn prev(&mut self) -> Option<(&[u8], Option<&[u8]>)>;
 
   /// Moves the cursor to a given key using a b-tree search and returns it.
   ///
@@ -165,11 +166,11 @@ pub trait CursorApi<'tx> {
   ///   Ok(())
   /// }
   /// ```
-  fn seek<T: AsRef<[u8]>>(&mut self, seek: T) -> Option<(&'tx [u8], Option<&'tx [u8]>)>;
+  fn seek<T: AsRef<[u8]>>(&mut self, seek: T) -> Option<(&[u8], Option<&[u8]>)>;
 }
 
 /// RW Bucket API
-pub trait CursorRwApi<'tx>: CursorApi<'tx> {
+pub trait CursorRwApi: CursorApi {
   /// Removes the current key/value under the cursor from the bucket.
   ///
   /// ```rust
@@ -208,96 +209,85 @@ pub trait CursorRwApi<'tx>: CursorApi<'tx> {
   fn delete(&mut self) -> crate::Result<()>;
 }
 
-pub(crate) enum CursorWrapper<'tx> {
-  RW(InnerCursor<'tx, TxCell<'tx>, BucketCell<'tx>>),
-}
-
 /// Read-only Cursor
 ///
-pub struct CursorImpl<'tx> {
-  c: CursorWrapper<'tx>,
+pub struct CursorImpl<'a, 'tx: 'a> {
+  pub(crate) c: InnerCursor<'tx>,
+  p: PhantomData<&'a u8>,
 }
 
-impl<'tx> From<InnerCursor<'tx, TxCell<'tx>, BucketCell<'tx>>> for CursorImpl<'tx> {
-  fn from(value: InnerCursor<'tx, TxCell<'tx>, BucketCell<'tx>>) -> Self {
+impl<'a, 'tx> From<InnerCursor<'tx>> for CursorImpl<'a, 'tx> {
+  fn from(value: InnerCursor<'tx>) -> Self {
     CursorImpl {
-      c: CursorWrapper::RW(value),
+      c: value,
+      p: PhantomData,
     }
   }
 }
 
-impl<'tx> CursorApi<'tx> for CursorImpl<'tx> {
-  fn first(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
-    match &mut self.c {
-      CursorWrapper::RW(rw) => rw.api_first(),
-    }
-  }
-
-  fn last(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
-    match &mut self.c {
-      CursorWrapper::RW(rw) => rw.api_last(),
-    }
-  }
-
-  fn next(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
-    match &mut self.c {
-      CursorWrapper::RW(rw) => rw.api_next(),
-    }
-  }
-
-  fn prev(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
-    match &mut self.c {
-      CursorWrapper::RW(rw) => rw.api_prev(),
-    }
-  }
-
-  fn seek<T: AsRef<[u8]>>(&mut self, seek: T) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
-    match &mut self.c {
-      CursorWrapper::RW(rw) => rw.api_seek(seek.as_ref()),
-    }
-  }
-}
-
-/// Read/Write Cursor
-pub struct CursorRwImpl<'tx> {
-  c: InnerCursor<'tx, TxCell<'tx>, BucketCell<'tx>>,
-}
-
-impl<'tx> CursorRwImpl<'tx> {
-  pub(crate) fn new(c: InnerCursor<'tx, TxCell<'tx>, BucketCell<'tx>>) -> Self {
-    CursorRwImpl { c }
-  }
-}
-
-impl<'tx> From<InnerCursor<'tx, TxCell<'tx>, BucketCell<'tx>>> for CursorRwImpl<'tx> {
-  fn from(value: InnerCursor<'tx, TxCell<'tx>, BucketCell<'tx>>) -> Self {
-    CursorRwImpl::new(value)
-  }
-}
-
-impl<'tx> CursorApi<'tx> for CursorRwImpl<'tx> {
-  fn first(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
+impl<'a, 'tx: 'a> CursorApi for CursorImpl<'a, 'tx> {
+  fn first(&mut self) -> Option<(&[u8], Option<&[u8]>)> {
     self.c.api_first()
   }
 
-  fn last(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
+  fn last(&mut self) -> Option<(&[u8], Option<&[u8]>)> {
     self.c.api_last()
   }
 
-  fn next(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
+  fn next(&mut self) -> Option<(&[u8], Option<&[u8]>)> {
     self.c.api_next()
   }
 
-  fn prev(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
+  fn prev(&mut self) -> Option<(&[u8], Option<&[u8]>)> {
     self.c.api_prev()
   }
 
-  fn seek<T: AsRef<[u8]>>(&mut self, seek: T) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
+  fn seek<T: AsRef<[u8]>>(&mut self, seek: T) -> Option<(&[u8], Option<&[u8]>)> {
     self.c.api_seek(seek.as_ref())
   }
 }
 
-impl<'tx> CursorRwApi<'tx> for CursorRwImpl<'tx> {
+/// Read/Write Cursor
+pub struct CursorRwImpl<'a, 'tx: 'a> {
+  c: InnerCursor<'tx>,
+  p: PhantomData<&'a u8>,
+}
+
+impl<'a, 'tx: 'a> CursorRwImpl<'a, 'tx> {
+  pub(crate) fn new(c: InnerCursor<'tx>) -> Self {
+    CursorRwImpl { c, p: PhantomData }
+  }
+}
+
+impl<'a, 'tx: 'a> From<InnerCursor<'tx>> for CursorRwImpl<'a, 'tx> {
+  fn from(value: InnerCursor<'tx>) -> Self {
+    CursorRwImpl::new(value)
+  }
+}
+
+impl<'a, 'tx: 'a> CursorApi for CursorRwImpl<'a, 'tx> {
+  fn first(&mut self) -> Option<(&[u8], Option<&[u8]>)> {
+    self.c.api_first()
+  }
+
+  fn last(&mut self) -> Option<(&[u8], Option<&[u8]>)> {
+    self.c.api_last()
+  }
+
+  fn next(&mut self) -> Option<(&[u8], Option<&[u8]>)> {
+    self.c.api_next()
+  }
+
+  fn prev(&mut self) -> Option<(&[u8], Option<&[u8]>)> {
+    self.c.api_prev()
+  }
+
+  fn seek<T: AsRef<[u8]>>(&mut self, seek: T) -> Option<(&[u8], Option<&[u8]>)> {
+    self.c.api_seek(seek.as_ref())
+  }
+}
+
+impl<'a, 'tx: 'a> CursorRwApi for CursorRwImpl<'a, 'tx> {
   fn delete(&mut self) -> crate::Result<()> {
     self.c.api_delete()
   }
@@ -391,14 +381,13 @@ impl<'tx> ElemRef<'tx> {
 }
 
 #[derive(Clone)]
-pub(crate) struct InnerCursor<'tx, T: TxIApi<'tx>, B: BucketIApi<'tx, T>> {
-  bucket: B,
+pub(crate) struct InnerCursor<'tx> {
+  pub(crate) bucket: BucketCell<'tx>,
   stack: BVec<'tx, ElemRef<'tx>>,
-  phantom_t: PhantomData<T>,
 }
 
-impl<'tx, T: TxIApi<'tx>, B: BucketIApi<'tx, T>> InnerCursor<'tx, T, B> {
-  pub(crate) fn new(cell: B, bump: &'tx Bump) -> Self {
+impl<'tx> InnerCursor<'tx> {
+  pub(crate) fn new(cell: BucketCell<'tx>, bump: &'tx Bump) -> Self {
     cell
       .tx()
       .split_r()
@@ -409,12 +398,11 @@ impl<'tx, T: TxIApi<'tx>, B: BucketIApi<'tx, T>> InnerCursor<'tx, T, B> {
     InnerCursor {
       bucket: cell,
       stack: BVec::with_capacity_in(0, bump),
-      phantom_t: PhantomData,
     }
   }
 }
 
-impl<'tx, T: TxIApi<'tx>, B: BucketIApi<'tx, T>> CursorIApi<'tx> for InnerCursor<'tx, T, B> {
+impl<'tx> CursorIApi<'tx> for InnerCursor<'tx> {
   fn api_first(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
     let (k, v, flags) = self.i_first()?;
     if (flags & BUCKET_LEAF_FLAG) != 0 {
@@ -439,11 +427,7 @@ impl<'tx, T: TxIApi<'tx>, B: BucketIApi<'tx, T>> CursorIApi<'tx> for InnerCursor
       self.i_next();
     }
 
-    let (k, v, flags) = self.key_value()?;
-    if (flags & BUCKET_LEAF_FLAG) != 0 {
-      return Some((k, &[], flags));
-    }
-    Some((k, v, flags))
+    self.key_value()
   }
 
   fn api_next(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)> {
@@ -758,7 +742,7 @@ impl<'tx, T: TxIApi<'tx>, B: BucketIApi<'tx, T>> CursorIApi<'tx> for InnerCursor
   }
 }
 
-impl<'tx, B: BucketRwIApi<'tx>> CursorRwIApi<'tx> for InnerCursor<'tx, TxCell<'tx>, B> {
+impl<'tx> CursorRwIApi<'tx> for InnerCursor<'tx> {
   fn node(&mut self) -> NodeRwCell<'tx> {
     assert!(
       !self.stack.is_empty(),

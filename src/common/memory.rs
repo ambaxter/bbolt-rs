@@ -193,45 +193,6 @@ where
   }
 }
 
-/// Read-write slice to a piece of memory that's either memory mapped or Bump owned
-//TODO: Probably not useful. Might want to retire this after we finish
-// complete the code
-pub struct RWSlice<'tx, T: Pod> {
-  ptr: *mut T,
-  size: u32,
-  p: PhantomData<&'tx mut [T]>,
-}
-
-impl<'tx, T: Pod> RWSlice<'tx, T> {
-  pub fn new_with_offset(ptr: *mut T, offset: usize, size: u32) -> RWSlice<'tx, T> {
-    RWSlice {
-      ptr: unsafe { ptr.add(offset) },
-      size,
-      p: PhantomData,
-    }
-  }
-
-  pub fn distance_from<E>(&self, other: &E) -> u32 {
-    ((self.ptr as usize) - (other as *const E as usize)) as u32
-  }
-}
-
-impl<'tx, T: Pod> Deref for RWSlice<'tx, T> {
-  type Target = [T];
-
-  #[inline]
-  fn deref(&self) -> &'tx Self::Target {
-    unsafe { from_raw_parts(self.ptr, self.size as usize) }
-  }
-}
-
-impl<'tx, T: Pod> DerefMut for RWSlice<'tx, T> {
-  #[inline]
-  fn deref_mut(&mut self) -> &'tx mut Self::Target {
-    unsafe { from_raw_parts_mut(self.ptr, self.size as usize) }
-  }
-}
-
 //TODO: use std is_aligned_to when it comes out
 pub(crate) trait IsAligned: Copy {
   fn is_aligned_to<U>(self) -> bool;

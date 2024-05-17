@@ -12,7 +12,6 @@
 //!
 //! Currently not supported:
 //! * Tx.copy
-//! * Compact
 //! * Most of the main application
 //! * A variety of DB Options including
 //!   * no freelist sync
@@ -28,11 +27,13 @@ mod bucket;
 mod common;
 mod cursor;
 mod db;
-mod freelist;
 mod node;
 #[cfg(test)]
 mod test_support;
 mod tx;
+
+mod iter;
+pub mod util;
 
 pub use bucket::{BucketApi, BucketImpl, BucketRwApi, BucketRwImpl, BucketStats};
 pub use common::errors::{Error, Result};
@@ -40,5 +41,6 @@ pub use common::ids::{PgId, TxId};
 pub use common::page::PageInfo;
 pub use cursor::{CursorApi, CursorImpl, CursorRwApi, CursorRwImpl};
 pub use db::{Bolt, BoltOptions, BoltOptionsBuilder, DbApi, DbInfo, DbPath, DbRwAPI, DbStats};
+pub use iter::{BucketIter, BucketIterMut, EntryIter};
 pub use tx::check::TxCheck;
 pub use tx::{TxApi, TxImpl, TxRef, TxRwApi, TxRwImpl, TxRwRef, TxRwRefApi, TxStats};

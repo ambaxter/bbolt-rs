@@ -7,14 +7,16 @@ use crate::common::cell::{Ref, RefCell, RefMut};
 use crate::common::defaults::IGNORE_NO_SYNC;
 use crate::common::lock::{LockGuard, PinLockGuard};
 use crate::common::memory::BCell;
-use crate::common::meta::{MappedMetaPage, Meta, MetaPage};
+use crate::common::page::meta::{MappedMetaPage, Meta, MetaPage};
+use crate::common::page::tree::branch::MappedBranchPage;
+use crate::common::page::tree::TreePage;
 use crate::common::page::{CoerciblePage, MutPage, PageHeader, PageInfo, RefPage};
 use crate::common::pool::SyncReusable;
 use crate::common::self_owned::SelfOwned;
-use crate::common::tree::{MappedBranchPage, TreePage};
 use crate::common::{BVec, HashMap, PgId, SplitRef, TxId};
 use crate::cursor::{CursorImpl, InnerCursor};
 use crate::db::{AllocateResult, DbIApi, DbMutIApi, DbShared};
+use crate::iter::{BucketIter, BucketIterMut};
 use crate::tx::check::TxICheck;
 use crate::TxCheck;
 use aliasable::boxed::AliasableBox;
@@ -138,7 +140,7 @@ pub trait TxApi<'tx>: TxCheck<'tx> {
   ///   Ok(())
   /// }
   /// ```
-  fn cursor(&self) -> CursorImpl<'tx>;
+  fn cursor<'a>(&'a self) -> CursorImpl<'a, 'tx>;
 
   /// Retrieves a copy of the current transaction statistics.
   fn stats(&self) -> Arc<TxStats>;
@@ -167,8 +169,11 @@ pub trait TxApi<'tx>: TxCheck<'tx> {
   ///   Ok(())
   /// }
   /// ```
-  fn bucket<T: AsRef<[u8]>>(&self, name: T) -> Option<BucketImpl<'tx>>;
+  fn bucket<'a, T: AsRef<[u8]>>(&'a self, name: T) -> Option<BucketImpl<'a, 'tx>>;
 
+  fn bucket_path<'a, T: AsRef<[u8]>>(&'a self, names: &[T]) -> Option<BucketImpl<'a, 'tx>>;
+
+  #[deprecated(since = "1.3.9", note = "please use `iter_*` methods instead")]
   /// Executes a function for each key/value pair in a bucket.
   /// Because ForEach uses a Cursor, the iteration over keys is in lexicographical order.
   ///
@@ -203,9 +208,11 @@ pub trait TxApi<'tx>: TxCheck<'tx> {
   ///   Ok(())
   /// }
   /// ```
-  fn for_each<F: FnMut(&[u8], BucketImpl<'tx>) -> crate::Result<()>>(
+  fn for_each<'a, F: FnMut(&'a [u8], BucketImpl<'a, 'tx>) -> crate::Result<()>>(
     &self, f: F,
-  ) -> crate::Result<()>;
+  ) -> crate::Result<()>
+  where
+    'tx: 'a;
 
   /// Returns page information for a given page number.
   ///
@@ -234,6 +241,8 @@ pub trait TxApi<'tx>: TxCheck<'tx> {
   /// }
   /// ```
   fn page(&self, id: PgId) -> Option<PageInfo>;
+
+  fn iter_buckets<'a>(&'a self) -> BucketIter<'a, 'tx>;
 }
 
 /// RW transaction API
@@ -269,7 +278,11 @@ pub trait TxRwRefApi<'tx>: TxApi<'tx> {
   ///   Ok(())
   /// }
   /// ```
-  fn bucket_mut<T: AsRef<[u8]>>(&mut self, name: T) -> Option<BucketRwImpl<'tx>>;
+  fn bucket_mut<'a, T: AsRef<[u8]>>(&'a mut self, name: T) -> Option<BucketRwImpl<'a, 'tx>>;
+
+  fn bucket_mut_path<'a, T: AsRef<[u8]>>(
+    &'a mut self, names: &[T],
+  ) -> Option<BucketRwImpl<'a, 'tx>>;
 
   /// Creates a new bucket.
   ///
@@ -296,7 +309,9 @@ pub trait TxRwRefApi<'tx>: TxApi<'tx> {
   ///   Ok(())
   /// }
   /// ```
-  fn create_bucket<T: AsRef<[u8]>>(&mut self, name: T) -> crate::Result<BucketRwImpl<'tx>>;
+  fn create_bucket<'a, T: AsRef<[u8]>>(
+    &'a mut self, name: T,
+  ) -> crate::Result<BucketRwImpl<'a, 'tx>>;
 
   /// Creates a new bucket if it doesn't already exist.
   ///
@@ -323,9 +338,13 @@ pub trait TxRwRefApi<'tx>: TxApi<'tx> {
   ///   Ok(())
   /// }
   /// ```
-  fn create_bucket_if_not_exists<T: AsRef<[u8]>>(
-    &mut self, name: T,
-  ) -> crate::Result<BucketRwImpl<'tx>>;
+  fn create_bucket_if_not_exists<'a, T: AsRef<[u8]>>(
+    &'a mut self, name: T,
+  ) -> crate::Result<BucketRwImpl<'a, 'tx>>;
+
+  fn create_bucket_path<'a, T: AsRef<[u8]>>(
+    &'a mut self, names: &[T],
+  ) -> crate::Result<BucketRwImpl<'a, 'tx>>;
 
   /// DeleteBucket deletes a bucket.
   /// Returns an error if the bucket cannot be found or if the key represents a non-bucket value.
@@ -378,6 +397,8 @@ pub trait TxRwRefApi<'tx>: TxApi<'tx> {
   /// }
   /// ```
   fn on_commit<F: FnMut() + 'tx>(&mut self, f: F);
+
+  fn iter_mut_buckets<'a>(&'a mut self) -> BucketIterMut<'a, 'tx>;
 }
 
 /// RW transaction API + Commit
@@ -495,7 +516,7 @@ impl TxStats {
   }
 
   pub(crate) fn inc_page_alloc(&self, delta: i64) {
-    self.page_alloc.fetch_add(delta, Ordering::AcqRel);
+    self.page_alloc.fetch_add(delta, Ordering::Relaxed);
   }
 
   /// number of page allocations
@@ -504,7 +525,7 @@ impl TxStats {
   }
 
   pub(crate) fn inc_page_count(&self, delta: i64) {
-    self.page_count.fetch_add(delta, Ordering::AcqRel);
+    self.page_count.fetch_add(delta, Ordering::Relaxed);
   }
 
   /// number of cursors created
@@ -513,7 +534,7 @@ impl TxStats {
   }
 
   pub(crate) fn inc_cursor_count(&self, delta: i64) {
-    self.cursor_count.fetch_add(delta, Ordering::AcqRel);
+    self.cursor_count.fetch_add(delta, Ordering::Relaxed);
   }
 
   /// number of node allocations
@@ -522,7 +543,7 @@ impl TxStats {
   }
 
   pub(crate) fn inc_node_count(&self, delta: i64) {
-    self.node_count.fetch_add(delta, Ordering::AcqRel);
+    self.node_count.fetch_add(delta, Ordering::Relaxed);
   }
 
   /// number of node dereferences
@@ -531,7 +552,7 @@ impl TxStats {
   }
 
   pub(crate) fn inc_node_deref(&self, delta: i64) {
-    self.node_deref.fetch_add(delta, Ordering::AcqRel);
+    self.node_deref.fetch_add(delta, Ordering::Relaxed);
   }
 
   /// number of node rebalances
@@ -540,7 +561,7 @@ impl TxStats {
   }
 
   pub(crate) fn inc_rebalance(&self, delta: i64) {
-    self.rebalance.fetch_add(delta, Ordering::AcqRel);
+    self.rebalance.fetch_add(delta, Ordering::Relaxed);
   }
 
   /// total time spent rebalancing
@@ -558,7 +579,7 @@ impl TxStats {
   }
 
   pub(crate) fn inc_split(&self, delta: i64) {
-    self.split.fetch_add(delta, Ordering::AcqRel);
+    self.split.fetch_add(delta, Ordering::Relaxed);
   }
 
   /// number of nodes spilled
@@ -567,7 +588,7 @@ impl TxStats {
   }
 
   pub(crate) fn inc_spill(&self, delta: i64) {
-    self.spill.fetch_add(delta, Ordering::AcqRel);
+    self.spill.fetch_add(delta, Ordering::Relaxed);
   }
 
   /// total time spent spilling
@@ -585,7 +606,7 @@ impl TxStats {
   }
 
   pub(crate) fn inc_write(&self, delta: i64) {
-    self.write.fetch_add(delta, Ordering::AcqRel);
+    self.write.fetch_add(delta, Ordering::Relaxed);
   }
 
   /// total time spent writing to disk
@@ -740,148 +761,56 @@ impl TxClosingState {
   }
 }
 
-pub(crate) trait TxIApi<'tx>: SplitRef<TxR<'tx>, Self::BucketType, TxW<'tx>> {
-  type BucketType: BucketIApi<'tx, Self>;
+pub(crate) trait TxIApi<'tx> {
+  fn bump(self) -> &'tx Bump;
 
-  #[inline]
-  fn bump(self) -> &'tx Bump {
-    self.split_r().b
-  }
-
-  #[inline]
-  fn page_size(self) -> usize {
-    self.split_r().page_size
-  }
+  fn page_size(self) -> usize;
 
   fn meta<'a>(&'a self) -> Ref<'a, Meta>
   where
-    'tx: 'a,
-  {
-    Ref::map(self.split_r(), |tx| &tx.meta)
-  }
+    'tx: 'a;
 
-  fn mem_page(self, id: PgId) -> RefPage<'tx> {
-    self.split_r().db.page(id)
-  }
+  fn mem_page(self, id: PgId) -> RefPage<'tx>;
 
-  fn any_page<'a>(&'a self, id: PgId) -> AnyPage<'a, 'tx> {
-    if let Some(ref tx) = self.split_ow().deref() {
-      if let Some(page) = tx.pages.get(&id).map(|p| p.as_ref()) {
-        page.fast_check(id);
-        return AnyPage::Pending(*page);
-      }
-    }
-    let page = self.split_r().db.page(id);
-    page.fast_check(id);
-    AnyPage::Ref(page)
-  }
+  fn any_page<'a>(&'a self, id: PgId) -> AnyPage<'a, 'tx>;
 
   /// See [TxApi::id]
-  #[inline]
-  fn api_id(self) -> TxId {
-    self.split_r().meta.txid()
-  }
+  fn api_id(self) -> TxId;
 
   /// See [TxApi::size]
-  #[inline]
-  fn api_size(self) -> u64 {
-    let r = self.split_r();
-    r.meta.pgid().0 * r.meta.page_size() as u64
-  }
+  fn api_size(self) -> u64;
 
   /// See [TxApi::cursor]
-  fn api_cursor(self) -> InnerCursor<'tx, Self, Self::BucketType> {
-    let root_bucket = self.root_bucket();
-    root_bucket.i_cursor()
-  }
+  fn api_cursor(self) -> InnerCursor<'tx>;
 
   /// See [TxApi::stats]
-  fn api_stats(self) -> Arc<TxStats> {
-    self.split_r().stats.as_ref().unwrap().clone()
-  }
+  fn api_stats(self) -> Arc<TxStats>;
 
-  #[inline]
-  fn root_bucket(self) -> Self::BucketType {
-    self.split_bound()
-  }
+  fn root_bucket(self) -> BucketCell<'tx>;
 
   /// See [TxApi::bucket]
-  fn api_bucket(self, name: &[u8]) -> Option<Self::BucketType> {
-    let root_bucket = self.root_bucket();
-    root_bucket.api_bucket(name)
-  }
+  fn api_bucket(self, name: &[u8]) -> Option<BucketCell<'tx>>;
+
+  fn api_bucket_path<T: AsRef<[u8]>>(self, names: &[T]) -> Option<BucketCell<'tx>>;
 
   /// See [TxApi::for_each]
-  fn api_for_each<F: FnMut(&[u8], BucketImpl<'tx>) -> crate::Result<()>>(
-    &self, mut f: F,
-  ) -> crate::Result<()> {
-    let root_bucket = self.root_bucket();
-    root_bucket.api_for_each_bucket(|k| {
-      let bucket = root_bucket.api_bucket(k).unwrap();
-      f(k, bucket.into_impl())?;
-      Ok(())
-    })
-  }
+  fn api_for_each<'a, F: FnMut(&'a [u8], BucketImpl<'a, 'tx>) -> crate::Result<()>>(
+    &self, f: F,
+  ) -> crate::Result<()>
+  where
+    'tx: 'a;
 
   /// forEachPage iterates over every page within a given page and executes a function.
-  fn for_each_page<F: FnMut(&RefPage<'tx>, usize, &mut BVec<PgId>)>(self, pg_id: PgId, f: &mut F) {
-    let mut stack = BVec::with_capacity_in(10, self.bump());
-    stack.push(pg_id);
-    self.for_each_page_internal(&mut stack, f);
-  }
+  fn for_each_page<F: FnMut(&RefPage<'tx>, usize, &mut BVec<PgId>)>(self, pg_id: PgId, f: &mut F);
 
   fn for_each_page_internal<F: FnMut(&RefPage<'tx>, usize, &mut BVec<PgId>)>(
     self, pgid_stack: &mut BVec<PgId>, f: &mut F,
-  ) {
-    let p = self.mem_page(*pgid_stack.last().unwrap());
+  );
 
-    // Execute function.
-    f(&p, pgid_stack.len() - 1, pgid_stack);
-
-    // Recursively loop over children.
-    if let Some(branch_page) = MappedBranchPage::coerce_ref(&p) {
-      for elem in branch_page.elements() {
-        pgid_stack.push(elem.pgid());
-        self.for_each_page_internal(pgid_stack, f);
-        pgid_stack.pop();
-      }
-    }
-  }
-
-  fn rollback(self) -> crate::Result<()> {
-    if let Some(mut w) = self.split_ow_mut().as_mut() {
-      w.tx_closing_state = TxClosingState::ExplicitRollback;
-    }
-    Ok(())
-  }
+  fn rollback(self) -> crate::Result<()>;
 
   /// See [TxApi::page]
-  fn api_page(&self, id: PgId) -> Option<PageInfo> {
-    let r = self.split_r();
-    if id >= r.meta.pgid() {
-      return None;
-    }
-    //TODO: Check if freelist loaded
-    //WHEN: Freelists can be unloaded
-
-    let p = r.db.page(id);
-    let id = p.id;
-    let count = p.count as u64;
-    let overflow_count = p.overflow as u64;
-
-    let t = if r.db.is_page_free(id) {
-      Cow::Borrowed("free")
-    } else {
-      p.page_type()
-    };
-    let info = PageInfo {
-      id: id.0,
-      t,
-      count,
-      overflow_count,
-    };
-    Some(info)
-  }
+  fn api_page(&self, id: PgId) -> Option<PageInfo>;
 }
 
 pub(crate) trait TxRwIApi<'tx>: TxIApi<'tx> + TxICheck<'tx> {
@@ -896,10 +825,12 @@ pub(crate) trait TxRwIApi<'tx>: TxIApi<'tx> + TxICheck<'tx> {
   fn queue_page(self, page: SelfOwned<AlignedBytes<alignment::Page>, MutPage<'tx>>);
 
   /// See [TxRwRefApi::create_bucket]
-  fn api_create_bucket(self, name: &[u8]) -> crate::Result<Self::BucketType>;
+  fn api_create_bucket(self, name: &[u8]) -> crate::Result<BucketCell<'tx>>;
 
   /// See [TxRwRefApi::create_bucket_if_not_exists]
-  fn api_create_bucket_if_not_exist(self, name: &[u8]) -> crate::Result<Self::BucketType>;
+  fn api_create_bucket_if_not_exist(self, name: &[u8]) -> crate::Result<BucketCell<'tx>>;
+
+  fn api_create_bucket_path<T: AsRef<[u8]>>(self, names: &[T]) -> crate::Result<BucketCell<'tx>>;
 
   /// See [TxRwRefApi::delete_bucket]
   fn api_delete_bucket(self, name: &[u8]) -> crate::Result<()>;
@@ -911,18 +842,13 @@ pub(crate) trait TxRwIApi<'tx>: TxIApi<'tx> + TxICheck<'tx> {
   /// See [TxRwRefApi::on_commit]
   fn api_on_commit(self, f: Box<dyn FnOnce() + 'tx>);
 
-  fn physical_rollback(self) -> crate::Result<()> {
-    if let Some(w) = self.split_ow_mut().as_mut() {
-      w.tx_closing_state = TxClosingState::PhysicalRollback;
-    }
-    Ok(())
-  }
+  fn physical_rollback(self) -> crate::Result<()>;
 }
 
 pub struct TxR<'tx> {
   b: &'tx Bump,
   page_size: usize,
-  db: &'tx LockGuard<'tx, DbShared>,
+  pub(crate) db: &'tx LockGuard<'tx, DbShared>,
   pub(crate) stats: Option<Arc<TxStats>>,
   pub(crate) meta: Meta,
   marker: PhantomData<&'tx u8>,
@@ -975,7 +901,160 @@ impl<'tx> SplitRef<TxR<'tx>, BucketCell<'tx>, TxW<'tx>> for TxCell<'tx> {
 }
 
 impl<'tx> TxIApi<'tx> for TxCell<'tx> {
-  type BucketType = BucketCell<'tx>;
+  #[inline]
+  fn bump(self) -> &'tx Bump {
+    self.split_r().b
+  }
+
+  #[inline]
+  fn page_size(self) -> usize {
+    self.split_r().page_size
+  }
+
+  fn meta<'a>(&'a self) -> Ref<'a, Meta>
+  where
+    'tx: 'a,
+  {
+    Ref::map(self.split_r(), |tx| &tx.meta)
+  }
+
+  fn mem_page(self, id: PgId) -> RefPage<'tx> {
+    self.split_r().db.page(id)
+  }
+
+  fn any_page<'a>(&'a self, id: PgId) -> AnyPage<'a, 'tx> {
+    if let Some(tx) = self.split_ow().as_ref() {
+      if let Some(page) = tx.pages.get(&id).map(|p| p.as_ref()) {
+        page.fast_check(id);
+        return AnyPage::Pending(*page);
+      }
+    }
+    let page = self.split_r().db.page(id);
+    page.fast_check(id);
+    AnyPage::Ref(page)
+  }
+
+  /// See [TxApi::id]
+  #[inline]
+  fn api_id(self) -> TxId {
+    self.split_r().meta.txid()
+  }
+
+  /// See [TxApi::size]
+  #[inline]
+  fn api_size(self) -> u64 {
+    let r = self.split_r();
+    r.meta.pgid().0 * r.meta.page_size() as u64
+  }
+
+  /// See [TxApi::cursor]
+  fn api_cursor(self) -> InnerCursor<'tx> {
+    let root_bucket = self.root_bucket();
+    root_bucket.i_cursor()
+  }
+
+  /// See [TxApi::stats]
+  fn api_stats(self) -> Arc<TxStats> {
+    self.split_r().stats.as_ref().unwrap().clone()
+  }
+
+  #[inline]
+  fn root_bucket(self) -> BucketCell<'tx> {
+    self.split_bound()
+  }
+
+  /// See [TxApi::bucket]
+  fn api_bucket(self, name: &[u8]) -> Option<BucketCell<'tx>> {
+    let root_bucket = self.root_bucket();
+    root_bucket.api_bucket(name)
+  }
+
+  fn api_bucket_path<T: AsRef<[u8]>>(self, names: &[T]) -> Option<BucketCell<'tx>> {
+    let mut b = self.root_bucket();
+    for n in names {
+      let name = n.as_ref();
+      b = match b.api_bucket(name) {
+        None => return None,
+        Some(next_b) => next_b,
+      };
+    }
+    Some(b)
+  }
+
+  /// See [TxApi::for_each]
+  fn api_for_each<'a, F: FnMut(&'a [u8], BucketImpl<'a, 'tx>) -> crate::Result<()>>(
+    &self, mut f: F,
+  ) -> crate::Result<()>
+  where
+    'tx: 'a,
+  {
+    let root_bucket = self.root_bucket();
+    root_bucket.api_for_each_bucket(|k| {
+      let bucket = root_bucket.api_bucket(k).unwrap();
+      f(k, bucket.into_impl())?;
+      Ok(())
+    })
+  }
+
+  /// forEachPage iterates over every page within a given page and executes a function.
+  fn for_each_page<F: FnMut(&RefPage<'tx>, usize, &mut BVec<PgId>)>(self, pg_id: PgId, f: &mut F) {
+    let mut stack = BVec::with_capacity_in(10, self.bump());
+    stack.push(pg_id);
+    self.for_each_page_internal(&mut stack, f);
+  }
+
+  fn for_each_page_internal<F: FnMut(&RefPage<'tx>, usize, &mut BVec<PgId>)>(
+    self, pgid_stack: &mut BVec<PgId>, f: &mut F,
+  ) {
+    let p = self.mem_page(*pgid_stack.last().unwrap());
+
+    // Execute function.
+    f(&p, pgid_stack.len() - 1, pgid_stack);
+
+    // Recursively loop over children.
+    if let Some(branch_page) = MappedBranchPage::coerce_ref(&p) {
+      for elem in branch_page.elements() {
+        pgid_stack.push(elem.pgid());
+        self.for_each_page_internal(pgid_stack, f);
+        pgid_stack.pop();
+      }
+    }
+  }
+
+  fn rollback(self) -> crate::Result<()> {
+    if let Some(w) = self.split_ow_mut().as_mut() {
+      w.tx_closing_state = TxClosingState::ExplicitRollback;
+    }
+    Ok(())
+  }
+
+  /// See [TxApi::page]
+  fn api_page(&self, id: PgId) -> Option<PageInfo> {
+    let r = self.split_r();
+    if id >= r.meta.pgid() {
+      return None;
+    }
+    //TODO: Check if freelist loaded
+    //WHEN: Freelists can be unloaded
+
+    let p = r.db.page(id);
+    let id = p.id;
+    let count = p.count as u64;
+    let overflow_count = p.overflow as u64;
+
+    let t = if r.db.is_page_free(id) {
+      Cow::Borrowed("free")
+    } else {
+      p.page_type()
+    };
+    let info = PageInfo {
+      id: id.0,
+      t,
+      count,
+      overflow_count,
+    };
+    Some(info)
+  }
 }
 
 impl<'tx> TxRwIApi<'tx> for TxCell<'tx> {
@@ -1015,14 +1094,23 @@ impl<'tx> TxRwIApi<'tx> for TxCell<'tx> {
     }
   }
 
-  fn api_create_bucket(self, name: &[u8]) -> crate::Result<Self::BucketType> {
+  fn api_create_bucket(self, name: &[u8]) -> crate::Result<BucketCell<'tx>> {
     let root_bucket = self.root_bucket();
     root_bucket.api_create_bucket(name)
   }
 
-  fn api_create_bucket_if_not_exist(self, name: &[u8]) -> crate::Result<Self::BucketType> {
+  fn api_create_bucket_if_not_exist(self, name: &[u8]) -> crate::Result<BucketCell<'tx>> {
     let root_bucket = self.root_bucket();
     root_bucket.api_create_bucket_if_not_exists(name)
+  }
+
+  fn api_create_bucket_path<T: AsRef<[u8]>>(self, names: &[T]) -> crate::Result<BucketCell<'tx>> {
+    let mut b = self.root_bucket();
+    for n in names {
+      let name = n.as_ref();
+      b = b.api_create_bucket_if_not_exists(name)?;
+    }
+    Ok(b)
   }
 
   fn api_delete_bucket(self, name: &[u8]) -> crate::Result<()> {
@@ -1122,6 +1210,13 @@ impl<'tx> TxRwIApi<'tx> for TxCell<'tx> {
       .commit_handlers
       .push(f);
   }
+
+  fn physical_rollback(self) -> crate::Result<()> {
+    if let Some(w) = self.split_ow_mut().as_mut() {
+      w.tx_closing_state = TxClosingState::PhysicalRollback;
+    }
+    Ok(())
+  }
 }
 
 /// Read-only Transaction
@@ -1211,7 +1306,7 @@ impl<'tx> TxApi<'tx> for TxImpl<'tx> {
     false
   }
 
-  fn cursor(&self) -> CursorImpl<'tx> {
+  fn cursor<'a>(&'a self) -> CursorImpl<'a, 'tx> {
     self.tx.api_cursor().into()
   }
 
@@ -1219,24 +1314,35 @@ impl<'tx> TxApi<'tx> for TxImpl<'tx> {
     self.tx.api_stats()
   }
 
-  fn bucket<T: AsRef<[u8]>>(&self, name: T) -> Option<BucketImpl<'tx>> {
+  fn bucket<'a, T: AsRef<[u8]>>(&'a self, name: T) -> Option<BucketImpl<'a, 'tx>> {
     self.tx.api_bucket(name.as_ref()).map(BucketImpl::from)
   }
 
-  fn for_each<F: FnMut(&[u8], BucketImpl<'tx>) -> crate::Result<()>>(
+  fn bucket_path<'a, T: AsRef<[u8]>>(&'a self, names: &[T]) -> Option<BucketImpl<'a, 'tx>> {
+    self.tx.api_bucket_path(names).map(BucketImpl::from)
+  }
+
+  fn for_each<'a, F: FnMut(&'a [u8], BucketImpl<'a, 'tx>) -> crate::Result<()>>(
     &self, f: F,
-  ) -> crate::Result<()> {
+  ) -> crate::Result<()>
+  where
+    'tx: 'a,
+  {
     self.tx.api_for_each(f)
   }
 
   fn page(&self, id: PgId) -> Option<PageInfo> {
     self.tx.api_page(id)
   }
+
+  fn iter_buckets<'a>(&'a self) -> BucketIter<'a, 'tx> {
+    BucketIter::new(self.tx.api_cursor())
+  }
 }
 
 /// Read-only Transaction reference used in managed transactions
 pub struct TxRef<'tx> {
-  tx: TxCell<'tx>,
+  pub(crate) tx: TxCell<'tx>,
 }
 
 impl<'tx> TxApi<'tx> for TxRef<'tx> {
@@ -1255,7 +1361,7 @@ impl<'tx> TxApi<'tx> for TxRef<'tx> {
     false
   }
 
-  fn cursor(&self) -> CursorImpl<'tx> {
+  fn cursor<'a>(&'a self) -> CursorImpl<'a, 'tx> {
     self.tx.api_cursor().into()
   }
 
@@ -1263,18 +1369,29 @@ impl<'tx> TxApi<'tx> for TxRef<'tx> {
     self.tx.api_stats()
   }
 
-  fn bucket<T: AsRef<[u8]>>(&self, name: T) -> Option<BucketImpl<'tx>> {
+  fn bucket<'a, T: AsRef<[u8]>>(&'a self, name: T) -> Option<BucketImpl<'a, 'tx>> {
     self.tx.api_bucket(name.as_ref()).map(BucketImpl::from)
   }
 
-  fn for_each<F: FnMut(&[u8], BucketImpl<'tx>) -> crate::Result<()>>(
+  fn bucket_path<'a, T: AsRef<[u8]>>(&'a self, names: &[T]) -> Option<BucketImpl<'a, 'tx>> {
+    self.tx.api_bucket_path(names).map(BucketImpl::from)
+  }
+
+  fn for_each<'a, F: FnMut(&'a [u8], BucketImpl<'a, 'tx>) -> crate::Result<()>>(
     &self, f: F,
-  ) -> crate::Result<()> {
+  ) -> crate::Result<()>
+  where
+    'tx: 'a,
+  {
     self.tx.api_for_each(f)
   }
 
   fn page(&self, id: PgId) -> Option<PageInfo> {
     self.tx.api_page(id)
+  }
+
+  fn iter_buckets<'a>(&'a self) -> BucketIter<'a, 'tx> {
+    BucketIter::new(self.tx.api_cursor())
   }
 }
 
@@ -1410,7 +1527,7 @@ impl<'tx> TxApi<'tx> for TxRwImpl<'tx> {
     true
   }
 
-  fn cursor(&self) -> CursorImpl<'tx> {
+  fn cursor<'a>(&'a self) -> CursorImpl<'a, 'tx> {
     self.tx.api_cursor().into()
   }
 
@@ -1418,39 +1535,67 @@ impl<'tx> TxApi<'tx> for TxRwImpl<'tx> {
     self.tx.api_stats()
   }
 
-  fn bucket<T: AsRef<[u8]>>(&self, name: T) -> Option<BucketImpl<'tx>> {
+  fn bucket<'a, T: AsRef<[u8]>>(&'a self, name: T) -> Option<BucketImpl<'a, 'tx>> {
     self.tx.api_bucket(name.as_ref()).map(BucketImpl::from)
   }
 
-  fn for_each<F: FnMut(&[u8], BucketImpl<'tx>) -> crate::Result<()>>(
+  fn bucket_path<'a, T: AsRef<[u8]>>(&'a self, names: &[T]) -> Option<BucketImpl<'a, 'tx>> {
+    self.tx.api_bucket_path(names).map(BucketImpl::from)
+  }
+
+  fn for_each<'a, F: FnMut(&'a [u8], BucketImpl<'a, 'tx>) -> crate::Result<()>>(
     &self, f: F,
-  ) -> crate::Result<()> {
+  ) -> crate::Result<()>
+  where
+    'tx: 'a,
+  {
     self.tx.api_for_each(f)
   }
 
   fn page(&self, id: PgId) -> Option<PageInfo> {
     self.tx.api_page(id)
   }
+
+  fn iter_buckets<'a>(&'a self) -> BucketIter<'a, 'tx> {
+    BucketIter::new(self.tx.api_cursor())
+  }
 }
 
 impl<'tx> TxRwRefApi<'tx> for TxRwImpl<'tx> {
-  fn bucket_mut<T: AsRef<[u8]>>(&mut self, name: T) -> Option<BucketRwImpl<'tx>> {
+  fn bucket_mut<'a, T: AsRef<[u8]>>(&'a mut self, name: T) -> Option<BucketRwImpl<'a, 'tx>> {
     self.tx.api_bucket(name.as_ref()).map(BucketRwImpl::from)
   }
 
-  fn create_bucket<T: AsRef<[u8]>>(&mut self, name: T) -> crate::Result<BucketRwImpl<'tx>> {
+  fn bucket_mut_path<'a, T: AsRef<[u8]>>(
+    &'a mut self, names: &[T],
+  ) -> Option<BucketRwImpl<'a, 'tx>> {
+    self.tx.api_bucket_path(names).map(BucketRwImpl::from)
+  }
+
+  fn create_bucket<'a, T: AsRef<[u8]>>(
+    &'a mut self, name: T,
+  ) -> crate::Result<BucketRwImpl<'a, 'tx>> {
     self
       .tx
       .api_create_bucket(name.as_ref())
       .map(BucketRwImpl::from)
   }
 
-  fn create_bucket_if_not_exists<T: AsRef<[u8]>>(
-    &mut self, name: T,
-  ) -> crate::Result<BucketRwImpl<'tx>> {
+  fn create_bucket_if_not_exists<'a, T: AsRef<[u8]>>(
+    &'a mut self, name: T,
+  ) -> crate::Result<BucketRwImpl<'a, 'tx>> {
     self
       .tx
       .api_create_bucket_if_not_exist(name.as_ref())
+      .map(BucketRwImpl::from)
+  }
+
+  fn create_bucket_path<'a, T: AsRef<[u8]>>(
+    &'a mut self, names: &[T],
+  ) -> crate::Result<BucketRwImpl<'a, 'tx>> {
+    self
+      .tx
+      .api_create_bucket_path(names)
       .map(BucketRwImpl::from)
   }
 
@@ -1460,6 +1605,10 @@ impl<'tx> TxRwRefApi<'tx> for TxRwImpl<'tx> {
 
   fn on_commit<F: FnOnce() + 'tx>(&mut self, f: F) {
     self.tx.api_on_commit(Box::new(f))
+  }
+
+  fn iter_mut_buckets<'a>(&'a mut self) -> BucketIterMut<'a, 'tx> {
+    BucketIterMut::new(self.tx.api_cursor())
   }
 }
 
@@ -1591,7 +1740,7 @@ impl<'tx> TxApi<'tx> for TxRwRef<'tx> {
     true
   }
 
-  fn cursor(&self) -> CursorImpl<'tx> {
+  fn cursor<'a>(&'a self) -> CursorImpl<'a, 'tx> {
     self.tx.api_cursor().into()
   }
 
@@ -1599,39 +1748,67 @@ impl<'tx> TxApi<'tx> for TxRwRef<'tx> {
     self.tx.api_stats()
   }
 
-  fn bucket<T: AsRef<[u8]>>(&self, name: T) -> Option<BucketImpl<'tx>> {
+  fn bucket<'a, T: AsRef<[u8]>>(&'a self, name: T) -> Option<BucketImpl<'a, 'tx>> {
     self.tx.api_bucket(name.as_ref()).map(BucketImpl::from)
   }
 
-  fn for_each<F: FnMut(&[u8], BucketImpl<'tx>) -> crate::Result<()>>(
+  fn bucket_path<'a, T: AsRef<[u8]>>(&'a self, names: &[T]) -> Option<BucketImpl<'a, 'tx>> {
+    self.tx.api_bucket_path(names).map(BucketImpl::from)
+  }
+
+  fn for_each<'a, F: FnMut(&'a [u8], BucketImpl<'a, 'tx>) -> crate::Result<()>>(
     &self, f: F,
-  ) -> crate::Result<()> {
+  ) -> crate::Result<()>
+  where
+    'tx: 'a,
+  {
     self.tx.api_for_each(f)
   }
 
   fn page(&self, id: PgId) -> Option<PageInfo> {
     self.tx.api_page(id)
   }
+
+  fn iter_buckets<'a>(&'a self) -> BucketIter<'a, 'tx> {
+    BucketIter::new(self.tx.api_cursor())
+  }
 }
 
 impl<'tx> TxRwRefApi<'tx> for TxRwRef<'tx> {
-  fn bucket_mut<T: AsRef<[u8]>>(&mut self, name: T) -> Option<BucketRwImpl<'tx>> {
+  fn bucket_mut<'a, T: AsRef<[u8]>>(&'a mut self, name: T) -> Option<BucketRwImpl<'a, 'tx>> {
     self.tx.api_bucket(name.as_ref()).map(BucketRwImpl::from)
   }
 
-  fn create_bucket<T: AsRef<[u8]>>(&mut self, name: T) -> crate::Result<BucketRwImpl<'tx>> {
+  fn bucket_mut_path<'a, T: AsRef<[u8]>>(
+    &'a mut self, names: &[T],
+  ) -> Option<BucketRwImpl<'a, 'tx>> {
+    self.tx.api_bucket_path(names).map(BucketRwImpl::from)
+  }
+
+  fn create_bucket<'a, T: AsRef<[u8]>>(
+    &'a mut self, name: T,
+  ) -> crate::Result<BucketRwImpl<'a, 'tx>> {
     self
       .tx
       .api_create_bucket(name.as_ref())
       .map(BucketRwImpl::from)
   }
 
-  fn create_bucket_if_not_exists<T: AsRef<[u8]>>(
-    &mut self, name: T,
-  ) -> crate::Result<BucketRwImpl<'tx>> {
+  fn create_bucket_if_not_exists<'a, T: AsRef<[u8]>>(
+    &'a mut self, name: T,
+  ) -> crate::Result<BucketRwImpl<'a, 'tx>> {
     self
       .tx
       .api_create_bucket_if_not_exist(name.as_ref())
+      .map(BucketRwImpl::from)
+  }
+
+  fn create_bucket_path<'a, T: AsRef<[u8]>>(
+    &'a mut self, names: &[T],
+  ) -> crate::Result<BucketRwImpl<'a, 'tx>> {
+    self
+      .tx
+      .api_create_bucket_path(names)
       .map(BucketRwImpl::from)
   }
 
@@ -1642,15 +1819,22 @@ impl<'tx> TxRwRefApi<'tx> for TxRwRef<'tx> {
   fn on_commit<F: FnOnce() + 'tx>(&mut self, f: F) {
     self.tx.api_on_commit(Box::new(f))
   }
+
+  fn iter_mut_buckets<'a>(&'a mut self) -> BucketIterMut<'a, 'tx> {
+    BucketIterMut::new(self.tx.api_cursor())
+  }
 }
 
 pub(crate) mod check {
-  use crate::bucket::BucketIApi;
+  use crate::bucket::{BucketCell, BucketIApi};
+  use crate::common::page::tree::branch::MappedBranchPage;
+  use crate::common::page::tree::leaf::MappedLeafPage;
+  use crate::common::page::tree::TreePage;
   use crate::common::page::{CoerciblePage, RefPage};
-  use crate::common::tree::{MappedBranchPage, MappedLeafPage, TreePage};
-  use crate::common::{BVec, HashMap, HashSet, PgId, ZERO_PGID};
+  use crate::common::refstack::RefStack;
+  use crate::common::{BVec, HashMap, HashSet, PgId, SplitRef, ZERO_PGID};
   use crate::db::DbIApi;
-  use crate::tx::{TxCell, TxIApi, TxImpl, TxRef, TxRwIApi, TxRwImpl, TxRwRef};
+  use crate::tx::{TxCell, TxIApi, TxImpl, TxR, TxRef, TxRwIApi, TxRwImpl, TxRwRef, TxW};
 
   pub(crate) trait UnsealTx<'tx> {
     fn unseal(&self) -> impl TxIApi<'tx> + TxICheck<'tx>;
@@ -1724,7 +1908,34 @@ pub(crate) mod check {
     }
   }
 
-  pub(crate) trait TxICheck<'tx>: TxIApi<'tx> {
+  pub(crate) trait TxICheck<'tx>:
+    TxIApi<'tx> + SplitRef<TxR<'tx>, BucketCell<'tx>, TxW<'tx>>
+  {
+    fn check(self) -> Vec<String>;
+
+    fn check_bucket(
+      &self, bucket: BucketCell<'tx>, reachable: &mut HashMap<PgId, RefPage<'tx>>,
+      freed: &mut HashSet<PgId>, errors: &mut Vec<String>,
+    );
+
+    fn recursively_check_pages(self, pg_id: PgId, errors: &mut Vec<String>);
+
+    fn recursively_check_pages_internal(
+      self, pg_id: PgId, min_key_closed: &[u8], max_key_open: &[u8], pageid_stack: &RefStack<PgId>,
+      errors: &mut Vec<String>,
+    ) -> &'tx [u8];
+
+    /***
+     * verifyKeyOrder checks whether an entry with given #index on pgId (pageType: "branch|leaf") that has given "key",
+     * is within range determined by (previousKey..maxKeyOpen) and reports found violations to the channel (ch).
+     */
+    fn verify_key_order(
+      self, pg_id: PgId, page_type: &str, index: usize, key: &[u8], previous_key: &[u8],
+      max_key_open: &[u8], pageid_stack: &RefStack<PgId>, errors: &mut Vec<String>,
+    );
+  }
+
+  impl<'tx> TxICheck<'tx> for TxCell<'tx> {
     fn check(self) -> Vec<String> {
       let mut errors = Vec::new();
       let bump = self.bump();
@@ -1773,7 +1984,7 @@ pub(crate) mod check {
     }
 
     fn check_bucket(
-      &self, bucket: Self::BucketType, reachable: &mut HashMap<PgId, RefPage<'tx>>,
+      &self, bucket: BucketCell<'tx>, reachable: &mut HashMap<PgId, RefPage<'tx>>,
       freed: &mut HashSet<PgId>, errors: &mut Vec<String>,
     ) {
       // ignore inline buckets
@@ -1825,13 +2036,12 @@ pub(crate) mod check {
     }
 
     fn recursively_check_pages(self, pg_id: PgId, errors: &mut Vec<String>) {
-      let bump = self.bump();
-      let mut pgid_stack = BVec::new_in(bump);
-      self.recursively_check_pages_internal(pg_id, &[], &[], &mut pgid_stack, errors);
+      let pgid_stack = RefStack::new(pg_id);
+      self.recursively_check_pages_internal(pg_id, &[], &[], &pgid_stack, errors);
     }
 
     fn recursively_check_pages_internal(
-      self, pg_id: PgId, min_key_closed: &[u8], max_key_open: &[u8], pageid_stack: &mut BVec<PgId>,
+      self, pg_id: PgId, min_key_closed: &[u8], max_key_open: &[u8], pageid_stack: &RefStack<PgId>,
       errors: &mut Vec<String>,
     ) -> &'tx [u8] {
       let p = self.mem_page(pg_id);
@@ -1868,7 +2078,6 @@ pub(crate) mod check {
             self.recursively_check_pages_internal(pg_id, key, max_key, pageid_stack, errors);
           running_min = max_key_in_subtree;
         }
-        pageid_stack.pop();
         return max_key_in_subtree;
       } else if let Some(leaf_page) = MappedLeafPage::coerce_ref(&p) {
         let mut running_min = min_key_closed;
@@ -1891,13 +2100,11 @@ pub(crate) mod check {
           running_min = key;
         }
         if p.count > 0 {
-          pageid_stack.pop();
           return leaf_page.get_elem(p.count - 1).unwrap().key();
         }
       } else {
         errors.push(format!("unexpected page type for pgId: {}", pg_id));
       }
-      pageid_stack.pop();
       &[]
     }
 
@@ -1907,7 +2114,7 @@ pub(crate) mod check {
      */
     fn verify_key_order(
       self, pg_id: PgId, page_type: &str, index: usize, key: &[u8], previous_key: &[u8],
-      max_key_open: &[u8], pageid_stack: &mut BVec<PgId>, errors: &mut Vec<String>,
+      max_key_open: &[u8], pageid_stack: &RefStack<PgId>, errors: &mut Vec<String>,
     ) {
       if index == 0 && !previous_key.is_empty() && previous_key > key {
         errors.push(format!("the first key[{}]={:02X?} on {} page({}) needs to be >= the key in the ancestor ({:02X?}). Stack: {:?}", index, key, page_type, pg_id, previous_key, pageid_stack));
@@ -1924,8 +2131,6 @@ pub(crate) mod check {
       }
     }
   }
-
-  impl<'tx> TxICheck<'tx> for TxCell<'tx> {}
 }
 
 #[cfg(test)]
