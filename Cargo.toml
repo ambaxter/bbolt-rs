@@ -10,8 +10,14 @@ description = "A Rust port of the Bolt database"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
-[dependencies]
+# There's no SIMD support for aarch64 yet
+[target.'cfg(target_arch = "aarch64")'.dependencies]
+aligners = { version = "0.0.10", default-features = false }
+
+[target.'cfg(not(target_arch = "aarch64"))'.dependencies]
 aligners = "0.0.10"
+
+[dependencies]
 # Until the aligners miri fix is in crates.io depend on the git main branch
 # Swap 0.0.10 for the git version to run the miri test
 # aligners = {git = "https://github.com/V0ldek/aligners.git"}
