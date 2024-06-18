@@ -1,6 +1,16 @@
-# 1.3.9
+# Upcoming 1.3.9
 
-- Add support for aarch64 (e.g. Apple M1)
+## Added
+* Add support for aarch64 (e.g. Apple M1)
+* Added util::compact
+* Added Iterators
+
+## Changed
+* Some APIs had lifetimes that were accidentally valid for the whole transaction
+* Deprecated *foreach functions
+* Use Relaxed Atomic ordering for everything except the final get
+* Lots of internal cleanup
+
 
 # 1.3.8
 * Initial release
