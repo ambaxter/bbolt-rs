@@ -211,12 +211,12 @@ pub trait CursorRwApi: CursorApi {
 
 /// Read-only Cursor
 ///
-pub struct CursorImpl<'a, 'tx: 'a> {
+pub struct CursorImpl<'tx: 'a, 'a> {
   pub(crate) c: InnerCursor<'tx>,
   p: PhantomData<&'a u8>,
 }
 
-impl<'a, 'tx> From<InnerCursor<'tx>> for CursorImpl<'a, 'tx> {
+impl<'tx: 'a, 'a> From<InnerCursor<'tx>> for CursorImpl<'tx, 'a> {
   fn from(value: InnerCursor<'tx>) -> Self {
     CursorImpl {
       c: value,
@@ -225,7 +225,7 @@ impl<'a, 'tx> From<InnerCursor<'tx>> for CursorImpl<'a, 'tx> {
   }
 }
 
-impl<'a, 'tx: 'a> CursorApi for CursorImpl<'a, 'tx> {
+impl<'tx: 'a, 'a> CursorApi for CursorImpl<'tx, 'a> {
   fn first(&mut self) -> Option<(&[u8], Option<&[u8]>)> {
     self.c.api_first()
   }
@@ -248,24 +248,24 @@ impl<'a, 'tx: 'a> CursorApi for CursorImpl<'a, 'tx> {
 }
 
 /// Read/Write Cursor
-pub struct CursorRwImpl<'a, 'tx: 'a> {
+pub struct CursorRwImpl<'tx: 'a, 'a> {
   c: InnerCursor<'tx>,
   p: PhantomData<&'a u8>,
 }
 
-impl<'a, 'tx: 'a> CursorRwImpl<'a, 'tx> {
+impl<'tx: 'a, 'a> CursorRwImpl<'tx, 'a> {
   pub(crate) fn new(c: InnerCursor<'tx>) -> Self {
     CursorRwImpl { c, p: PhantomData }
   }
 }
 
-impl<'a, 'tx: 'a> From<InnerCursor<'tx>> for CursorRwImpl<'a, 'tx> {
+impl<'tx: 'a, 'a> From<InnerCursor<'tx>> for CursorRwImpl<'tx, 'a> {
   fn from(value: InnerCursor<'tx>) -> Self {
     CursorRwImpl::new(value)
   }
 }
 
-impl<'a, 'tx: 'a> CursorApi for CursorRwImpl<'a, 'tx> {
+impl<'tx: 'a, 'a> CursorApi for CursorRwImpl<'tx, 'a> {
   fn first(&mut self) -> Option<(&[u8], Option<&[u8]>)> {
     self.c.api_first()
   }
@@ -287,7 +287,7 @@ impl<'a, 'tx: 'a> CursorApi for CursorRwImpl<'a, 'tx> {
   }
 }
 
-impl<'a, 'tx: 'a> CursorRwApi for CursorRwImpl<'a, 'tx> {
+impl<'tx: 'a, 'a> CursorRwApi for CursorRwImpl<'tx, 'a> {
   fn delete(&mut self) -> crate::Result<()> {
     self.c.api_delete()
   }

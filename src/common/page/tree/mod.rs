@@ -16,7 +16,7 @@ pub trait TreePage<'tx>: Deref<Target = PageHeader> + DerefMut {
   unsafe fn page_ptr(&self) -> *mut u8;
   fn page_element_size(&self) -> usize;
 
-  fn iter<'a>(&'a self) -> TreeIterator<'a, 'tx, Self>
+  fn iter<'a>(&'a self) -> TreeIterator<'tx, 'a, Self>
   where
     Self: Sized,
   {
@@ -72,14 +72,14 @@ pub trait TreePage<'tx>: Deref<Target = PageHeader> + DerefMut {
   }
 }
 
-pub struct TreeIterator<'a, 'tx, T: TreePage<'tx>> {
+pub struct TreeIterator<'tx, 'a, T: TreePage<'tx>> {
   page: &'a T,
   i: u16,
   p: PhantomData<&'tx [u8]>,
   unsend: PhantomUnsend,
 }
 
-impl<'a, 'tx, T: TreePage<'tx>> TreeIterator<'a, 'tx, T> {
+impl<'tx, 'a, T: TreePage<'tx>> TreeIterator<'tx, 'a, T> {
   pub fn new(t: &'a T) -> Self {
     TreeIterator {
       page: t,
@@ -90,7 +90,7 @@ impl<'a, 'tx, T: TreePage<'tx>> TreeIterator<'a, 'tx, T> {
   }
 }
 
-impl<'a, 'tx, T: TreePage<'tx>> Iterator for TreeIterator<'a, 'tx, T> {
+impl<'tx, 'a, T: TreePage<'tx>> Iterator for TreeIterator<'tx, 'a, T> {
   type Item = T::ElemRef;
 
   fn next(&mut self) -> Option<Self::Item> {

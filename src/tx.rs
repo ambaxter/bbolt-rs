@@ -140,7 +140,7 @@ pub trait TxApi<'tx>: TxCheck<'tx> {
   ///   Ok(())
   /// }
   /// ```
-  fn cursor<'a>(&'a self) -> CursorImpl<'a, 'tx>;
+  fn cursor<'a>(&'a self) -> CursorImpl<'tx, 'a>;
 
   /// Retrieves a copy of the current transaction statistics.
   fn stats(&self) -> Arc<TxStats>;
@@ -169,9 +169,9 @@ pub trait TxApi<'tx>: TxCheck<'tx> {
   ///   Ok(())
   /// }
   /// ```
-  fn bucket<'a, T: AsRef<[u8]>>(&'a self, name: T) -> Option<BucketImpl<'a, 'tx>>;
+  fn bucket<'a, T: AsRef<[u8]>>(&'a self, name: T) -> Option<BucketImpl<'tx, 'a>>;
 
-  fn bucket_path<'a, T: AsRef<[u8]>>(&'a self, names: &[T]) -> Option<BucketImpl<'a, 'tx>>;
+  fn bucket_path<'a, T: AsRef<[u8]>>(&'a self, names: &[T]) -> Option<BucketImpl<'tx, 'a>>;
 
   #[deprecated(since = "1.3.9", note = "please use `iter_*` methods instead")]
   /// Executes a function for each key/value pair in a bucket.
@@ -208,7 +208,7 @@ pub trait TxApi<'tx>: TxCheck<'tx> {
   ///   Ok(())
   /// }
   /// ```
-  fn for_each<'a, F: FnMut(&'a [u8], BucketImpl<'a, 'tx>) -> crate::Result<()>>(
+  fn for_each<'a, F: FnMut(&'a [u8], BucketImpl<'tx, 'a>) -> crate::Result<()>>(
     &self, f: F,
   ) -> crate::Result<()>
   where
@@ -242,7 +242,7 @@ pub trait TxApi<'tx>: TxCheck<'tx> {
   /// ```
   fn page(&self, id: PgId) -> Option<PageInfo>;
 
-  fn iter_buckets<'a>(&'a self) -> BucketIter<'a, 'tx>;
+  fn iter_buckets<'a>(&'a self) -> BucketIter<'tx, 'a>;
 }
 
 /// RW transaction API
@@ -278,11 +278,11 @@ pub trait TxRwRefApi<'tx>: TxApi<'tx> {
   ///   Ok(())
   /// }
   /// ```
-  fn bucket_mut<'a, T: AsRef<[u8]>>(&'a mut self, name: T) -> Option<BucketRwImpl<'a, 'tx>>;
+  fn bucket_mut<'a, T: AsRef<[u8]>>(&'a mut self, name: T) -> Option<BucketRwImpl<'tx, 'a>>;
 
   fn bucket_mut_path<'a, T: AsRef<[u8]>>(
     &'a mut self, names: &[T],
-  ) -> Option<BucketRwImpl<'a, 'tx>>;
+  ) -> Option<BucketRwImpl<'tx, 'a>>;
 
   /// Creates a new bucket.
   ///
@@ -311,7 +311,7 @@ pub trait TxRwRefApi<'tx>: TxApi<'tx> {
   /// ```
   fn create_bucket<'a, T: AsRef<[u8]>>(
     &'a mut self, name: T,
-  ) -> crate::Result<BucketRwImpl<'a, 'tx>>;
+  ) -> crate::Result<BucketRwImpl<'tx, 'a>>;
 
   /// Creates a new bucket if it doesn't already exist.
   ///
@@ -340,11 +340,11 @@ pub trait TxRwRefApi<'tx>: TxApi<'tx> {
   /// ```
   fn create_bucket_if_not_exists<'a, T: AsRef<[u8]>>(
     &'a mut self, name: T,
-  ) -> crate::Result<BucketRwImpl<'a, 'tx>>;
+  ) -> crate::Result<BucketRwImpl<'tx, 'a>>;
 
   fn create_bucket_path<'a, T: AsRef<[u8]>>(
     &'a mut self, names: &[T],
-  ) -> crate::Result<BucketRwImpl<'a, 'tx>>;
+  ) -> crate::Result<BucketRwImpl<'tx, 'a>>;
 
   /// DeleteBucket deletes a bucket.
   /// Returns an error if the bucket cannot be found or if the key represents a non-bucket value.
@@ -398,7 +398,7 @@ pub trait TxRwRefApi<'tx>: TxApi<'tx> {
   /// ```
   fn on_commit<F: FnMut() + 'tx>(&mut self, f: F);
 
-  fn iter_mut_buckets<'a>(&'a mut self) -> BucketIterMut<'a, 'tx>;
+  fn iter_mut_buckets<'a>(&'a mut self) -> BucketIterMut<'tx, 'a>;
 }
 
 /// RW transaction API + Commit
@@ -718,12 +718,12 @@ impl Debug for TxStats {
   }
 }
 
-pub(crate) enum AnyPage<'a, 'tx: 'a> {
+pub(crate) enum AnyPage<'tx: 'a, 'a> {
   Ref(RefPage<'tx>),
   Pending(RefPage<'a>),
 }
 
-impl<'a, 'tx: 'a> Deref for AnyPage<'tx, 'a> {
+impl<'tx: 'a, 'a> Deref for AnyPage<'tx, 'a> {
   type Target = RefPage<'a>;
 
   #[inline]
@@ -772,7 +772,7 @@ pub(crate) trait TxIApi<'tx> {
 
   fn mem_page(self, id: PgId) -> RefPage<'tx>;
 
-  fn any_page<'a>(&'a self, id: PgId) -> AnyPage<'a, 'tx>;
+  fn any_page<'a>(&'a self, id: PgId) -> AnyPage<'tx, 'a>;
 
   /// See [TxApi::id]
   fn api_id(self) -> TxId;
@@ -794,7 +794,7 @@ pub(crate) trait TxIApi<'tx> {
   fn api_bucket_path<T: AsRef<[u8]>>(self, names: &[T]) -> Option<BucketCell<'tx>>;
 
   /// See [TxApi::for_each]
-  fn api_for_each<'a, F: FnMut(&'a [u8], BucketImpl<'a, 'tx>) -> crate::Result<()>>(
+  fn api_for_each<'a, F: FnMut(&'a [u8], BucketImpl<'tx, 'a>) -> crate::Result<()>>(
     &self, f: F,
   ) -> crate::Result<()>
   where
@@ -922,7 +922,7 @@ impl<'tx> TxIApi<'tx> for TxCell<'tx> {
     self.split_r().db.page(id)
   }
 
-  fn any_page<'a>(&'a self, id: PgId) -> AnyPage<'a, 'tx> {
+  fn any_page<'a>(&'a self, id: PgId) -> AnyPage<'tx, 'a> {
     if let Some(tx) = self.split_ow().as_ref() {
       if let Some(page) = tx.pages.get(&id).map(|p| p.as_ref()) {
         page.fast_check(id);
@@ -982,7 +982,7 @@ impl<'tx> TxIApi<'tx> for TxCell<'tx> {
   }
 
   /// See [TxApi::for_each]
-  fn api_for_each<'a, F: FnMut(&'a [u8], BucketImpl<'a, 'tx>) -> crate::Result<()>>(
+  fn api_for_each<'a, F: FnMut(&'a [u8], BucketImpl<'tx, 'a>) -> crate::Result<()>>(
     &self, mut f: F,
   ) -> crate::Result<()>
   where
@@ -1306,7 +1306,7 @@ impl<'tx> TxApi<'tx> for TxImpl<'tx> {
     false
   }
 
-  fn cursor<'a>(&'a self) -> CursorImpl<'a, 'tx> {
+  fn cursor<'a>(&'a self) -> CursorImpl<'tx, 'a> {
     self.tx.api_cursor().into()
   }
 
@@ -1314,15 +1314,15 @@ impl<'tx> TxApi<'tx> for TxImpl<'tx> {
     self.tx.api_stats()
   }
 
-  fn bucket<'a, T: AsRef<[u8]>>(&'a self, name: T) -> Option<BucketImpl<'a, 'tx>> {
+  fn bucket<'a, T: AsRef<[u8]>>(&'a self, name: T) -> Option<BucketImpl<'tx, 'a>> {
     self.tx.api_bucket(name.as_ref()).map(BucketImpl::from)
   }
 
-  fn bucket_path<'a, T: AsRef<[u8]>>(&'a self, names: &[T]) -> Option<BucketImpl<'a, 'tx>> {
+  fn bucket_path<'a, T: AsRef<[u8]>>(&'a self, names: &[T]) -> Option<BucketImpl<'tx, 'a>> {
     self.tx.api_bucket_path(names).map(BucketImpl::from)
   }
 
-  fn for_each<'a, F: FnMut(&'a [u8], BucketImpl<'a, 'tx>) -> crate::Result<()>>(
+  fn for_each<'a, F: FnMut(&'a [u8], BucketImpl<'tx, 'a>) -> crate::Result<()>>(
     &self, f: F,
   ) -> crate::Result<()>
   where
@@ -1335,7 +1335,7 @@ impl<'tx> TxApi<'tx> for TxImpl<'tx> {
     self.tx.api_page(id)
   }
 
-  fn iter_buckets<'a>(&'a self) -> BucketIter<'a, 'tx> {
+  fn iter_buckets<'a>(&'a self) -> BucketIter<'tx, 'a> {
     BucketIter::new(self.tx.api_cursor())
   }
 }
@@ -1361,7 +1361,7 @@ impl<'tx> TxApi<'tx> for TxRef<'tx> {
     false
   }
 
-  fn cursor<'a>(&'a self) -> CursorImpl<'a, 'tx> {
+  fn cursor<'a>(&'a self) -> CursorImpl<'tx, 'a> {
     self.tx.api_cursor().into()
   }
 
@@ -1369,15 +1369,15 @@ impl<'tx> TxApi<'tx> for TxRef<'tx> {
     self.tx.api_stats()
   }
 
-  fn bucket<'a, T: AsRef<[u8]>>(&'a self, name: T) -> Option<BucketImpl<'a, 'tx>> {
+  fn bucket<'a, T: AsRef<[u8]>>(&'a self, name: T) -> Option<BucketImpl<'tx, 'a>> {
     self.tx.api_bucket(name.as_ref()).map(BucketImpl::from)
   }
 
-  fn bucket_path<'a, T: AsRef<[u8]>>(&'a self, names: &[T]) -> Option<BucketImpl<'a, 'tx>> {
+  fn bucket_path<'a, T: AsRef<[u8]>>(&'a self, names: &[T]) -> Option<BucketImpl<'tx, 'a>> {
     self.tx.api_bucket_path(names).map(BucketImpl::from)
   }
 
-  fn for_each<'a, F: FnMut(&'a [u8], BucketImpl<'a, 'tx>) -> crate::Result<()>>(
+  fn for_each<'a, F: FnMut(&'a [u8], BucketImpl<'tx, 'a>) -> crate::Result<()>>(
     &self, f: F,
   ) -> crate::Result<()>
   where
@@ -1390,7 +1390,7 @@ impl<'tx> TxApi<'tx> for TxRef<'tx> {
     self.tx.api_page(id)
   }
 
-  fn iter_buckets<'a>(&'a self) -> BucketIter<'a, 'tx> {
+  fn iter_buckets<'a>(&'a self) -> BucketIter<'tx, 'a> {
     BucketIter::new(self.tx.api_cursor())
   }
 }
@@ -1527,7 +1527,7 @@ impl<'tx> TxApi<'tx> for TxRwImpl<'tx> {
     true
   }
 
-  fn cursor<'a>(&'a self) -> CursorImpl<'a, 'tx> {
+  fn cursor<'a>(&'a self) -> CursorImpl<'tx, 'a> {
     self.tx.api_cursor().into()
   }
 
@@ -1535,15 +1535,15 @@ impl<'tx> TxApi<'tx> for TxRwImpl<'tx> {
     self.tx.api_stats()
   }
 
-  fn bucket<'a, T: AsRef<[u8]>>(&'a self, name: T) -> Option<BucketImpl<'a, 'tx>> {
+  fn bucket<'a, T: AsRef<[u8]>>(&'a self, name: T) -> Option<BucketImpl<'tx, 'a>> {
     self.tx.api_bucket(name.as_ref()).map(BucketImpl::from)
   }
 
-  fn bucket_path<'a, T: AsRef<[u8]>>(&'a self, names: &[T]) -> Option<BucketImpl<'a, 'tx>> {
+  fn bucket_path<'a, T: AsRef<[u8]>>(&'a self, names: &[T]) -> Option<BucketImpl<'tx, 'a>> {
     self.tx.api_bucket_path(names).map(BucketImpl::from)
   }
 
-  fn for_each<'a, F: FnMut(&'a [u8], BucketImpl<'a, 'tx>) -> crate::Result<()>>(
+  fn for_each<'a, F: FnMut(&'a [u8], BucketImpl<'tx, 'a>) -> crate::Result<()>>(
     &self, f: F,
   ) -> crate::Result<()>
   where
@@ -1556,25 +1556,25 @@ impl<'tx> TxApi<'tx> for TxRwImpl<'tx> {
     self.tx.api_page(id)
   }
 
-  fn iter_buckets<'a>(&'a self) -> BucketIter<'a, 'tx> {
+  fn iter_buckets<'a>(&'a self) -> BucketIter<'tx, 'a> {
     BucketIter::new(self.tx.api_cursor())
   }
 }
 
 impl<'tx> TxRwRefApi<'tx> for TxRwImpl<'tx> {
-  fn bucket_mut<'a, T: AsRef<[u8]>>(&'a mut self, name: T) -> Option<BucketRwImpl<'a, 'tx>> {
+  fn bucket_mut<'a, T: AsRef<[u8]>>(&'a mut self, name: T) -> Option<BucketRwImpl<'tx, 'a>> {
     self.tx.api_bucket(name.as_ref()).map(BucketRwImpl::from)
   }
 
   fn bucket_mut_path<'a, T: AsRef<[u8]>>(
     &'a mut self, names: &[T],
-  ) -> Option<BucketRwImpl<'a, 'tx>> {
+  ) -> Option<BucketRwImpl<'tx, 'a>> {
     self.tx.api_bucket_path(names).map(BucketRwImpl::from)
   }
 
   fn create_bucket<'a, T: AsRef<[u8]>>(
     &'a mut self, name: T,
-  ) -> crate::Result<BucketRwImpl<'a, 'tx>> {
+  ) -> crate::Result<BucketRwImpl<'tx, 'a>> {
     self
       .tx
       .api_create_bucket(name.as_ref())
@@ -1583,7 +1583,7 @@ impl<'tx> TxRwRefApi<'tx> for TxRwImpl<'tx> {
 
   fn create_bucket_if_not_exists<'a, T: AsRef<[u8]>>(
     &'a mut self, name: T,
-  ) -> crate::Result<BucketRwImpl<'a, 'tx>> {
+  ) -> crate::Result<BucketRwImpl<'tx, 'a>> {
     self
       .tx
       .api_create_bucket_if_not_exist(name.as_ref())
@@ -1592,7 +1592,7 @@ impl<'tx> TxRwRefApi<'tx> for TxRwImpl<'tx> {
 
   fn create_bucket_path<'a, T: AsRef<[u8]>>(
     &'a mut self, names: &[T],
-  ) -> crate::Result<BucketRwImpl<'a, 'tx>> {
+  ) -> crate::Result<BucketRwImpl<'tx, 'a>> {
     self
       .tx
       .api_create_bucket_path(names)
@@ -1607,7 +1607,7 @@ impl<'tx> TxRwRefApi<'tx> for TxRwImpl<'tx> {
     self.tx.api_on_commit(Box::new(f))
   }
 
-  fn iter_mut_buckets<'a>(&'a mut self) -> BucketIterMut<'a, 'tx> {
+  fn iter_mut_buckets<'a>(&'a mut self) -> BucketIterMut<'tx, 'a> {
     BucketIterMut::new(self.tx.api_cursor())
   }
 }
@@ -1740,7 +1740,7 @@ impl<'tx> TxApi<'tx> for TxRwRef<'tx> {
     true
   }
 
-  fn cursor<'a>(&'a self) -> CursorImpl<'a, 'tx> {
+  fn cursor<'a>(&'a self) -> CursorImpl<'tx, 'a> {
     self.tx.api_cursor().into()
   }
 
@@ -1748,15 +1748,15 @@ impl<'tx> TxApi<'tx> for TxRwRef<'tx> {
     self.tx.api_stats()
   }
 
-  fn bucket<'a, T: AsRef<[u8]>>(&'a self, name: T) -> Option<BucketImpl<'a, 'tx>> {
+  fn bucket<'a, T: AsRef<[u8]>>(&'a self, name: T) -> Option<BucketImpl<'tx, 'a>> {
     self.tx.api_bucket(name.as_ref()).map(BucketImpl::from)
   }
 
-  fn bucket_path<'a, T: AsRef<[u8]>>(&'a self, names: &[T]) -> Option<BucketImpl<'a, 'tx>> {
+  fn bucket_path<'a, T: AsRef<[u8]>>(&'a self, names: &[T]) -> Option<BucketImpl<'tx, 'a>> {
     self.tx.api_bucket_path(names).map(BucketImpl::from)
   }
 
-  fn for_each<'a, F: FnMut(&'a [u8], BucketImpl<'a, 'tx>) -> crate::Result<()>>(
+  fn for_each<'a, F: FnMut(&'a [u8], BucketImpl<'tx, 'a>) -> crate::Result<()>>(
     &self, f: F,
   ) -> crate::Result<()>
   where
@@ -1769,25 +1769,25 @@ impl<'tx> TxApi<'tx> for TxRwRef<'tx> {
     self.tx.api_page(id)
   }
 
-  fn iter_buckets<'a>(&'a self) -> BucketIter<'a, 'tx> {
+  fn iter_buckets<'a>(&'a self) -> BucketIter<'tx, 'a> {
     BucketIter::new(self.tx.api_cursor())
   }
 }
 
 impl<'tx> TxRwRefApi<'tx> for TxRwRef<'tx> {
-  fn bucket_mut<'a, T: AsRef<[u8]>>(&'a mut self, name: T) -> Option<BucketRwImpl<'a, 'tx>> {
+  fn bucket_mut<'a, T: AsRef<[u8]>>(&'a mut self, name: T) -> Option<BucketRwImpl<'tx, 'a>> {
     self.tx.api_bucket(name.as_ref()).map(BucketRwImpl::from)
   }
 
   fn bucket_mut_path<'a, T: AsRef<[u8]>>(
     &'a mut self, names: &[T],
-  ) -> Option<BucketRwImpl<'a, 'tx>> {
+  ) -> Option<BucketRwImpl<'tx, 'a>> {
     self.tx.api_bucket_path(names).map(BucketRwImpl::from)
   }
 
   fn create_bucket<'a, T: AsRef<[u8]>>(
     &'a mut self, name: T,
-  ) -> crate::Result<BucketRwImpl<'a, 'tx>> {
+  ) -> crate::Result<BucketRwImpl<'tx, 'a>> {
     self
       .tx
       .api_create_bucket(name.as_ref())
@@ -1796,7 +1796,7 @@ impl<'tx> TxRwRefApi<'tx> for TxRwRef<'tx> {
 
   fn create_bucket_if_not_exists<'a, T: AsRef<[u8]>>(
     &'a mut self, name: T,
-  ) -> crate::Result<BucketRwImpl<'a, 'tx>> {
+  ) -> crate::Result<BucketRwImpl<'tx, 'a>> {
     self
       .tx
       .api_create_bucket_if_not_exist(name.as_ref())
@@ -1805,7 +1805,7 @@ impl<'tx> TxRwRefApi<'tx> for TxRwRef<'tx> {
 
   fn create_bucket_path<'a, T: AsRef<[u8]>>(
     &'a mut self, names: &[T],
-  ) -> crate::Result<BucketRwImpl<'a, 'tx>> {
+  ) -> crate::Result<BucketRwImpl<'tx, 'a>> {
     self
       .tx
       .api_create_bucket_path(names)
@@ -1820,7 +1820,7 @@ impl<'tx> TxRwRefApi<'tx> for TxRwRef<'tx> {
     self.tx.api_on_commit(Box::new(f))
   }
 
-  fn iter_mut_buckets<'a>(&'a mut self) -> BucketIterMut<'a, 'tx> {
+  fn iter_mut_buckets<'a>(&'a mut self) -> BucketIterMut<'tx, 'a> {
     BucketIterMut::new(self.tx.api_cursor())
   }
 }
