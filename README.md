@@ -25,7 +25,7 @@ Features:
 * Miri tested to prevent memory errors in unsafe blocks
 * Simple and straightforward public APIs
 
-[Check out the documentation!!](https://docs.rs/crate/bbolt-rs/latest)
+[Check out the documentation!!](https://docs.rs/bbolt-rs/latest/bbolt_rs/)
 
 Currently not supported:
 * Tx.copy
