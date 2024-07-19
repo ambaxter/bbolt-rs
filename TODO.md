@@ -3,26 +3,17 @@ bbolt-rs
 
 # TODO
 
-## 1.3.9 Release
-- [x] 1.3.9 updates
-- [x] Retire RwSlice
-- [x] Remove unused RefPool
+## 1.3.10
+- [ ] 1.3.10 updates
+- [ ] We have at least 3 different functions to write inodes
+- [ ] PGO + Bolt instructions, build system
+- [ ] Quick Check Analog
 - [ ] Copy file
 - [ ] test_tx_check_read_only
 - [ ] test_tx_copy_file
 - [ ] test_tx_copy_file_error_meta
 - [ ] test_tx_copy_file_error_normal
 - [ ] example_tx_copy_file
-- [ ] compact.go
-- [ ] Refactor TxCell away from SplitRef
-- [ ] Refactor BucketCell away from SplitRef
-- [ ] Leaf key experiment
-
-## 1.3.10
-- [ ] 1.3.10 updates
-- [ ] We have at least 3 different functions to write inodes
-- [ ] PGO + Bolt instructions, build system
-- [ ] Quick Check Analog
 
 ## General
 - [ ] Logging capabilities
