@@ -109,7 +109,7 @@ where
   ///   Ok(())
   /// }
   /// ```
-  fn cursor<'a>(&'a self) -> CursorImpl<'a, 'tx>;
+  fn cursor<'a>(&'a self) -> CursorImpl<'tx, 'a>;
 
   /// Retrieves a nested bucket by name.
   ///
@@ -138,7 +138,7 @@ where
   ///   Ok(())
   /// }
   /// ```
-  fn bucket<'a, T: AsRef<[u8]>>(&'a self, name: T) -> Option<BucketImpl<'a, 'tx>>;
+  fn bucket<'a, T: AsRef<[u8]>>(&'a self, name: T) -> Option<BucketImpl<'tx, 'a>>;
 
   /// Retrieves the value for a key in the bucket.
   ///
@@ -296,9 +296,9 @@ where
   /// ```
   fn stats(&self) -> BucketStats;
 
-  fn iter_entries<'a>(&'a self) -> EntryIter<'a, 'tx>;
+  fn iter_entries<'a>(&'a self) -> EntryIter<'tx, 'a>;
 
-  fn iter_buckets<'a>(&'a self) -> BucketIter<'a, 'tx>;
+  fn iter_buckets<'a>(&'a self) -> BucketIter<'tx, 'a>;
 }
 
 /// RW Bucket API
@@ -329,7 +329,7 @@ pub trait BucketRwApi<'tx>: BucketApi<'tx> {
   ///   Ok(())
   /// }
   /// ```
-  fn bucket_mut<'a, T: AsRef<[u8]>>(&'a mut self, name: T) -> Option<BucketRwImpl<'a, 'tx>>;
+  fn bucket_mut<'a, T: AsRef<[u8]>>(&'a mut self, name: T) -> Option<BucketRwImpl<'tx, 'a>>;
 
   /// Creates a new bucket at the given key and returns the new bucket.
   ///
@@ -358,7 +358,7 @@ pub trait BucketRwApi<'tx>: BucketApi<'tx> {
   /// ```
   fn create_bucket<'a, T: AsRef<[u8]>>(
     &'a mut self, key: T,
-  ) -> crate::Result<BucketRwImpl<'a, 'tx>>;
+  ) -> crate::Result<BucketRwImpl<'tx, 'a>>;
 
   /// CreateBucketIfNotExists creates a new bucket if it doesn't already exist and returns a reference to it.
   ///
@@ -387,7 +387,7 @@ pub trait BucketRwApi<'tx>: BucketApi<'tx> {
   /// ```
   fn create_bucket_if_not_exists<'a, T: AsRef<[u8]>>(
     &'a mut self, key: T,
-  ) -> crate::Result<BucketRwImpl<'a, 'tx>>;
+  ) -> crate::Result<BucketRwImpl<'tx, 'a>>;
 
   /// Cursor creates a cursor associated with the bucket.
   ///
@@ -424,7 +424,7 @@ pub trait BucketRwApi<'tx>: BucketApi<'tx> {
   ///   Ok(())
   /// }
   /// ```
-  fn cursor_mut<'a>(&'a self) -> CursorRwImpl<'a, 'tx>;
+  fn cursor_mut<'a>(&'a self) -> CursorRwImpl<'tx, 'a>;
 
   /// Deletes a bucket at the given key.
   ///
@@ -601,16 +601,16 @@ pub trait BucketRwApi<'tx>: BucketApi<'tx> {
   /// ```
   fn set_fill_percent(&mut self, fill_percent: f64);
 
-  fn iter_mut_buckets<'a>(&'a mut self) -> BucketIterMut<'a, 'tx>;
+  fn iter_mut_buckets<'a>(&'a mut self) -> BucketIterMut<'tx, 'a>;
 }
 
 /// Read-only Bucket
-pub struct BucketImpl<'p, 'tx: 'p> {
+pub struct BucketImpl<'tx: 'p, 'p> {
   pub(crate) b: BucketCell<'tx>,
   p: PhantomData<&'p u8>,
 }
 
-impl<'p, 'tx> From<BucketCell<'tx>> for BucketImpl<'p, 'tx> {
+impl<'tx, 'p> From<BucketCell<'tx>> for BucketImpl<'tx, 'p> {
   fn from(value: BucketCell<'tx>) -> Self {
     BucketImpl {
       b: value,
@@ -619,7 +619,7 @@ impl<'p, 'tx> From<BucketCell<'tx>> for BucketImpl<'p, 'tx> {
   }
 }
 
-impl<'p, 'tx> BucketApi<'tx> for BucketImpl<'p, 'tx> {
+impl<'tx, 'p> BucketApi<'tx> for BucketImpl<'tx, 'p> {
   fn root(&self) -> PgId {
     self.b.root()
   }
@@ -628,11 +628,11 @@ impl<'p, 'tx> BucketApi<'tx> for BucketImpl<'p, 'tx> {
     self.b.is_writeable()
   }
 
-  fn cursor<'a>(&'a self) -> CursorImpl<'a, 'tx> {
+  fn cursor<'a>(&'a self) -> CursorImpl<'tx, 'a> {
     InnerCursor::new(self.b, self.b.tx().bump()).into()
   }
 
-  fn bucket<'a, T: AsRef<[u8]>>(&'a self, name: T) -> Option<BucketImpl<'a, 'tx>> {
+  fn bucket<'a, T: AsRef<[u8]>>(&'a self, name: T) -> Option<BucketImpl<'tx, 'a>> {
     self.b.api_bucket(name.as_ref()).map(BucketImpl::from)
   }
 
@@ -658,22 +658,22 @@ impl<'p, 'tx> BucketApi<'tx> for BucketImpl<'p, 'tx> {
     self.b.api_stats()
   }
 
-  fn iter_entries<'a>(&'a self) -> EntryIter<'a, 'tx> {
+  fn iter_entries<'a>(&'a self) -> EntryIter<'tx, 'a> {
     EntryIter::new(self.b.i_cursor())
   }
 
-  fn iter_buckets<'a>(&'a self) -> BucketIter<'a, 'tx> {
+  fn iter_buckets<'a>(&'a self) -> BucketIter<'tx, 'a> {
     BucketIter::new(self.b.i_cursor())
   }
 }
 
 /// Read/Write Bucket
-pub struct BucketRwImpl<'p, 'tx: 'p> {
+pub struct BucketRwImpl<'tx: 'p, 'p> {
   b: BucketCell<'tx>,
   p: PhantomData<&'p u8>,
 }
 
-impl<'p, 'tx> From<BucketCell<'tx>> for BucketRwImpl<'p, 'tx> {
+impl<'tx, 'p> From<BucketCell<'tx>> for BucketRwImpl<'tx, 'p> {
   fn from(value: BucketCell<'tx>) -> Self {
     BucketRwImpl {
       b: value,
@@ -682,7 +682,7 @@ impl<'p, 'tx> From<BucketCell<'tx>> for BucketRwImpl<'p, 'tx> {
   }
 }
 
-impl<'p, 'tx> BucketApi<'tx> for BucketRwImpl<'p, 'tx> {
+impl<'tx, 'p> BucketApi<'tx> for BucketRwImpl<'tx, 'p> {
   fn root(&self) -> PgId {
     self.b.root()
   }
@@ -691,11 +691,11 @@ impl<'p, 'tx> BucketApi<'tx> for BucketRwImpl<'p, 'tx> {
     self.b.is_writeable()
   }
 
-  fn cursor<'a>(&'a self) -> CursorImpl<'a, 'tx> {
+  fn cursor<'a>(&'a self) -> CursorImpl<'tx, 'a> {
     InnerCursor::new(self.b, self.b.tx().bump()).into()
   }
 
-  fn bucket<'a, T: AsRef<[u8]>>(&'a self, name: T) -> Option<BucketImpl<'a, 'tx>> {
+  fn bucket<'a, T: AsRef<[u8]>>(&'a self, name: T) -> Option<BucketImpl<'tx, 'a>> {
     self.b.api_bucket(name.as_ref()).map(BucketImpl::from)
   }
 
@@ -721,23 +721,23 @@ impl<'p, 'tx> BucketApi<'tx> for BucketRwImpl<'p, 'tx> {
     self.b.api_stats()
   }
 
-  fn iter_entries<'a>(&'a self) -> EntryIter<'a, 'tx> {
+  fn iter_entries<'a>(&'a self) -> EntryIter<'tx, 'a> {
     EntryIter::new(self.b.i_cursor())
   }
 
-  fn iter_buckets<'a>(&'a self) -> BucketIter<'a, 'tx> {
+  fn iter_buckets<'a>(&'a self) -> BucketIter<'tx, 'a> {
     BucketIter::new(self.b.i_cursor())
   }
 }
 
-impl<'p, 'tx> BucketRwApi<'tx> for BucketRwImpl<'p, 'tx> {
-  fn bucket_mut<'a, T: AsRef<[u8]>>(&'a mut self, name: T) -> Option<BucketRwImpl<'a, 'tx>> {
+impl<'tx, 'p> BucketRwApi<'tx> for BucketRwImpl<'tx, 'p> {
+  fn bucket_mut<'a, T: AsRef<[u8]>>(&'a mut self, name: T) -> Option<BucketRwImpl<'tx, 'a>> {
     self.b.api_bucket(name.as_ref()).map(BucketRwImpl::from)
   }
 
   fn create_bucket<'a, T: AsRef<[u8]>>(
     &'a mut self, key: T,
-  ) -> crate::Result<BucketRwImpl<'a, 'tx>> {
+  ) -> crate::Result<BucketRwImpl<'tx, 'a>> {
     self
       .b
       .api_create_bucket(key.as_ref())
@@ -746,14 +746,14 @@ impl<'p, 'tx> BucketRwApi<'tx> for BucketRwImpl<'p, 'tx> {
 
   fn create_bucket_if_not_exists<'a, T: AsRef<[u8]>>(
     &'a mut self, key: T,
-  ) -> crate::Result<BucketRwImpl<'a, 'tx>> {
+  ) -> crate::Result<BucketRwImpl<'tx, 'a>> {
     self
       .b
       .api_create_bucket_if_not_exists(key.as_ref())
       .map(BucketRwImpl::from)
   }
 
-  fn cursor_mut<'a>(&'a self) -> CursorRwImpl<'a, 'tx> {
+  fn cursor_mut<'a>(&'a self) -> CursorRwImpl<'tx, 'a> {
     CursorRwImpl::new(InnerCursor::new(self.b, self.b.tx().bump()))
   }
 
@@ -782,7 +782,7 @@ impl<'p, 'tx> BucketRwApi<'tx> for BucketRwImpl<'p, 'tx> {
     self.b.cell.borrow_mut().w.as_mut().unwrap().fill_percent = fill_percent;
   }
 
-  fn iter_mut_buckets<'a>(&'a mut self) -> BucketIterMut<'a, 'tx> {
+  fn iter_mut_buckets<'a>(&'a mut self) -> BucketIterMut<'tx, 'a> {
     BucketIterMut::new(self.b.i_cursor())
   }
 }
@@ -951,7 +951,7 @@ pub(crate) trait BucketIApi<'tx> {
   /// See [BucketApi::stats]
   fn api_stats(self) -> BucketStats;
 
-  fn into_impl<'a>(self) -> BucketImpl<'a, 'tx>;
+  fn into_impl<'a>(self) -> BucketImpl<'tx, 'a>;
 }
 
 pub(crate) trait BucketRwIApi<'tx>: BucketIApi<'tx> {
@@ -1436,7 +1436,7 @@ impl<'tx> BucketIApi<'tx> for BucketCell<'tx> {
     s
   }
 
-  fn into_impl<'a>(self) -> BucketImpl<'a, 'tx> {
+  fn into_impl<'a>(self) -> BucketImpl<'tx, 'a> {
     self.into()
   }
 }

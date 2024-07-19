@@ -5,14 +5,14 @@ use crate::tx::TxIApi;
 use crate::{BucketApi, BucketImpl, BucketRwImpl, TxImpl, TxRef, TxRwImpl, TxRwRef};
 use std::marker::PhantomData;
 
-struct KvIter<'p, 'tx: 'p> {
+struct KvIter<'tx: 'p, 'p> {
   c: InnerCursor<'tx>,
   started: bool,
   p: PhantomData<&'p u8>,
 }
 
-impl<'p, 'tx: 'p> KvIter<'p, 'tx> {
-  pub(crate) fn new(c: InnerCursor<'tx>) -> KvIter<'p, 'tx> {
+impl<'tx: 'p, 'p> KvIter<'tx, 'p> {
+  pub(crate) fn new(c: InnerCursor<'tx>) -> KvIter<'tx, 'p> {
     KvIter {
       c,
       started: false,
@@ -21,7 +21,7 @@ impl<'p, 'tx: 'p> KvIter<'p, 'tx> {
   }
 }
 
-impl<'p, 'tx: 'p> Iterator for KvIter<'p, 'tx> {
+impl<'tx: 'p, 'p> Iterator for KvIter<'tx, 'p> {
   type Item = (&'p [u8], &'p [u8], u32);
 
   fn next(&mut self) -> Option<Self::Item> {
@@ -34,17 +34,17 @@ impl<'p, 'tx: 'p> Iterator for KvIter<'p, 'tx> {
   }
 }
 
-pub struct EntryIter<'p, 'tx: 'p> {
-  i: KvIter<'p, 'tx>,
+pub struct EntryIter<'tx: 'p, 'p> {
+  i: KvIter<'tx, 'p>,
 }
 
-impl<'p, 'tx: 'p> EntryIter<'p, 'tx> {
-  pub(crate) fn new(c: InnerCursor<'tx>) -> EntryIter<'p, 'tx> {
+impl<'tx: 'p, 'p> EntryIter<'tx, 'p> {
+  pub(crate) fn new(c: InnerCursor<'tx>) -> EntryIter<'tx, 'p> {
     EntryIter { i: KvIter::new(c) }
   }
 }
 
-impl<'p, 'tx: 'p> Iterator for EntryIter<'p, 'tx> {
+impl<'tx: 'p, 'p> Iterator for EntryIter<'tx, 'p> {
   type Item = (&'p [u8], &'p [u8]);
 
   fn next(&mut self) -> Option<Self::Item> {
@@ -57,18 +57,18 @@ impl<'p, 'tx: 'p> Iterator for EntryIter<'p, 'tx> {
   }
 }
 
-pub struct BucketIter<'p, 'tx: 'p> {
-  i: KvIter<'p, 'tx>,
+pub struct BucketIter<'tx: 'p, 'p> {
+  i: KvIter<'tx, 'p>,
 }
 
-impl<'p, 'tx: 'p> BucketIter<'p, 'tx> {
-  pub(crate) fn new(c: InnerCursor<'tx>) -> BucketIter<'p, 'tx> {
+impl<'tx: 'p, 'p> BucketIter<'tx, 'p> {
+  pub(crate) fn new(c: InnerCursor<'tx>) -> BucketIter<'tx, 'p> {
     BucketIter { i: KvIter::new(c) }
   }
 }
 
-impl<'p, 'tx: 'p> Iterator for BucketIter<'p, 'tx> {
-  type Item = (&'p [u8], BucketImpl<'p, 'tx>);
+impl<'tx: 'p, 'p> Iterator for BucketIter<'tx, 'p> {
+  type Item = (&'p [u8], BucketImpl<'tx, 'p>);
 
   fn next(&mut self) -> Option<Self::Item> {
     for (k, _, flags) in self.i.by_ref() {
@@ -81,54 +81,54 @@ impl<'p, 'tx: 'p> Iterator for BucketIter<'p, 'tx> {
   }
 }
 
-impl<'a, 'tx: 'a> IntoIterator for &'a TxImpl<'tx> {
-  type Item = (&'a [u8], BucketImpl<'a, 'tx>);
-  type IntoIter = BucketIter<'a, 'tx>;
+impl<'tx: 'a, 'a> IntoIterator for &'a TxImpl<'tx> {
+  type Item = (&'a [u8], BucketImpl<'tx, 'a>);
+  type IntoIter = BucketIter<'tx, 'a>;
 
   fn into_iter(self) -> Self::IntoIter {
     BucketIter::new(self.tx.api_cursor())
   }
 }
 
-impl<'a, 'tx: 'a> IntoIterator for &'a TxRwImpl<'tx> {
-  type Item = (&'a [u8], BucketImpl<'a, 'tx>);
-  type IntoIter = BucketIter<'a, 'tx>;
+impl<'tx: 'a, 'a> IntoIterator for &'a TxRwImpl<'tx> {
+  type Item = (&'a [u8], BucketImpl<'tx, 'a>);
+  type IntoIter = BucketIter<'tx, 'a>;
 
   fn into_iter(self) -> Self::IntoIter {
     BucketIter::new(self.tx.api_cursor())
   }
 }
 
-impl<'a, 'tx: 'a> IntoIterator for &'a TxRef<'tx> {
-  type Item = (&'a [u8], BucketImpl<'a, 'tx>);
-  type IntoIter = BucketIter<'a, 'tx>;
+impl<'tx: 'a, 'a> IntoIterator for &'a TxRef<'tx> {
+  type Item = (&'a [u8], BucketImpl<'tx, 'a>);
+  type IntoIter = BucketIter<'tx, 'a>;
 
   fn into_iter(self) -> Self::IntoIter {
     BucketIter::new(self.tx.api_cursor())
   }
 }
 
-impl<'a, 'tx: 'a> IntoIterator for &'a TxRwRef<'tx> {
-  type Item = (&'a [u8], BucketImpl<'a, 'tx>);
-  type IntoIter = BucketIter<'a, 'tx>;
+impl<'tx: 'a, 'a> IntoIterator for &'a TxRwRef<'tx> {
+  type Item = (&'a [u8], BucketImpl<'tx, 'a>);
+  type IntoIter = BucketIter<'tx, 'a>;
 
   fn into_iter(self) -> Self::IntoIter {
     BucketIter::new(self.tx.api_cursor())
   }
 }
 
-pub struct BucketIterMut<'p, 'tx: 'p> {
-  i: KvIter<'p, 'tx>,
+pub struct BucketIterMut<'tx: 'p, 'p> {
+  i: KvIter<'tx, 'p>,
 }
 
-impl<'p, 'tx: 'p> BucketIterMut<'p, 'tx> {
-  pub(crate) fn new(c: InnerCursor<'tx>) -> BucketIterMut<'p, 'tx> {
+impl<'tx: 'p, 'p> BucketIterMut<'tx, 'p> {
+  pub(crate) fn new(c: InnerCursor<'tx>) -> BucketIterMut<'tx, 'p> {
     BucketIterMut { i: KvIter::new(c) }
   }
 }
 
-impl<'p, 'tx: 'p> Iterator for BucketIterMut<'p, 'tx> {
-  type Item = (&'p [u8], BucketRwImpl<'p, 'tx>);
+impl<'tx: 'p, 'p> Iterator for BucketIterMut<'tx, 'p> {
+  type Item = (&'p [u8], BucketRwImpl<'tx, 'p>);
 
   fn next(&mut self) -> Option<Self::Item> {
     for (k, _, flags) in self.i.by_ref() {
@@ -141,41 +141,41 @@ impl<'p, 'tx: 'p> Iterator for BucketIterMut<'p, 'tx> {
   }
 }
 
-impl<'a, 'tx: 'a> IntoIterator for &'a mut TxRwImpl<'tx> {
-  type Item = (&'a [u8], BucketRwImpl<'a, 'tx>);
-  type IntoIter = BucketIterMut<'a, 'tx>;
+impl<'tx: 'a, 'a> IntoIterator for &'a mut TxRwImpl<'tx> {
+  type Item = (&'a [u8], BucketRwImpl<'tx, 'a>);
+  type IntoIter = BucketIterMut<'tx, 'a>;
 
   fn into_iter(self) -> Self::IntoIter {
     BucketIterMut::new(self.tx.api_cursor())
   }
 }
 
-impl<'a, 'tx: 'a> IntoIterator for &'a mut TxRwRef<'tx> {
-  type Item = (&'a [u8], BucketRwImpl<'a, 'tx>);
-  type IntoIter = BucketIterMut<'a, 'tx>;
+impl<'tx: 'a, 'a> IntoIterator for &'a mut TxRwRef<'tx> {
+  type Item = (&'a [u8], BucketRwImpl<'tx, 'a>);
+  type IntoIter = BucketIterMut<'tx, 'a>;
 
   fn into_iter(self) -> Self::IntoIter {
     BucketIterMut::new(self.tx.api_cursor())
   }
 }
 
-pub enum ValueBucket<'p, 'tx: 'p> {
+pub enum ValueBucket<'tx: 'p, 'p> {
   Value(&'p [u8]),
-  Bucket(BucketImpl<'p, 'tx>),
+  Bucket(BucketImpl<'tx, 'p>),
 }
 
-pub struct ValueBucketIter<'p, 'tx: 'p> {
-  i: KvIter<'p, 'tx>,
+pub struct ValueBucketIter<'tx: 'p, 'p> {
+  i: KvIter<'tx, 'p>,
 }
 
-impl<'p, 'tx: 'p> ValueBucketIter<'p, 'tx> {
-  pub(crate) fn new(c: InnerCursor<'tx>) -> ValueBucketIter<'p, 'tx> {
+impl<'tx: 'p, 'p> ValueBucketIter<'tx, 'p> {
+  pub(crate) fn new(c: InnerCursor<'tx>) -> ValueBucketIter<'tx, 'p> {
     ValueBucketIter { i: KvIter::new(c) }
   }
 }
 
-impl<'p, 'tx: 'p> Iterator for ValueBucketIter<'p, 'tx> {
-  type Item = (&'p [u8], ValueBucket<'p, 'tx>);
+impl<'tx: 'p, 'p> Iterator for ValueBucketIter<'tx, 'p> {
+  type Item = (&'p [u8], ValueBucket<'tx, 'p>);
 
   fn next(&mut self) -> Option<Self::Item> {
     if let Some((k, v, flags)) = self.i.by_ref().next() {
@@ -205,16 +205,16 @@ impl<'p> ValueBucketSeq<'p> {
   }
 }
 
-pub struct DbWalker<'p, 'tx: 'p> {
-  root_buckets: BucketIter<'p, 'tx>,
+pub struct DbWalker<'tx: 'p, 'p> {
+  root_buckets: BucketIter<'tx, 'p>,
   path: Vec<&'p [u8]>,
-  cursors: Vec<ValueBucketIter<'p, 'tx>>,
+  cursors: Vec<ValueBucketIter<'tx, 'p>>,
   bucket_seq: bool,
   p: PhantomData<&'p u8>,
 }
 
-impl<'p, 'tx: 'p> DbWalker<'p, 'tx> {
-  pub(crate) fn new(root_cursor: InnerCursor<'tx>) -> DbWalker<'p, 'tx> {
+impl<'tx: 'p, 'p> DbWalker<'tx, 'p> {
+  pub(crate) fn new(root_cursor: InnerCursor<'tx>) -> DbWalker<'tx, 'p> {
     DbWalker {
       root_buckets: BucketIter::new(root_cursor),
       path: Vec::new(),
@@ -233,7 +233,7 @@ impl<'p, 'tx: 'p> DbWalker<'p, 'tx> {
   }
 }
 
-impl<'p, 'tx: 'p> Iterator for DbWalker<'p, 'tx> {
+impl<'tx: 'p, 'p> Iterator for DbWalker<'tx, 'p> {
   type Item = (&'p [u8], ValueBucketSeq<'p>);
 
   fn next(&mut self) -> Option<Self::Item> {
