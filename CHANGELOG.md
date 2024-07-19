@@ -1,4 +1,4 @@
-# Upcoming 1.3.9
+# Upcoming
 
 ## Added
 
