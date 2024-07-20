@@ -502,6 +502,15 @@ impl<'tx> CursorIApi<'tx> for InnerCursor<'tx> {
         stack_exhausted = false;
         break;
       }
+      // If we've hit the beginning, we should stop moving the cursor,
+      // and stay at the first element, so that users can continue to
+      // iterate over the elements in reverse direction by calling `Next`.
+      // We should return nil in such case.
+      // Refer to https://github.com/etcd-io/bbolt/issues/733
+      if new_stack_depth == 1 {
+        self.i_first();
+        return None;
+      }
     }
     if stack_exhausted {
       self.stack.truncate(0);
@@ -529,7 +538,7 @@ impl<'tx> CursorIApi<'tx> for InnerCursor<'tx> {
     self.stack.push(elem_ref);
     self.i_last();
 
-    while !self.stack.is_empty() && self.stack.last().unwrap().count() == 0 {
+    while self.stack.len() > 1 && self.stack.last().unwrap().count() == 0 {
       self.i_prev();
     }
 
@@ -537,7 +546,7 @@ impl<'tx> CursorIApi<'tx> for InnerCursor<'tx> {
       return None;
     }
 
-    let (k, v, flags) = self.key_value().unwrap();
+    let (k, v, flags) = self.key_value()?;
 
     if flags & BUCKET_LEAF_FLAG != 0 {
       Some((k, None))
@@ -788,8 +797,126 @@ impl<'tx> CursorRwIApi<'tx> for InnerCursor<'tx> {
 mod tests {
   use crate::test_support::TestDb;
   use crate::{
-    BucketApi, BucketRwApi, CursorApi, CursorRwApi, DbApi, DbRwAPI, Error, TxApi, TxRwRefApi,
+    BucketApi, BucketImpl, BucketRwApi, BucketRwImpl, CursorApi, CursorRwApi, DbApi, DbRwAPI,
+    Error, TxApi, TxRwRefApi,
   };
+
+  #[test]
+  fn test_cursor_repeat_operations() -> crate::Result<()> {
+    let tests: Vec<(&'static str, fn(&BucketImpl) -> crate::Result<()>)> = vec![
+      (
+        "Repeat NextPrevNext",
+        test_repeat_cursor_operations_next_prev_next,
+      ),
+      (
+        "Repeat PrevNextPrev",
+        test_repeat_cursor_operations_prev_next_prev,
+      ),
+    ];
+    for (_name, f) in tests {
+      let mut db = TestDb::new()?;
+      let bucket_name = "data";
+      db.update(|mut tx| {
+        let mut b = tx.create_bucket_if_not_exists(bucket_name)?;
+        test_cursor_repeat_operations_prepare_data(&mut b)
+      })?;
+
+      db.view(|tx| {
+        let b = tx.bucket(bucket_name).unwrap();
+        f(&b)
+      })?;
+    }
+    Ok(())
+  }
+
+  fn test_cursor_repeat_operations_prepare_data(b: &mut BucketRwImpl) -> crate::Result<()> {
+    for i in 0..1000 {
+      let k = format!("{:05}", i);
+      b.put(&k, &k)?;
+    }
+    Ok(())
+  }
+
+  fn test_repeat_cursor_operations_next_prev_next(b: &BucketImpl) -> crate::Result<()> {
+    let mut c = b.cursor();
+    c.first();
+    let start_key = format!("{:05}", 2);
+    let (returned_key, _) = c.seek(&start_key).unwrap();
+    assert_eq!(start_key.as_bytes(), returned_key);
+
+    // Step 1: verify next
+    for i in 3..1000 {
+      let expected_key = format!("{:05}", i);
+      let (actual_key, _) = c.next().unwrap();
+      assert_eq!(expected_key.as_bytes(), actual_key);
+    }
+
+    // Once we've reached the end, it should always return nil no matter how many times we call `Next`.
+    for _ in 0..10 {
+      assert_eq!(None, c.next());
+    }
+
+    // Step 2: verify prev
+    for i in (0..999).rev() {
+      let expected_key = format!("{:05}", i);
+      let (actual_key, _) = c.prev().unwrap();
+      assert_eq!(expected_key.as_bytes(), actual_key);
+    }
+
+    // Once we've reached the beginning, it should always return nil no matter how many times we call `Prev`.
+    for _ in 0..10 {
+      assert_eq!(None, c.prev());
+    }
+
+    // Step 3: verify next again
+    for i in 1..1000 {
+      let expected_key = format!("{:05}", i);
+      let (actual_key, _) = c.next().unwrap();
+      assert_eq!(expected_key.as_bytes(), actual_key);
+    }
+
+    Ok(())
+  }
+
+  fn test_repeat_cursor_operations_prev_next_prev(b: &BucketImpl) -> crate::Result<()> {
+    let mut c = b.cursor();
+    let start_key = format!("{:05}", 998);
+    let (returned_key, _) = c.seek(&start_key).unwrap();
+    assert_eq!(start_key.as_bytes(), returned_key);
+
+    // Step 1: verify prev
+    for i in (0..998).rev() {
+      let expected_key = format!("{:05}", i);
+      let (actual_key, _) = c.prev().unwrap();
+      assert_eq!(expected_key.as_bytes(), actual_key);
+    }
+
+    // Once we've reached the beginning, it should always return nil no matter how many times we call `Prev`.
+    for _ in 0..10 {
+      assert_eq!(None, c.prev());
+    }
+
+    // Step 2: verify next
+    for i in 1..1000 {
+      let expected_key = format!("{:05}", i);
+      let (actual_key, _) = c.next().unwrap();
+      assert_eq!(expected_key.as_bytes(), actual_key);
+    }
+
+    // Once we've reached the end, it should always return nil no matter how many times we call `Next`.
+    for _ in 0..10 {
+      assert_eq!(None, c.next());
+    }
+
+    // Step 1: verify prev again
+    for i in (0..999).rev() {
+      let expected_key = format!("{:05}", i);
+      let (actual_key, _) = c.prev().unwrap();
+      assert_eq!(expected_key.as_bytes(), actual_key);
+    }
+
+    Ok(())
+  }
 
   /// Ensure that a Tx cursor can seek to the appropriate keys.
   #[test]
