@@ -11,7 +11,7 @@ I'm rather pleased with my work as I believe the public API I've created has sub
 * No resources from the transaction can escape the transaction.
 * You can't deadlock the database by opening up a RW transaction and then opening up a R transaction right afterwards.
 
-It also is interesting that, despite the increased memory usage, this code is about 40% faster in a synthetic large transaction than the equivalent Go code.
+It also is interesting that, despite the increased memory usage, this code is about 90% faster in a synthetic large transaction than the equivalent Go code.
 Further benchmarking is postponed until the database is fully feature complete and we can have a proper duel (in progress!).
 
 Lastly, I must express my eternal gratitude to the bbolt developers who have created such a simple and easy to understand project to learn from.

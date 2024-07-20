@@ -2,9 +2,12 @@
 
 ## Added
 
+
 ## Breaking Changes
 
 ## Changes
+* Up to date with BBolt 1.3.10
+
 
 # 1.3.9
 ## Added
