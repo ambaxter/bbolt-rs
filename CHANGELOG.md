@@ -1,13 +1,14 @@
 # Upcoming
 
 ## Added
-
+* Added Reverse Iterators
 
 ## Breaking Changes
 
 ## Changes
 * Up to date with BBolt 1.3.10
-
+* Testing includes QuickCheck analog
+* Corrects Leaf node being treated as a branch node in certain cases
 
 # 1.3.9
 ## Added

@@ -1961,8 +1961,8 @@ pub(crate) mod check {
 
       // Track every reachable page.
       let mut reachable = HashMap::new_in(bump);
-      reachable.insert(PgId(0), self.mem_page(PgId(0))); //meta 0
-      reachable.insert(PgId(1), self.mem_page(PgId(1))); // meta 1
+      reachable.insert(PgId(0), RefPage::new(std::ptr::null_mut())); //meta 0
+      reachable.insert(PgId(1), RefPage::new(std::ptr::null_mut())); // meta 1
       let freelist_pgid = self.meta().free_list();
       for i in 0..=self.mem_page(freelist_pgid).overflow {
         let pg_id = freelist_pgid + i as u64;

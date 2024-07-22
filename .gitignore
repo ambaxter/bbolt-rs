@@ -2,3 +2,4 @@
 Cargo.lock
 *.db
 *.svg
+*.bin

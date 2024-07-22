@@ -20,7 +20,7 @@ use crate::tx::{
 use crate::{Error, TxApi};
 use aligners::{alignment, AlignedBytes};
 use anyhow::anyhow;
-use fs4::FileExt;
+use fs4::fs_std::FileExt;
 use memmap2::{Advice, MmapOptions, MmapRaw};
 use monotonic_timer::{Guard, Timer};
 use parking_lot::{Mutex, MutexGuard, RwLock};
@@ -1697,7 +1697,12 @@ impl Bolt {
       file.lock_shared()?;
       file
     } else {
-      let mut file = fs::OpenOptions::new().write(true).read(true).open(path)?;
+      let mut file = fs::OpenOptions::new()
+        .write(true)
+        .read(true)
+        .create(true)
+        .truncate(false)
+        .open(path)?;
       file.lock_exclusive()?;
       if !path.exists() || path.metadata()?.len() == 0 {
         let page_size = bolt_options
