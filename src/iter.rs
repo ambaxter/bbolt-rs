@@ -3,19 +3,25 @@ use crate::common::page::tree::leaf::BUCKET_LEAF_FLAG;
 use crate::cursor::{CursorIApi, InnerCursor};
 use crate::tx::TxIApi;
 use crate::{BucketApi, BucketImpl, BucketRwImpl, TxImpl, TxRef, TxRwImpl, TxRwRef};
+use itertools::rev;
 use std::marker::PhantomData;
 
+#[derive(Clone)]
 struct KvIter<'tx: 'p, 'p> {
-  c: InnerCursor<'tx>,
-  started: bool,
+  next: InnerCursor<'tx>,
+  next_started: bool,
+  back: InnerCursor<'tx>,
+  back_started: bool,
   p: PhantomData<&'p u8>,
 }
 
 impl<'tx: 'p, 'p> KvIter<'tx, 'p> {
   pub(crate) fn new(c: InnerCursor<'tx>) -> KvIter<'tx, 'p> {
     KvIter {
-      c,
-      started: false,
+      next: c.clone(),
+      next_started: false,
+      back: c,
+      back_started: false,
       p: PhantomData,
     }
   }
@@ -25,15 +31,34 @@ impl<'tx: 'p, 'p> Iterator for KvIter<'tx, 'p> {
   type Item = (&'p [u8], &'p [u8], u32);
 
   fn next(&mut self) -> Option<Self::Item> {
-    if !self.started {
-      self.started = true;
-      self.c.i_first()
+    if self.next_started && self.back_started && self.next == self.back {
+      return None;
+    }
+    if self.next_started {
+      self.next.i_next()
     } else {
-      self.c.i_next()
+      self.next_started = true;
+      self.next.i_first()
     }
   }
 }
 
+impl<'tx: 'p, 'p> DoubleEndedIterator for KvIter<'tx, 'p> {
+  fn next_back(&mut self) -> Option<Self::Item> {
+    if self.next_started && self.back_started && self.next == self.back {
+      return None;
+    }
+    if self.back_started {
+      self.back.i_prev()
+    } else {
+      self.back_started = true;
+      self.back.api_last();
+      self.back.key_value()
+    }
+  }
+}
+
+#[derive(Clone)]
 pub struct EntryIter<'tx: 'p, 'p> {
   i: KvIter<'tx, 'p>,
 }
@@ -48,7 +73,18 @@ impl<'tx: 'p, 'p> Iterator for EntryIter<'tx, 'p> {
   type Item = (&'p [u8], &'p [u8]);
 
   fn next(&mut self) -> Option<Self::Item> {
-    for (k, v, flags) in self.i.by_ref() {
+    while let Some((k, v, flags)) = self.i.next() {
+      if flags & BUCKET_LEAF_FLAG == 0 {
+        return Some((k, v));
+      }
+    }
+    None
+  }
+}
+
+impl<'tx: 'p, 'p> DoubleEndedIterator for EntryIter<'tx, 'p> {
+  fn next_back(&mut self) -> Option<Self::Item> {
+    while let Some((k, v, flags)) = self.i.next_back() {
       if flags & BUCKET_LEAF_FLAG == 0 {
         return Some((k, v));
       }
@@ -71,9 +107,21 @@ impl<'tx: 'p, 'p> Iterator for BucketIter<'tx, 'p> {
   type Item = (&'p [u8], BucketImpl<'tx, 'p>);
 
   fn next(&mut self) -> Option<Self::Item> {
-    for (k, _, flags) in self.i.by_ref() {
+    while let Some((k, _, flags)) = self.i.next() {
       if flags & BUCKET_LEAF_FLAG != 0 {
-        let bucket = BucketImpl::from(self.i.c.bucket.api_bucket(k).unwrap());
+        let bucket = BucketImpl::from(self.i.next.bucket.api_bucket(k).unwrap());
+        return Some((k, bucket));
+      }
+    }
+    None
+  }
+}
+
+impl<'tx: 'p, 'p> DoubleEndedIterator for BucketIter<'tx, 'p> {
+  fn next_back(&mut self) -> Option<Self::Item> {
+    while let Some((k, _, flags)) = self.i.next_back() {
+      if flags & BUCKET_LEAF_FLAG != 0 {
+        let bucket = BucketImpl::from(self.i.back.bucket.api_bucket(k).unwrap());
         return Some((k, bucket));
       }
     }
@@ -131,9 +179,21 @@ impl<'tx: 'p, 'p> Iterator for BucketIterMut<'tx, 'p> {
   type Item = (&'p [u8], BucketRwImpl<'tx, 'p>);
 
   fn next(&mut self) -> Option<Self::Item> {
-    for (k, _, flags) in self.i.by_ref() {
+    while let Some((k, _, flags)) = self.i.next() {
       if flags & BUCKET_LEAF_FLAG != 0 {
-        let bucket = BucketRwImpl::from(self.i.c.bucket.api_bucket(k).unwrap());
+        let bucket = BucketRwImpl::from(self.i.next.bucket.api_bucket(k).unwrap());
+        return Some((k, bucket));
+      }
+    }
+    None
+  }
+}
+
+impl<'tx: 'p, 'p> DoubleEndedIterator for BucketIterMut<'tx, 'p> {
+  fn next_back(&mut self) -> Option<Self::Item> {
+    while let Some((k, _, flags)) = self.i.next_back() {
+      if flags & BUCKET_LEAF_FLAG != 0 {
+        let bucket = BucketRwImpl::from(self.i.back.bucket.api_bucket(k).unwrap());
         return Some((k, bucket));
       }
     }
@@ -178,11 +238,25 @@ impl<'tx: 'p, 'p> Iterator for ValueBucketIter<'tx, 'p> {
   type Item = (&'p [u8], ValueBucket<'tx, 'p>);
 
   fn next(&mut self) -> Option<Self::Item> {
-    if let Some((k, v, flags)) = self.i.by_ref().next() {
+    if let Some((k, v, flags)) = self.i.next() {
       return if flags & BUCKET_LEAF_FLAG == 0 {
         Some((k, ValueBucket::Value(v)))
       } else {
-        let bucket = BucketImpl::from(self.i.c.bucket.api_bucket(k).unwrap());
+        let bucket = BucketImpl::from(self.i.next.bucket.api_bucket(k).unwrap());
+        Some((k, ValueBucket::Bucket(bucket)))
+      };
+    }
+    None
+  }
+}
+
+impl<'tx: 'p, 'p> DoubleEndedIterator for ValueBucketIter<'tx, 'p> {
+  fn next_back(&mut self) -> Option<Self::Item> {
+    if let Some((k, v, flags)) = self.i.next_back() {
+      return if flags & BUCKET_LEAF_FLAG == 0 {
+        Some((k, ValueBucket::Value(v)))
+      } else {
+        let bucket = BucketImpl::from(self.i.back.bucket.api_bucket(k).unwrap());
         Some((k, ValueBucket::Bucket(bucket)))
       };
     }

@@ -317,7 +317,7 @@ pub(crate) trait CursorIApi<'tx>: Clone {
   fn api_last(&mut self) -> Option<(&'tx [u8], Option<&'tx [u8]>)>;
 
   /// i_last moves the cursor to the last leaf element under the last page in the stack.
-  fn i_last(&mut self);
+  fn i_last(&mut self) -> Option<(&'tx [u8], &'tx [u8], u32)>;
 
   /// key_value returns the key and value of the current leaf element.
   fn key_value(&self) -> Option<(&'tx [u8], &'tx [u8], u32)>;
@@ -350,13 +350,13 @@ pub(crate) trait CursorRwIApi<'tx>: CursorIApi<'tx> {
   fn api_delete(&mut self) -> crate::Result<()>;
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Eq, PartialEq)]
 pub enum PageNode<'tx> {
   Page(RefPage<'tx>),
   Node(NodeRwCell<'tx>),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct ElemRef<'tx> {
   pn: PageNode<'tx>,
   index: i32,
@@ -380,7 +380,7 @@ impl<'tx> ElemRef<'tx> {
   }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Eq, PartialEq)]
 pub(crate) struct InnerCursor<'tx> {
   pub(crate) bucket: BucketCell<'tx>,
   stack: BVec<'tx, ElemRef<'tx>>,
@@ -557,7 +557,7 @@ impl<'tx> CursorIApi<'tx> for InnerCursor<'tx> {
 
   /// last moves the cursor to the last leaf element under the last page in the stack.
 
-  fn i_last(&mut self) {
+  fn i_last(&mut self) -> Option<(&'tx [u8], &'tx [u8], u32)> {
     loop {
       // Exit when we hit a leaf page.
       if let Some(elem) = self.stack.last() {
@@ -580,6 +580,7 @@ impl<'tx> CursorIApi<'tx> for InnerCursor<'tx> {
         self.stack.push(next_elem);
       }
     }
+    self.key_value()
   }
 
   fn key_value(&self) -> Option<(&'tx [u8], &'tx [u8], u32)> {
@@ -795,10 +796,10 @@ impl<'tx> CursorRwIApi<'tx> for InnerCursor<'tx> {
 
 #[cfg(test)]
 mod tests {
-  use crate::test_support::TestDb;
+  use crate::test_support::{quick_check, DummyVec, TestDb};
   use crate::{
     BucketApi, BucketImpl, BucketRwApi, BucketRwImpl, CursorApi, CursorRwApi, DbApi, DbRwAPI,
-    Error, TxApi, TxRwRefApi,
+    Error, TxApi, TxRwApi, TxRwRefApi,
   };
 
   #[test]
@@ -1191,26 +1192,102 @@ mod tests {
   }
 
   #[test]
-  #[ignore]
   fn test_cursor_quick_check() {
-    todo!()
+    quick_check(5, |d: &mut DummyVec| {
+      let mut db = TestDb::new().expect("error");
+      let mut tx = db.begin_rw_tx().expect("error");
+      let mut b = tx.create_bucket("widgets").expect("error");
+
+      for entry in &d.values {
+        b.put(&entry.key, &entry.value).expect("error");
+      }
+
+      tx.commit().expect("error");
+
+      d.values.sort_by(|d1, d2| d1.key.cmp(&d2.key));
+
+      let tx = db.begin_tx().expect("error");
+
+      let b = tx.bucket("widgets").unwrap();
+      for (entry, (key, value)) in d.values.iter().zip(b.iter_entries()) {
+        assert_eq!(&entry.key, key, "unexpected key");
+        assert_eq!(&entry.value, value, "unexpected value");
+      }
+
+      true
+    });
   }
 
   #[test]
-  #[ignore]
   fn test_cursor_quick_check_reverse() {
-    todo!()
+    quick_check(5, |d: &mut DummyVec| {
+      let mut db = TestDb::new().expect("error");
+      let mut tx = db.begin_rw_tx().expect("error");
+      let mut b = tx.create_bucket("widgets").expect("error");
+
+      for entry in &d.values {
+        b.put(&entry.key, &entry.value).expect("error");
+      }
+
+      tx.commit().expect("error");
+
+      d.values.sort_by(|d1, d2| d1.key.cmp(&d2.key).reverse());
+
+      let tx = db.begin_tx().expect("error");
+
+      let b = tx.bucket("widgets").unwrap();
+      for (entry, (key, value)) in d.values.iter().zip(b.iter_entries().rev()) {
+        assert_eq!(&entry.key, key, "unexpected key");
+        assert_eq!(&entry.value, value, "unexpected value");
+      }
+
+      true
+    });
   }
 
   #[test]
-  #[ignore]
-  fn test_cursor_quick_check_buckets_only() {
-    todo!()
+  fn test_cursor_quick_check_buckets_only() -> crate::Result<()> {
+    let mut expected = vec![b"foo".to_vec(), b"bar".to_vec(), b"baz".to_vec()];
+    let mut db = TestDb::new()?;
+    db.update(|mut tx| {
+      let mut b = tx.create_bucket("widgets")?;
+      for bucket in &expected {
+        b.create_bucket(bucket)?;
+      }
+      Ok(())
+    })?;
+    expected.sort();
+    db.view(|tx| {
+      let b = tx.bucket("widgets").unwrap();
+      let actual: Vec<Vec<u8>> = b.iter_buckets().map(|(key, _)| key.to_vec()).collect();
+      assert_eq!(expected.as_ref(), actual);
+      Ok(())
+    })?;
+    Ok(())
   }
 
   #[test]
-  #[ignore]
-  fn test_cursor_quick_check_buckets_only_reverse() {
-    todo!()
+  fn test_cursor_quick_check_buckets_only_reverse() -> crate::Result<()> {
+    let mut expected = vec![b"foo".to_vec(), b"bar".to_vec(), b"baz".to_vec()];
+    let mut db = TestDb::new()?;
+    db.update(|mut tx| {
+      let mut b = tx.create_bucket("widgets")?;
+      for bucket in &expected {
+        b.create_bucket(bucket)?;
+      }
+      Ok(())
+    })?;
+    expected.sort_by(|a, b| b.cmp(a));
+    db.view(|tx| {
+      let b = tx.bucket("widgets").unwrap();
+      let actual: Vec<Vec<u8>> = b
+        .iter_buckets()
+        .rev()
+        .map(|(key, _)| key.to_vec())
+        .collect();
+      assert_eq!(expected.as_ref(), actual);
+      Ok(())
+    })?;
+    Ok(())
   }
 }
