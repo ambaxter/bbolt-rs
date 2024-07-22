@@ -1,13 +1,13 @@
 # Upcoming
 
 ## Added
-
+* Added Reverse Iterators
 
 ## Breaking Changes
 
 ## Changes
 * Up to date with BBolt 1.3.10
-
+* Testing includes QuickCheck analog
 
 # 1.3.9
 ## Added

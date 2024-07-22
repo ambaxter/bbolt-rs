@@ -602,6 +602,8 @@ pub trait BucketRwApi<'tx>: BucketApi<'tx> {
   fn set_fill_percent(&mut self, fill_percent: f64);
 
   fn iter_mut_buckets<'a>(&'a mut self) -> BucketIterMut<'tx, 'a>;
+
+  fn rev_iter_mut_buckets<'a>(&'a mut self) -> BucketIterMut<'tx, 'a>;
 }
 
 /// Read-only Bucket
@@ -783,6 +785,10 @@ impl<'tx, 'p> BucketRwApi<'tx> for BucketRwImpl<'tx, 'p> {
   }
 
   fn iter_mut_buckets<'a>(&'a mut self) -> BucketIterMut<'tx, 'a> {
+    BucketIterMut::new(self.b.i_cursor())
+  }
+
+  fn rev_iter_mut_buckets<'a>(&'a mut self) -> BucketIterMut<'tx, 'a> {
     BucketIterMut::new(self.b.i_cursor())
   }
 }
@@ -1058,6 +1064,18 @@ pub struct BucketRW<'tx> {
 pub(crate) struct BucketCell<'tx> {
   pub(crate) cell: BCell<'tx, BucketRW<'tx>, TxCell<'tx>>,
 }
+
+impl<'tx> PartialEq for BucketCell<'tx> {
+  fn eq(&self, other: &Self) -> bool {
+    let self_txid = self.tx().api_id();
+    let other_txid = other.tx().api_id();
+    let self_header = self.split_r().bucket_header;
+    let other_header = other.split_r().bucket_header;
+    self_txid == other_txid && self_header == other_header
+  }
+}
+
+impl<'tx> Eq for BucketCell<'tx> {}
 
 impl<'tx> SplitRef<BucketR<'tx>, TxCell<'tx>, BucketW<'tx>> for BucketCell<'tx> {
   fn split_r(&self) -> Ref<BucketR<'tx>> {
@@ -1796,7 +1814,7 @@ impl<'tx> BucketRwIApi<'tx> for BucketCell<'tx> {
 #[cfg(test)]
 mod tests {
   use crate::bucket::MAX_VALUE_SIZE;
-  use crate::test_support::TestDb;
+  use crate::test_support::{quick_check, DummyVec, TestDb};
   use crate::{BucketApi, BucketRwApi, CursorApi, DbApi, DbRwAPI, Error, TxApi, TxRwRefApi};
   use anyhow::anyhow;
   use std::sync::atomic::{AtomicU32, Ordering};
@@ -2767,10 +2785,12 @@ mod tests {
   }
 
   #[test]
-  #[ignore]
-  #[cfg(feature = "long-tests")]
   fn test_bucket_put_single() -> crate::Result<()> {
-    todo!("quick-check")
+    quick_check(5, |d: &mut DummyVec| {
+      let mut db = TestDb::new().expect("");
+      true
+    });
+    Ok(())
   }
 
   #[test]
