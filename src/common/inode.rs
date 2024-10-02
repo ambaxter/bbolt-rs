@@ -99,8 +99,5 @@ impl<'tx> INode<'tx> {
         page.flags
       );
     }
-    let p = page.deref();
-    let nodes = inodes.as_slice();
-    log::info!("nodes");
   }
 }
