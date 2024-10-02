@@ -82,7 +82,7 @@ pub trait TxApi<'tx>: TxCheck<'tx> {
   ///   })?;
   ///
   ///   db.view(|tx| {
-  ///     assert_eq!(24576, tx.size());
+  ///     assert_eq!((page_size::get() * 6) as u64, tx.size());
   ///     Ok(())
   ///   })?;
   ///   Ok(())

@@ -2737,7 +2737,7 @@ mod tests {
 
       //TODO: Fails if page_size != 4096? Db.Info?
       assert_eq!(0, stats.branch_alloc, "unexpected BranchAlloc");
-      assert_eq!(8192, stats.leaf_alloc, "unexpected LeafAlloc");
+      assert_eq!((page_size::get() * 2) as i64, stats.leaf_alloc, "unexpected LeafAlloc");
 
       assert_eq!(3, stats.bucket_n, "unexpected BucketN");
       assert_eq!(1, stats.inline_bucket_n, "unexpected InlineBucketN");

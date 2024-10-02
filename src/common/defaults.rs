@@ -17,7 +17,7 @@ pub const MAGIC: u32 = 0xED0CDAED;
 
 pub const PGID_NO_FREE_LIST: PgId = PgId(0xffffffffffffffff);
 
-pub const IGNORE_NO_SYNC: bool = cfg!(openbsd);
+pub const IGNORE_NO_SYNC: bool = cfg!(target_os = "openbsd");
 
 pub const DEFAULT_MAX_BATCH_SIZE: u32 = 1000;
 pub const DEFAULT_MAX_BATCH_DELAY: Duration = Duration::from_millis(10);

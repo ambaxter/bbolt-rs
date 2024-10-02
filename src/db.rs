@@ -145,7 +145,7 @@ where
   /// fn main() -> Result<()> {
   ///   let db = Bolt::open_mem()?;
   ///
-  ///   assert_eq!(4096, db.info().page_size);
+  ///   assert_eq!(page_size::get(), db.info().page_size);
   ///   Ok(())
   /// }
   /// ```
