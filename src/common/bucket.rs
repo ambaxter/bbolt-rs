@@ -12,7 +12,7 @@ pub(crate) const BUCKET_HEADER_SIZE: usize = mem::size_of::<BucketHeader>();
 ///
 /// `bucket` in Go BBolt
 #[repr(C)]
-#[derive(Debug, Default, Copy, Clone, CopyGetters, Setters, Zeroable, Pod)]
+#[derive(Debug, Default, Copy, Clone, CopyGetters, Setters, Zeroable, Pod, Eq, PartialEq)]
 #[getset(get_copy = "pub", set = "pub")]
 pub struct BucketHeader {
   /// page id of the bucket's root-level page

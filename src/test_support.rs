@@ -1,8 +1,16 @@
 use crate::common::page::CoerciblePage;
 use crate::common::self_owned::SelfOwned;
 use crate::tx::check::{TxCheck, UnsealRwTx, UnsealTx};
-use crate::{Bolt, BoltOptions, DbApi, TxApi, TxRwRefApi};
+use crate::{
+  Bolt, BoltOptions, BucketApi, BucketRwApi, CursorApi, DbApi, Error, TxApi, TxRwApi, TxRwRefApi,
+};
 use aligners::{alignment, AlignedBytes};
+use fake::faker::lorem::en::Sentence;
+use fake::locales::EN;
+use fake::Faker;
+use fake::{Dummy, Fake};
+use itertools::Itertools;
+use std::fmt::Debug;
 use std::ops::{Deref, DerefMut};
 use tempfile::{Builder, NamedTempFile};
 
@@ -131,5 +139,33 @@ impl TestDb {
 impl Drop for TestDb {
   fn drop(&mut self) {
     self.must_check()
+  }
+}
+
+#[derive(Debug, Dummy)]
+pub struct DummyEntry {
+  #[dummy(faker = "(Faker, 1..1024)")]
+  pub key: Vec<u8>,
+  #[dummy(faker = "(Faker, 1..1024)")]
+  pub value: Vec<u8>,
+}
+
+#[derive(Debug, Dummy)]
+pub struct DummyVec {
+  #[dummy(faker = "(Faker, 1..1000)")]
+  pub values: Vec<DummyEntry>,
+}
+
+pub(crate) fn quick_check<D, F>(count: u64, mut f: F)
+where
+  D: Dummy<Faker> + Debug,
+  F: FnMut(&mut D) -> bool,
+{
+  for i in 0..count {
+    let mut d = Faker.fake();
+    let r = f(&mut d);
+    if !r {
+      panic!("Iteration {} failed. {:?}", i + 1, d);
+    }
   }
 }

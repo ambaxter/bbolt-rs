@@ -602,6 +602,8 @@ pub trait BucketRwApi<'tx>: BucketApi<'tx> {
   fn set_fill_percent(&mut self, fill_percent: f64);
 
   fn iter_mut_buckets<'a>(&'a mut self) -> BucketIterMut<'tx, 'a>;
+
+  fn rev_iter_mut_buckets<'a>(&'a mut self) -> BucketIterMut<'tx, 'a>;
 }
 
 /// Read-only Bucket
@@ -783,6 +785,10 @@ impl<'tx, 'p> BucketRwApi<'tx> for BucketRwImpl<'tx, 'p> {
   }
 
   fn iter_mut_buckets<'a>(&'a mut self) -> BucketIterMut<'tx, 'a> {
+    BucketIterMut::new(self.b.i_cursor())
+  }
+
+  fn rev_iter_mut_buckets<'a>(&'a mut self) -> BucketIterMut<'tx, 'a> {
     BucketIterMut::new(self.b.i_cursor())
   }
 }
@@ -1059,6 +1065,18 @@ pub(crate) struct BucketCell<'tx> {
   pub(crate) cell: BCell<'tx, BucketRW<'tx>, TxCell<'tx>>,
 }
 
+impl<'tx> PartialEq for BucketCell<'tx> {
+  fn eq(&self, other: &Self) -> bool {
+    let self_txid = self.tx().api_id();
+    let other_txid = other.tx().api_id();
+    let self_header = self.split_r().bucket_header;
+    let other_header = other.split_r().bucket_header;
+    self_txid == other_txid && self_header == other_header
+  }
+}
+
+impl<'tx> Eq for BucketCell<'tx> {}
+
 impl<'tx> SplitRef<BucketR<'tx>, TxCell<'tx>, BucketW<'tx>> for BucketCell<'tx> {
   fn split_r(&self) -> Ref<BucketR<'tx>> {
     Ref::map(self.cell.borrow(), |b| &b.r)
@@ -1310,13 +1328,17 @@ impl<'tx> BucketIApi<'tx> for BucketCell<'tx> {
         // This should be unnecessary, but working first *then* optimize
         let v = {
           let node_borrow = node.cell.borrow();
+          if node_borrow.is_leaf {
+            return;
+          }
           let mut v = BVec::with_capacity_in(node_borrow.inodes.len(), bump);
           let ids = node_borrow.inodes.iter().map(|inode| inode.pgid());
           v.extend(ids);
           v
         };
-        v.into_iter()
-          .for_each(|pgid| self._for_each_page_node(pgid, depth + 1, f));
+        for pgid in v.into_iter() {
+          self._for_each_page_node(pgid, depth + 1, f);
+        }
       }
     }
   }
@@ -1559,18 +1581,16 @@ impl<'tx> BucketRwIApi<'tx> for BucketCell<'tx> {
 
   fn api_delete(self, key: &[u8]) -> crate::Result<()> {
     let mut c = self.i_cursor();
-    let (k, _, flags) = c.i_seek(key).unwrap();
+    if let Some((k, _, flags)) = c.i_seek(key) {
+      if key != k {
+        return Ok(());
+      }
+      if flags & BUCKET_LEAF_FLAG != 0 {
+        return Err(IncompatibleValue);
+      }
 
-    if key != k {
-      return Ok(());
+      c.node().del(key);
     }
-
-    if flags & BUCKET_LEAF_FLAG != 0 {
-      return Err(IncompatibleValue);
-    }
-
-    c.node().del(key);
-
     Ok(())
   }
 
@@ -1796,9 +1816,18 @@ impl<'tx> BucketRwIApi<'tx> for BucketCell<'tx> {
 #[cfg(test)]
 mod tests {
   use crate::bucket::MAX_VALUE_SIZE;
-  use crate::test_support::TestDb;
-  use crate::{BucketApi, BucketRwApi, CursorApi, DbApi, DbRwAPI, Error, TxApi, TxRwRefApi};
+  use crate::test_support::{quick_check, DummyVec, TestDb};
+  use crate::{
+    Bolt, BoltOptionsBuilder, BucketApi, BucketRwApi, CursorApi, DbApi, DbRwAPI, Error, TxApi,
+    TxRwRefApi,
+  };
   use anyhow::anyhow;
+  use fake::{Fake, Faker};
+  use std::collections::HashMap;
+  use std::fs;
+  use std::fs::{File, OpenOptions};
+  use std::io::{Read, Write};
+  use std::path::Path;
   use std::sync::atomic::{AtomicU32, Ordering};
 
   #[test]
@@ -2000,7 +2029,7 @@ mod tests {
   }
 
   #[test]
-  #[cfg(all(not(miri), feature = "long_tests"))]
+  #[cfg(all(not(miri), feature = "long-tests"))]
   fn test_bucket_delete_freelist_overflow() -> crate::Result<()> {
     let mut db = TestDb::new()?;
 
@@ -2767,23 +2796,152 @@ mod tests {
   }
 
   #[test]
-  #[ignore]
-  #[cfg(feature = "long-tests")]
   fn test_bucket_put_single() -> crate::Result<()> {
-    todo!("quick-check")
+    let mut index = 0;
+    quick_check(5, |d: &mut DummyVec| {
+      let mut db = TestDb::new().unwrap();
+
+      let mut m = HashMap::new();
+
+      db.update(|mut tx| {
+        tx.create_bucket("widgets")?;
+        Ok(())
+      })
+      .unwrap();
+
+      for entry in &d.values {
+        db.update(|mut tx| {
+          let mut b = tx.bucket_mut("widgets").unwrap();
+          b.put(&entry.key, &entry.value).unwrap();
+          m.insert(entry.key.clone(), entry.value.clone());
+          Ok(())
+        })
+        .unwrap();
+        db.must_check();
+      }
+
+      db.view(|tx| {
+        let b = tx.bucket("widgets").unwrap();
+        for (i, entry) in d.values.iter().enumerate() {
+          let value = b.get(&entry.key).unwrap();
+          assert_eq!(
+            &entry.value,
+            value,
+            "values mismatch [run {}] ({} of {})",
+            index,
+            i,
+            d.values.len()
+          );
+          //todo- copy temp if fails
+        }
+        Ok(())
+      })
+      .unwrap();
+      index += 1;
+      true
+    });
+    Ok(())
   }
 
   #[test]
-  #[ignore]
-  #[cfg(feature = "long-tests")]
   fn test_bucket_put_multiple() -> crate::Result<()> {
-    todo!("quick-check")
+    let mut index = 0;
+    quick_check(5, |d: &mut DummyVec| {
+      let mut db = TestDb::new().unwrap();
+
+      let mut m = HashMap::new();
+
+      db.update(|mut tx| {
+        tx.create_bucket("widgets")?;
+        Ok(())
+      })
+      .unwrap();
+
+      db.update(|mut tx| {
+        let mut b = tx.bucket_mut("widgets").unwrap();
+        for entry in &d.values {
+          b.put(&entry.key, &entry.value).unwrap();
+          m.insert(entry.key.clone(), entry.value.clone());
+        }
+        Ok(())
+      })
+      .unwrap();
+
+      db.must_check();
+
+      db.view(|tx| {
+        let b = tx.bucket("widgets").unwrap();
+        for (i, entry) in d.values.iter().enumerate() {
+          let value = b.get(&entry.key).unwrap();
+          assert_eq!(
+            &entry.value,
+            value,
+            "values mismatch [run {}] ({} of {})",
+            index,
+            i,
+            d.values.len()
+          );
+          //todo- copy temp if fails
+        }
+        Ok(())
+      })
+      .unwrap();
+      index += 1;
+      true
+    });
+    Ok(())
   }
 
   #[test]
-  #[ignore]
-  #[cfg(feature = "long-tests")]
   fn test_bucket_delete_quick() -> crate::Result<()> {
-    todo!("quick-check")
+    let mut index = 0;
+    quick_check(5, |d: &mut DummyVec| {
+      let mut db = TestDb::new().unwrap();
+
+      db.update(|mut tx| {
+        tx.create_bucket("widgets")?;
+        Ok(())
+      })
+      .unwrap();
+
+      db.update(|mut tx| {
+        let mut b = tx.bucket_mut("widgets").unwrap();
+        for entry in &d.values {
+          b.put(&entry.key, &entry.value).unwrap();
+        }
+        Ok(())
+      })
+      .unwrap();
+
+      db.must_check();
+
+      for (i, entry) in d.values.iter().enumerate() {
+        db.update(|mut tx| {
+          let mut b = tx.bucket_mut("widgets").unwrap();
+          b.delete(&entry.key).unwrap();
+          Ok(())
+        })
+        .unwrap();
+        db.must_check();
+      }
+
+      db.view(|tx| {
+        let b = tx.bucket("widgets").unwrap();
+        for entry in &d.values {
+          let value = b.get(&entry.key);
+          assert!(
+            value.is_none(),
+            "bucket should be empty; found {:?}",
+            &entry.key[0..3]
+          );
+          //todo- copy temp if fails
+        }
+        Ok(())
+      })
+      .unwrap();
+      index += 1;
+      true
+    });
+    Ok(())
   }
 }

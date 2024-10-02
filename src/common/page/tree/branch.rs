@@ -2,6 +2,7 @@ use crate::common::inode::INode;
 use crate::common::memory::PhantomUnsend;
 use crate::common::page::tree::TreePage;
 use crate::common::page::{CoerciblePage, PageHeader, PAGE_HEADER_SIZE};
+use crate::common::ZERO_PGID;
 use crate::PgId;
 use bytemuck::{Pod, Zeroable};
 use getset::{CopyGetters, Setters};
@@ -138,6 +139,7 @@ impl<'tx> TreePage<'tx> for MappedBranchPage {
   }
 
   fn write_element(element: &mut Self::Elem, pos: u32, node: &INode) {
+    assert_ne!(ZERO_PGID, node.pgid());
     element.set_pos(pos);
     element.set_pgid(node.pgid());
     element.set_key_size(node.key().len() as u32);

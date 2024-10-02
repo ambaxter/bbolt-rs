@@ -90,7 +90,7 @@ pub trait CoerciblePage {
 
 /// A read-only view of page aligned, multiple of page-sized section of memory.
 /// Always begins with a [PageHeader]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Eq, PartialEq)]
 pub struct RefPage<'tx> {
   bytes: *const u8,
   phantom: PhantomData<&'tx [u8]>,

@@ -3,11 +3,9 @@ bbolt-rs
 
 # TODO
 
-## 1.3.10
-- [ ] 1.3.10 updates
+## 1.3.11
 - [ ] We have at least 3 different functions to write inodes
 - [ ] PGO + Bolt instructions, build system
-- [ ] Quick Check Analog
 - [ ] Copy file
 - [ ] test_tx_check_read_only
 - [ ] test_tx_copy_file
@@ -78,15 +76,6 @@ bbolt-rs
 
 ## src/cursor.rs
 - [ ] Internal api call for getting the root page id and its page_node
-- [ ] test_cursor_quick_check
-- [ ] test_cursor_quick_check_reverse
-- [ ] test_cursor_quick_check_buckets_only
-- [ ] test_cursor_quick_check_buckets_only_reverse
-
-## src/bucket.rs
-- [ ] test_bucket_put_single
-- [ ] test_bucket_put_multiple
-- [ ] test_bucket_delete_quick
 
 # Notstarted
 - [ ] tx_stats_test.go
