@@ -1,6 +1,14 @@
 # Upcoming
 
 ## Added
+
+## Breaking Changes
+
+## Changes
+
+# 1.3.10
+
+## Added
 * Added Reverse Iterators
 
 ## Breaking Changes
